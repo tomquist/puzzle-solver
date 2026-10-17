@@ -1258,11 +1258,16 @@ input[aria-invalid='true'] {
 }
 .camera .capture-actions {
   flex-direction: row;
+  flex-wrap: wrap;
   max-width: none;
   justify-content: center;
 }
+/* Wrap rather than overflow on narrow phones or with wider system fonts. */
 .camera .capture-actions .btn {
   width: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
 }
 .capture-card .banner {
   text-align: left;

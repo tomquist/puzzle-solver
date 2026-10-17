@@ -32,7 +32,10 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? 'github' : 'list',
+  // In CI, stream one line per test (so a slow run is visibly progressing) plus GitHub annotations.
+  reporter: process.env.CI ? [['list'], ['github']] : 'list',
+  // Fail the whole run instead of letting retries of a stuck test eat the CI job.
+  globalTimeout: process.env.CI ? 20 * 60_000 : undefined,
   use: {
     baseURL: `http://localhost:${DEV_PORT}`,
     headless: true,

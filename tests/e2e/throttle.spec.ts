@@ -150,7 +150,10 @@ test('slow phone: progress updates, UI stays responsive, scan finishes', async (
   await page.screenshot({ path: '.debug/mobile/slow-phone-job-strip.png' });
   const beforeBack = await page.evaluate(() => (window as unknown as { __probe: Probe }).__probe.progress.length);
   await page.waitForTimeout(300);
-  await page.getByRole('link', { name: 'Scan' }).click();
+  // The worker is not CPU-throttled, so on some machines the scan finishes while we are on the
+  // Picture tab; the app then opens the result by itself and the tab bar is gone.
+  const scanTab = page.getByRole('link', { name: 'Scan' });
+  if (await scanTab.isVisible()) await scanTab.click({ timeout: 10_000 }).catch(() => {});
 
   // The analysis continues in the worker and opens the result when done.
   await expect(page.getByTestId('scan-result')).toBeVisible({ timeout: 300_000 });
