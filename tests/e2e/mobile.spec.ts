@@ -40,8 +40,25 @@ class Auditor {
   }
 }
 
+/**
+ * CI runners and many Android phones render wider system fonts than the dev machine. On the
+ * narrowest device every screen is audited with deliberately wide text, so layouts that only fit
+ * with narrow fonts fail here instead of on CI or on a user's phone.
+ */
+const WIDE_FONT_PROJECTS = new Set(['android-small']);
+
 test('mobile audit: every main screen', async ({ page }, info) => {
   test.setTimeout(240_000);
+  if (WIDE_FONT_PROJECTS.has(info.project.name)) {
+    await page.addInitScript(() => {
+      document.addEventListener('DOMContentLoaded', () => {
+        const style = document.createElement('style');
+        style.textContent =
+          'html, body, button, input, label, a { font-family: Verdana, "DejaVu Sans", sans-serif !important; letter-spacing: 0.03em !important; }';
+        document.head.appendChild(style);
+      });
+    });
+  }
   const a = new Auditor(page, info);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));

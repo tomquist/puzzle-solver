@@ -2575,8 +2575,21 @@ canvas.crop {
   max-width: 680px;
   margin: 0 auto;
 }
+/* Buttons may shrink and wrap their label so the bar never overflows narrow phones or wide fonts. */
 .action-bar-inner .btn {
   padding: 0 16px;
+  min-width: 0;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.2;
+}
+@media (max-width: 400px) {
+  .action-bar-inner {
+    gap: 8px;
+  }
+  .action-bar-inner .btn {
+    padding: 0 12px;
+  }
 }
 .action-bar-done {
   display: inline-flex;
