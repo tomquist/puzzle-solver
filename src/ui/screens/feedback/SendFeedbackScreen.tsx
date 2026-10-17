@@ -62,7 +62,8 @@ interface ReadyFile {
   key: string;
   name: string;
   blob: Blob;
-  shareable: boolean;
+  /** The file handed to the share sheet, or undefined when this browser cannot share it. */
+  shareFile?: File;
 }
 
 type SendStatus = { kind: 'none' } | { kind: 'shared' } | { kind: 'downloaded' } | { kind: 'shareFailed' };
@@ -89,6 +90,17 @@ function canShareFile(file: File): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * The file to offer in the share sheet. Chrome on Android refuses to share .json files but shares
+ * plain text, so fall back to the same content as .txt (the tooling reads files by content).
+ */
+function shareableFile(blob: Blob, name: string): File | undefined {
+  const json = new File([blob], name, { type: 'application/json' });
+  if (canShareFile(json)) return json;
+  const text = new File([blob], name.replace(/\.json$/, '.txt'), { type: 'text/plain' });
+  return canShareFile(text) ? text : undefined;
 }
 
 function FeedbackForm({ scan, back }: { scan?: ScanRecord; back: string }) {
@@ -137,7 +149,7 @@ function FeedbackForm({ scan, back }: { scan?: ScanRecord; back: string }) {
       });
       const name = feedbackFileName(createdAt);
       const blob = new Blob([serializeFeedback(bundle)], { type: 'application/json' });
-      setFile({ key, name, blob, shareable: canShareFile(new File([blob], name, { type: 'application/json' })) });
+      setFile({ key, name, blob, shareFile: shareableFile(blob, name) });
     } catch (e) {
       setError(errorText(e, 'Could not create the file.'));
     } finally {
@@ -147,7 +159,8 @@ function FeedbackForm({ scan, back }: { scan?: ScanRecord; back: string }) {
 
   const share = async (f: ReadyFile) => {
     try {
-      await navigator.share({ files: [new File([f.blob], f.name, { type: 'application/json' })], title: 'Puzzle feedback' });
+      if (!f.shareFile) return;
+      await navigator.share({ files: [f.shareFile], title: 'Puzzle feedback' });
       setStatus({ kind: 'shared' });
     } catch (e) {
       // Closing the share sheet is not an error.
@@ -247,11 +260,11 @@ function FeedbackForm({ scan, back }: { scan?: ScanRecord; back: string }) {
                 )}
               </p>
               <div className="fb-bar-buttons">
-                <button className={ready.shareable ? 'btn btn-lg' : 'btn btn-primary btn-lg grow'} onClick={() => download(ready)} data-testid="fb-download">
+                <button className={ready.shareFile ? 'btn btn-lg' : 'btn btn-primary btn-lg grow'} onClick={() => download(ready)} data-testid="fb-download">
                   <IconDownload size={18} />
                   Download
                 </button>
-                {ready.shareable && (
+                {ready.shareFile && (
                   <button className="btn btn-primary btn-lg grow" onClick={() => void share(ready)} data-testid="fb-share">
                     <IconShare size={18} />
                     Share file

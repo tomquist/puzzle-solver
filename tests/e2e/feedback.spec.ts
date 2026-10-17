@@ -250,3 +250,32 @@ test('share: the file goes to the share sheet where files can be shared; cancell
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
+
+test('share on Android: JSON files cannot be shared there, so the same content goes out as .txt', async ({ page }) => {
+  // Chrome on Android shares text/plain files but not application/json.
+  await page.addInitScript(() => {
+    const w = window as unknown as { __shared: { name: string; type: string; text: string }[] };
+    w.__shared = [];
+    Object.defineProperty(navigator, 'canShare', {
+      configurable: true,
+      value: (data: { files?: File[] }) => !!data.files?.length && data.files.every((f) => f.type === 'text/plain'),
+    });
+    Object.defineProperty(navigator, 'share', {
+      configurable: true,
+      value: async (data: { files: File[] }) => {
+        const f = data.files[0];
+        w.__shared.push({ name: f.name, type: f.type, text: await f.text() });
+      },
+    });
+  });
+  await createPuzzle(page);
+  await page.goto(`/?pipeline=mock${new URL(page.url()).hash}/feedback`);
+  await expect(page.getByTestId('send-feedback')).toBeVisible();
+  await page.getByTestId('fb-create').click();
+  await page.getByTestId('fb-share').click();
+  await expect(page.locator('.fb-done')).toContainText('Shared');
+  const shared = await page.evaluate(() => (window as unknown as { __shared: { name: string; type: string; text: string }[] }).__shared);
+  expect(shared[0].name).toMatch(/^puzzle-feedback-.*\.txt$/);
+  expect(shared[0].type).toBe('text/plain');
+  expect(parseFeedback(shared[0].text).box).toBeDefined();
+});
