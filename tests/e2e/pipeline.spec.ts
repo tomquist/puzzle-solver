@@ -57,6 +57,7 @@ test('real pipeline: set up from a box photo, scan pieces, find their places', a
 
   await page.goto('/');
   await page.getByRole('link', { name: 'New puzzle' }).first().click();
+  await expect(page.getByTestId('wizard-photo')).toBeVisible();
   await page.getByTestId('photo-upload').setInputFiles(fx.boxPath);
 
   // Corners are auto-detected by the worker.
