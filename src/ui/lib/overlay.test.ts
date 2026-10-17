@@ -1,21 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DetectedRegion } from '../../model/types';
-import {
-  cellAt,
-  cellRect,
-  clampPan,
-  cropAround,
-  fitTransform,
-  gridPath,
-  paddedBox,
-  polygonCentroid,
-  polygonPath,
-  regionCenter,
-  upArrow,
-  zoomAt,
-  trimmedSegment,
-  badgeNotch,
-} from './overlay';
+import { cellAt, cellRect, clampPan, cropAround, fitTransform, gridPath, paddedBox, polygonCentroid, polygonPath, regionCenter, upArrow, zoomAt, trimmedSegment, badgeNotch, connectionCurve, sideVector } from './overlay';
 
 describe('polygons', () => {
   it('builds SVG path data', () => {
@@ -98,5 +83,46 @@ describe('connections and turn notches', () => {
     const [tip90] = badgeNotch({ x: 50, y: 50 }, 10, 90); // needs a clockwise turn: top is on the left
     expect(tip90.x).toBeCloseTo(50 - 15.5);
     expect(tip90.y).toBeCloseTo(50);
+  });
+});
+
+describe('connection curves', () => {
+  it('maps puzzle sides into the photo for a rotated piece', () => {
+    // Upright piece: sides point the obvious way (y down).
+    expect(sideVector('right', 0)).toEqual({ x: 1, y: 0 });
+    expect(sideVector('top', 0)).toEqual({ x: 0, y: -1 });
+    // A piece that must turn 90° clockwise lies turned 90° counter-clockwise in the photo:
+    // its future top points left, its future right points up.
+    const top = sideVector('top', 90);
+    const right = sideVector('right', 90);
+    expect(top.x).toBeCloseTo(-1, 9);
+    expect(top.y).toBeCloseTo(0, 9);
+    expect(right.x).toBeCloseTo(0, 9);
+    expect(right.y).toBeCloseTo(-1, 9);
+  });
+
+  it('starts and ends on the joining edges and bends out of them', () => {
+    // A (upright) at the left, B (upright) at the right; A's right edge joins B's left edge.
+    const c = connectionCurve(
+      { center: { x: 0, y: 0 }, reach: 10, dir: sideVector('right', 0) },
+      { center: { x: 100, y: 0 }, reach: 10, dir: sideVector('left', 0) },
+    )!;
+    expect(c.from).toEqual({ x: 10, y: 0 });
+    expect(c.to).toEqual({ x: 90, y: 0 });
+    expect(c.d.startsWith('M10,0 C')).toBe(true);
+    // B lies upside down: its future left edge now faces right, so the curve must arrive from the right.
+    const flipped = connectionCurve(
+      { center: { x: 0, y: 0 }, reach: 10, dir: sideVector('right', 0) },
+      { center: { x: 100, y: 0 }, reach: 10, dir: sideVector('left', 180) },
+    )!;
+    expect(flipped.to.x).toBeCloseTo(110, 6);
+    const c2x = Number(flipped.d.split(' ')[2].split(',')[0]);
+    expect(c2x).toBeGreaterThan(110);
+  });
+
+  it('falls back to a straight-ish link from badge to badge without sides', () => {
+    const c = connectionCurve({ center: { x: 0, y: 0 }, reach: 5 }, { center: { x: 0, y: 50 }, reach: 5 })!;
+    expect(c.from).toEqual({ x: 0, y: 5 });
+    expect(c.to).toEqual({ x: 0, y: 45 });
   });
 });

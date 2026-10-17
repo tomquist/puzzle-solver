@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DetectedRegion, Placement, RegionMatch, ScanResult } from '../../model/types';
-import { boundsOf, buildScanItems, cellsText, isHiddenRegion, itemCounts, linkedTo, placingOrder, type ScanItem } from './items';
+import { boundsOf, buildScanItems, cellsText, isHiddenRegion, itemCounts, linkedTo, placingOrder, type ScanItem, touchingSides, nextFreeCandidate } from './items';
 
 const grid = { rows: 8, cols: 10 };
 
@@ -122,7 +122,7 @@ describe('neighbour links', () => {
       }),
       grid,
     );
-    expect(r.links).toEqual([{ a: 'r1', b: 'r2', source: 'fit' }]);
+    expect(r.links).toEqual([{ a: 'r1', b: 'r2', source: 'fit', sideA: 'right', sideB: 'left' }]);
   });
 
   it('does not use fits when the scan has groups', () => {
@@ -194,5 +194,28 @@ describe('placed candidate', () => {
     expect(placedCandidateIndex(item, progress, 's')).toBe(1);
     expect(placedCandidateIndex(item, progress, 'other')).toBe(-1);
     expect(placedCandidateIndex(item, { ...progress, placed: {} }, 's')).toBe(-1);
+  });
+});
+
+describe('touchingSides', () => {
+  it('names the sides through which adjacent cells touch', () => {
+    expect(touchingSides([{ row: 3, col: 4 }], [{ row: 3, col: 5 }])).toEqual({ sideA: 'right', sideB: 'left' });
+    expect(touchingSides([{ row: 3, col: 4 }], [{ row: 2, col: 4 }])).toEqual({ sideA: 'top', sideB: 'bottom' });
+    expect(touchingSides([{ row: 3, col: 4 }], [{ row: 5, col: 4 }])).toBeUndefined();
+  });
+});
+
+describe('nextFreeCandidate', () => {
+  const cand = (row: number, col: number) => ({ cells: [{ row, col }], bounds: { row0: row, col0: col, row1: row, col1: col }, x: 0, y: 0, confidence: 0.3 });
+  const item = { key: 'r5', kind: 'piece', label: 5, regionIds: [5], pieceCount: 1, status: 'ambiguous', candidates: [cand(0, 0), cand(1, 1), cand(2, 2), cand(3, 3)], center: { x: 0, y: 0 }, bbox: { x: 0, y: 0, width: 1, height: 1 }, edge: false } as ScanItem;
+  const progress = { puzzleId: 'p', updatedAt: 0, placed: { '1,1': { at: 1, scanId: 'other', regionId: 2 } } };
+  it('skips cells placed by other pieces and cells other items point at', () => {
+    expect(nextFreeCandidate(item, 0, progress, 's', new Set())).toBe(2);
+    expect(nextFreeCandidate(item, 0, progress, 's', new Set(['2,2']))).toBe(3);
+    expect(nextFreeCandidate(item, 0, progress, 's', new Set(['2,2', '3,3']))).toBe(-1);
+  });
+  it('treats cells this piece itself placed as free', () => {
+    const own = { ...progress, placed: { '1,1': { at: 1, scanId: 's', regionId: 5 } } };
+    expect(nextFreeCandidate(item, 0, own, 's', new Set())).toBe(1);
   });
 });

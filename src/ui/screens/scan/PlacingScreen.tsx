@@ -6,7 +6,7 @@
  * arrow keys navigate. The screen stays on.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import type { ScanRecord } from '../../../model/types';
+import { cellKey, type ScanRecord } from '../../../model/types';
 import { describeCell } from '../../../pipeline/grid';
 import { haptic, isCoarsePointer } from '../../../platform/device';
 import { EmptyState, ErrorState, Spinner } from '../../components/Feedback';
@@ -20,7 +20,7 @@ import { useAsync } from '../../hooks/useAsync';
 import { useBitmap, useStoredBlob } from '../../hooks/useObjectUrl';
 import { usePrefs, useWakeLock } from '../../hooks/usePrefs';
 import { plural } from '../../lib/format';
-import { cellsText, linkedTo, placingOrder, type ItemPlacement, type ScanItem } from '../../lib/items';
+import { cellsText, linkedTo, nextFreeCandidate, placingOrder, type ItemPlacement, type ScanItem } from '../../lib/items';
 import { placeCells } from '../../lib/progress';
 import { turnInstruction } from '../../lib/rotation';
 import { href } from '../../lib/routes';
@@ -61,7 +61,7 @@ export function instructionLine(item: ScanItem, p: ItemPlacement, rows: number, 
 }
 
 function PlacingView({ scan }: { scan: ScanRecord }) {
-  const { puzzle, progress, saveProgress, reference } = usePuzzle();
+  const { puzzle, progress, updateProgress, reference } = usePuzzle();
   const [prefs] = usePrefs();
   useWakeLock(prefs.keepScreenOn);
   const [coarse] = useState(isCoarsePointer);
@@ -97,7 +97,7 @@ function PlacingView({ scan }: { scan: ScanRecord }) {
     setPlacedHere((l) => (l.includes(item.key) ? l : [...l, item.key]));
     setSkipped((l) => l.filter((k) => k !== item.key));
     next();
-    void saveProgress(placeCells(progress, p.cells, { scanId: scan.id, regionId: item.label }));
+    void updateProgress((current) => placeCells(current, p.cells, { scanId: scan.id, regionId: item.label }));
   };
   const skip = () => {
     if (!item || acting.current) return;
@@ -107,8 +107,14 @@ function PlacingView({ scan }: { scan: ScanRecord }) {
   };
   const notHere = () => {
     if (!item) return;
-    const k = Math.max(0, item.candidates.indexOf(p!)) + 1;
-    if (k < item.candidates.length) setRejected((r) => ({ ...r, [item.key]: k }));
+    // Cells other items of this scan point at are not offered as alternatives.
+    const claimed = new Set<string>();
+    for (const other of visible) {
+      if (other.key === item.key) continue;
+      for (const c of placementOf(other)?.cells ?? []) claimed.add(cellKey(c));
+    }
+    const k = nextFreeCandidate(item, Math.max(0, item.candidates.indexOf(p!)), progress, scan.id, claimed);
+    if (k >= 0) setRejected((r) => ({ ...r, [item.key]: k }));
     else skip();
   };
   const reviewSkipped = () => {

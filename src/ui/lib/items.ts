@@ -8,7 +8,7 @@
  */
 import type { Point } from '../../cv/geometry';
 import type { Rect } from '../../cv/image';
-import type { CellRef, DetectedRegion, GridSpec, RegionMatch, ScanResult } from '../../model/types';
+import { cellKey, type CellRef, type DetectedRegion, type GridSpec, type ProgressRecord, type PuzzleSide, type RegionMatch, type ScanResult } from '../../model/types';
 import { cellsForPlacement, matchFor } from './pieces';
 import { regionCenter } from './overlay';
 
@@ -56,6 +56,10 @@ export interface ItemLink {
   a: string;
   b: string;
   source: 'group' | 'fit';
+  /** Side of `a` (finished-puzzle orientation) that touches `b`, when their cells are adjacent. */
+  sideA?: PuzzleSide;
+  /** Side of `b` that touches `a`. */
+  sideB?: PuzzleSide;
 }
 
 export interface ScanItems {
@@ -106,6 +110,22 @@ const isEdgeShape = (r: DetectedRegion) => r.shape?.kind === 'edge' || r.shape?.
 
 function onBorder(cells: CellRef[], grid: GridSpec): boolean {
   return cells.some((c) => c.row === 0 || c.col === 0 || c.row === grid.rows - 1 || c.col === grid.cols - 1);
+}
+
+const OPPOSITE: Record<PuzzleSide, PuzzleSide> = { top: 'bottom', right: 'left', bottom: 'top', left: 'right' };
+
+/** The sides through which two sets of cells touch (first adjacent pair), if they do. */
+export function touchingSides(a: CellRef[], b: CellRef[]): { sideA: PuzzleSide; sideB: PuzzleSide } | undefined {
+  for (const p of a) {
+    for (const q of b) {
+      const dr = q.row - p.row;
+      const dc = q.col - p.col;
+      if (Math.abs(dr) + Math.abs(dc) !== 1) continue;
+      const sideA: PuzzleSide = dr === -1 ? 'top' : dr === 1 ? 'bottom' : dc === 1 ? 'right' : 'left';
+      return { sideA, sideB: OPPOSITE[sideA] };
+    }
+  }
+  return undefined;
 }
 
 function adjacent(a: CellRef[], b: CellRef[]): boolean {
@@ -192,7 +212,10 @@ export function buildScanItems(result: ScanResult, grid: GridSpec): ScanItems {
     const k = a < b ? `${a}|${b}` : `${b}|${a}`;
     if (seen.has(k)) return;
     seen.add(k);
-    links.push({ a, b, source });
+    const ca = itemByKey.get(a)?.candidates[0]?.cells;
+    const cb = itemByKey.get(b)?.candidates[0]?.cells;
+    const sides = ca && cb ? touchingSides(ca, cb) : undefined;
+    links.push({ a, b, source, ...sides });
   };
   if (result.groups) {
     for (const g of result.groups) {
@@ -317,4 +340,28 @@ export function itemCounts(items: ScanItem[]): ItemCounts {
     assembled: items.filter((i) => i.kind === 'assembled').length,
     unsure: items.filter((i) => i.status === 'ambiguous').length,
   };
+}
+
+/**
+ * Index of the next candidate after `from` whose cells are all free: not already placed by a
+ * different piece, and not where another item of this scan currently points (`claimed`, cell
+ * keys). Used by "Not here" so it never suggests a spot that is already taken. -1 when none.
+ */
+export function nextFreeCandidate(
+  item: ScanItem,
+  from: number,
+  progress: ProgressRecord,
+  scanId: string,
+  claimed: ReadonlySet<string>,
+): number {
+  for (let k = from + 1; k < item.candidates.length; k++) {
+    const free = item.candidates[k].cells.every((c) => {
+      const key = cellKey(c);
+      const e = progress.placed[key];
+      const takenByOther = !!e && !(e.scanId === scanId && e.regionId === item.label);
+      return !takenByOther && !claimed.has(key);
+    });
+    if (free) return k;
+  }
+  return -1;
 }

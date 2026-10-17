@@ -7,7 +7,7 @@
 import type { Rect } from '../../cv/image';
 import type { ScanResult } from '../../model/types';
 import type { ItemLink, ItemPlacement, ScanItem } from '../lib/items';
-import { badgeNotch, polygonPath, trimmedSegment } from '../lib/overlay';
+import { badgeNotch, connectionCurve, polygonPath, regionSize, sideVector, type CurveEnd } from '../lib/overlay';
 
 export interface OverlayItem {
   item: ScanItem;
@@ -51,7 +51,7 @@ export function ScanOverlay({
   const hit = 22 / scale; // ≥ 44 px touch target
   const highlight = new Set(highlightRegionIds ?? []);
   const dim = highlight.size > 0;
-  const centre = new Map(items.map((o) => [o.item.key, o.item.center]));
+  const overlayByKey = new Map(items.map((o) => [o.item.key, o]));
 
   return (
     <svg className="overlay" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
@@ -107,17 +107,30 @@ export function ScanOverlay({
         />
       )}
 
-      {/* Connections between pieces that end up next to each other */}
+      {/* Connections between pieces that end up next to each other: curves from the joining edge
+          of one piece to the matching edge of the other. */}
       {showConnections &&
         links.map((l) => {
-          const a = centre.get(l.a);
-          const b = centre.get(l.b);
-          const seg = a && b ? trimmedSegment(a, b, r * 1.25) : null;
-          if (!seg) return null;
+          const end = (key: string, side: ItemLink['sideA']): CurveEnd | undefined => {
+            const o = overlayByKey.get(key);
+            if (!o) return undefined;
+            const region = o.item.kind === 'piece' ? byId.get(o.item.regionIds[0]) : undefined;
+            const rot = o.placement?.rotationDeg;
+            if (region && side && rot !== undefined) {
+              return { center: o.item.center, reach: regionSize(region) / 2, dir: sideVector(side, rot) };
+            }
+            return { center: o.item.center, reach: r * 1.25 };
+          };
+          const a = end(l.a, l.sideA);
+          const b = end(l.b, l.sideB);
+          const curve = a && b ? connectionCurve(a, b) : null;
+          if (!curve) return null;
           return (
             <g key={`${l.a}-${l.b}`} className="link" data-testid="link">
-              <line className="link-under" x1={seg.from.x} y1={seg.from.y} x2={seg.to.x} y2={seg.to.y} vectorEffect="non-scaling-stroke" />
-              <line className="link-line" x1={seg.from.x} y1={seg.from.y} x2={seg.to.x} y2={seg.to.y} vectorEffect="non-scaling-stroke" />
+              <path className="link-under" d={curve.d} vectorEffect="non-scaling-stroke" />
+              <path className="link-line" d={curve.d} vectorEffect="non-scaling-stroke" />
+              <circle className="link-end" cx={curve.from.x} cy={curve.from.y} r={2.6 / scale} />
+              <circle className="link-end" cx={curve.to.x} cy={curve.to.y} r={2.6 / scale} />
             </g>
           );
         })}
