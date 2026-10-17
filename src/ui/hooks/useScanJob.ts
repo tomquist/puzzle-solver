@@ -75,7 +75,8 @@ export function useScanJob(deps: ScanJobDeps): { job: ScanJob | undefined; start
         if (run.current !== myRun) return; // cancelled
         stage = 'save';
         working(0.95, 'Saving scan…');
-        const jpeg = await rgbaToBlob(resp.analysedImage, 'image/jpeg', 0.9);
+        // High quality: feedback files replay this exact image, so keep compression artefacts small.
+        const jpeg = await rgbaToBlob(resp.analysedImage, 'image/jpeg', 0.95);
         const photoBlobId = await repo.putBlob(jpeg);
         const scan: ScanRecord = {
           id: newId(),

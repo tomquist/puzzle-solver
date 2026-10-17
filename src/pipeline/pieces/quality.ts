@@ -48,6 +48,10 @@ export const QUALITY_THRESHOLDS = {
   lowSeparability: 0.7,
   /** Median outline foreground score (background sigmas) below which contrast is low. */
   lowOutlineContrast: 7.5,
+  /** Share of the photo's inside showing further table colours above which the table counts as patterned. */
+  patternedTable: 0.05,
+  /** Share of the border band the table model explains, below which the table is too busy to model. */
+  unexplainedTable: 0.7,
   /**
    * 95th / 5th percentile of the table luminance (linear light) above which lighting is uneven.
    * synth `illumination` 0.2 / 0.25 (±26–30 % sRGB at the corners, segmentation unaffected) measure
@@ -324,6 +328,7 @@ const HINT = {
   blur: 'Tap the pieces to focus and hold the phone still.',
   motion: 'Hold the phone still (rest your elbows) or add light.',
   contrast: 'Use a plain background that contrasts with the pieces.',
+  pattern: 'Lay the pieces on a plain, single-coloured surface (a sheet of paper, a plain cloth).',
   lighting: 'Light the table evenly and avoid casting shadows.',
   resolution: 'Move closer so the pieces fill more of the photo.',
   perspective: 'Hold the phone parallel to the table, directly above the pieces.',
@@ -408,7 +413,14 @@ export function assessPhoto(photo: RGBAImage, seg: Segmentation): QualityReport 
   metrics.outlineContrast = bgm.outlineContrast;
   // Global: weak outlines overall (separability alone is too content-dependent). Region-level
   // low_contrast issues (unreliable, low-contrast regions) are merged into the same issue below.
-  if (bgm.outlineContrast < T.lowOutlineContrast || (bgm.separability < T.lowSeparability && bgm.outlineContrast < 10)) {
+  // A patterned table (its further colours spread over the inside of the photo) hides pieces in
+  // those colours; the floor beyond a table edge does not matter.
+  const pattern = bgm.palette.reduce((a, p) => a + p.interior, 0);
+  metrics.tablePattern = pattern;
+  metrics.tableFit = bgm.bandFit;
+  if (pattern > T.patternedTable || bgm.bandFit < T.unexplainedTable) {
+    issues.push(issue('low_contrast', 'warning', 'The table is patterned; pieces in its colours may be missed.', HINT.pattern));
+  } else if (bgm.outlineContrast < T.lowOutlineContrast || (bgm.separability < T.lowSeparability && bgm.outlineContrast < 10)) {
     issues.push(issue('low_contrast', 'warning', 'The pieces are hard to tell from the background.', HINT.contrast));
   }
 

@@ -2,7 +2,7 @@
  * Public types of the pieces package (segmentation of a scan photo into pieces / patches).
  * Everything is structured-clone friendly so it can cross the worker boundary.
  */
-import type { Mask, RGBAImage } from '../../cv/image';
+import type { GrayImage, Mask, RGBAImage } from '../../cv/image';
 import type { DetectedRegion, QualityReport } from '../../model/types';
 
 /**
@@ -24,6 +24,19 @@ export interface BackgroundModel {
   height: number;
   /** 95th / 5th percentile of the modelled table luminance where the table is visible (1 = even lighting). */
   lightingRatio: number;
+  /**
+   * Fraction of the photo's border band that the table model explains (within 3.5 sigmas): about
+   * 0.8–1 for a plain or wood table minus pieces lying on the border, low for patterned cloth.
+   */
+  bandFit: number;
+  /**
+   * Further table colours (a patterned cloth, the floor beyond the table edge), each with its spread
+   * and the main surface's lightness `refL` where it was measured: under other lighting it scales
+   * with the main surface. Blends of two table colours count as table too. `interior` is the share
+   * of the middle of the photo showing the colour (a pattern spreads over the whole table).
+   * Empty for a plain table.
+   */
+  palette: { color: [number, number, number]; sigma: [number, number, number]; refL: number; interior: number }[];
   /** Fraction of the photo classified as background. */
   coverage: number;
   /** Estimated sensor noise (gray levels, measured on the photo's border bands). */
@@ -51,6 +64,50 @@ export interface SegmentOptions {
   assessQuality?: boolean;
   /** When given, milliseconds per stage are added to it (e.g. `background`, `threshold`, `shapes`). */
   timings?: Record<string, number>;
+  /** When given, filled with intermediate results (debugging tools; costs a few mask copies). */
+  diagnostics?: SegmentDiagnostics;
+}
+
+/** Per-region measurements behind the classification and the region issues. */
+export interface RegionDiagnostics {
+  id: number;
+  /** Median foreground score just inside the outline (background sigmas). */
+  contrast: number;
+  /** Fraction of the region found by the texture cue only. */
+  textureFraction: number;
+  /** Number of fragments the region was reassembled from (1 = none). */
+  merged: number;
+  /** Area relative to the expected single-piece area at its position. */
+  areaRatio: number;
+  /** Shape confidence of the outline (0 when no four corners were found). */
+  shapeConfidence: number;
+  /** Split from a cluster of touching pieces. */
+  split: boolean;
+}
+
+/**
+ * Intermediate results of {@link segmentPieces}, for debugging tools such as the feedback
+ * inspector. All images are full photo size.
+ */
+export interface SegmentDiagnostics {
+  /** Per-pixel foreground score: distance to the background model in background sigmas. */
+  score?: GrayImage;
+  /** Hysteresis thresholds on the score (pixels above `low` connected to a pixel above `high`). */
+  high?: number;
+  low?: number;
+  /** Pixels found by colour (score hysteresis). */
+  colour?: Mask;
+  /** Pixels only the texture cue added. */
+  texture?: Mask;
+  /** Foreground components dropped as specks (smaller than `minArea`). */
+  removed?: Mask;
+  minArea?: number;
+  /** Colour blockiness (JPEG at its original pixel grid when ≥ 1.3; outlines are then snapped to brightness edges). */
+  blockiness?: number;
+  /** Expected single-piece area (px) and body size used for classification (0 = no reference). */
+  refArea?: number;
+  refBody?: number;
+  regions?: RegionDiagnostics[];
 }
 
 /** One detected region with its masks and pixels, ready for matching. */

@@ -110,6 +110,59 @@ const SCENARIOS: Scenario[] = [
     painting: 'great-wave', grid: { rows: 20, cols: 30 }, items: { singles: 8, neighborRuns: [2, 3, 2, 2] }, seeds: [19],
     render: (rng) => ({ ...standard(rng), background: [150, 108, 70], backgroundTexture: 16, illumination: 0.2 }),
   },
+  // Real-photo conditions (src/testing/synth.ts RenderOptions): cardboard rim and directional cast
+  // shadows, structured tables, phone JPEG + vignetting, objects cut by the photo border, uneven
+  // light with glare, pieces 1–3 px apart or slightly overlapping.
+  {
+    name: 'starry-rim-shadow-dark',
+    painting: 'starry-night', grid: { rows: 16, cols: 20 }, items: { singles: 20 }, seeds: [20],
+    render: (rng) => ({ ...standard(rng), rim: {}, edgeDarkening: 0.15, shadow: 0.45, shadowOffset: [6, 4], shadowBlur: 3.5 }),
+  },
+  {
+    name: 'wave-rim-shadow-light',
+    painting: 'great-wave', grid: { rows: 20, cols: 30 }, items: { singles: 20 }, seeds: [21],
+    render: (rng) => ({ ...standard(rng), background: [226, 222, 214], illumination: 0.15, rim: {}, edgeDarkening: 0.15, shadow: 0.5, shadowOffset: [8, 5], shadowBlur: 4.5 }),
+  },
+  {
+    name: 'wave-woodgrain',
+    painting: 'great-wave', grid: { rows: 20, cols: 30 }, items: { singles: 20 }, seeds: [22],
+    render: (rng) => ({ ...standard(rng), background: [150, 108, 70], pattern: { kind: 'wood' }, illumination: 0.15 }),
+  },
+  {
+    name: 'starry-weave',
+    painting: 'starry-night', grid: { rows: 16, cols: 20 }, items: { singles: 20 }, seeds: [23],
+    render: (rng) => ({ ...standard(rng), background: [120, 128, 120], pattern: { kind: 'weave' } }),
+  },
+  {
+    name: 'wave-gingham',
+    painting: 'great-wave', grid: { rows: 20, cols: 30 }, items: { singles: 20 }, seeds: [24],
+    render: (rng) => ({ ...standard(rng), pattern: { kind: 'check' } }),
+  },
+  {
+    name: 'starry-dots',
+    painting: 'starry-night', grid: { rows: 16, cols: 20 }, items: { singles: 20 }, seeds: [25],
+    render: (rng) => ({ ...standard(rng), pattern: { kind: 'dots' } }),
+  },
+  {
+    name: 'wave-jpeg-vignette',
+    painting: 'great-wave', grid: { rows: 20, cols: 30 }, items: { singles: 20 }, seeds: [26],
+    render: (rng) => ({ ...standard(rng), noiseSigma: 4, jpegQuality: 70, vignette: 0.35, illumination: 0.15 }),
+  },
+  {
+    name: 'starry-border-clutter',
+    painting: 'starry-night', grid: { rows: 16, cols: 20 }, items: { singles: 16 }, seeds: [27],
+    render: (rng) => ({ ...standard(rng), background: [150, 108, 70], backgroundTexture: 12, clutter: ['box-edge', 'table-edge', 'finger'] }),
+  },
+  {
+    name: 'wave-glare-uneven',
+    painting: 'great-wave', grid: { rows: 20, cols: 30 }, items: { singles: 20 }, seeds: [28],
+    render: (rng) => ({ ...standard(rng), background: [90, 96, 104], illumination: 0.35, glare: { count: 4 } }),
+  },
+  {
+    name: 'starry-close-pairs',
+    painting: 'starry-night', grid: { rows: 16, cols: 20 }, items: { singles: 20 }, seeds: [29],
+    render: (rng) => ({ ...standard(rng), pairs: { count: 6, gap: [-3, 3] } }),
+  },
 ];
 
 const COLUMNS = [

@@ -2,27 +2,30 @@
  * Segmentation of a scan photo (loose pieces / assembled patches on a table) into regions.
  *
  * Pipeline: background model (CIE Lab, border band, quadratic lighting surface, iterative
- * refinement) → per-pixel foreground score → Otsu threshold on the log score with hysteresis →
- * close / fill holes / drop specks (no opening: the thin dark cardboard rim often is the only
- * evidence of a piece whose print matches the table, and filling the closed rim recovers it) →
- * connected components → outline tracing and shape analysis → classification (piece / patch /
- * fragment), splitting of touching pieces at narrow necks → reading-order ids → quality.
+ * refinement, further table colours of a patterned cloth) → per-pixel foreground score → Otsu
+ * threshold on the log score with hysteresis, plus a texture cue → close / fill holes / drop specks
+ * (no opening: the thin dark cardboard rim often is the only evidence of a piece whose print matches
+ * the table, and filling the closed rim recovers it) → connected components → outline tracing and
+ * shape analysis → peeling of glare halos and soft shadows → splitting of touching pieces at narrow
+ * necks or along the edges between them → reassembly of fragments → outlines snapped to brightness
+ * edges in blocky JPEGs → classification (piece / patch / fragment / clutter at the photo border) →
+ * reading-order ids → quality.
  */
 import { componentMask, labelComponents, labelRuns, removeSmallComponents } from '../../cv/components';
 import { traceOuterContour } from '../../cv/contour';
 import { distanceTransform } from '../../cv/distance';
 import { solveLinear, type Point } from '../../cv/geometry';
-import { createGray, createMask, cropMask, cropRGBA, maskArea, maskBounds, type GrayImage, type Mask, type RGBAImage, type Rect } from '../../cv/image';
+import { cloneMask, createGray, createMask, cropMask, cropRGBA, maskArea, maskBounds, type GrayImage, type Mask, type RGBAImage, type Rect } from '../../cv/image';
 import { close, dilate, erode, fillHoles, open } from '../../cv/morphology';
 import { resizeMask } from '../../cv/resize';
-import { boxBlurGray, sobel } from '../../cv/filter';
+import { boxBlurGray } from '../../cv/filter';
 import { simplifyPolygon, smoothContour } from '../../cv/polygon';
 import { otsuThreshold, threshold } from '../../cv/threshold';
 import type { DetectedRegion, PieceShape, QualityIssue, RegionKind } from '../../model/types';
 import { fitBackground, foregroundScore } from './background';
 import { assessPhoto, assessRegions } from './quality';
 import { analyzePieceShape, bodyOrientation, orientationHistogram } from './shape';
-import type { BackgroundModel, SegmentOptions, Segmentation, SegmentedRegion } from './types';
+import type { BackgroundModel, RegionDiagnostics, SegmentOptions, Segmentation, SegmentedRegion } from './types';
 import { boxBlurRGB, doubleMask, halveGray, median, offsetPoints } from './util';
 import { noiseSigma } from '../quality/metrics';
 import { rgbaToGray } from '../../cv/color';
@@ -103,7 +106,12 @@ function textureForeground(score: GrayImage, colourFg: Mask): Mask | null {
   const fgS = half ? resizeMask(colourFg, w, h) : colourFg;
   const r = Math.max(2, Math.round(Math.min(w, h) / 300));
   if (w < 8 * r || h < 8 * r) return null;
-  const energy = boxBlurGray(sobel(img).magnitude, r);
+  // High-pass energy (deviation from the local mean): print structure and outlines respond, smooth
+  // ramps such as soft cast shadows and lighting gradients do not.
+  const local = boxBlurGray(img, r);
+  const dev = createGray(w, h);
+  for (let i = 0; i < dev.data.length; i++) dev.data[i] = Math.abs(img.data[i] - local.data[i]);
+  const energy = boxBlurGray(dev, r);
   // Robust statistics of the table's texture (samples away from the colour foreground).
   const near = dilate(fgS, r + 3);
   const step = Math.max(1, Math.round(Math.sqrt((w * h) / 40000)));
@@ -342,6 +350,343 @@ function splitAtNecks(c: Candidate, r: number, minCore: number): { mask: Mask; b
   return parts.length >= 2 ? parts : null;
 }
 
+/** Outline orientations (degrees mod 90) closer than this look like one assembled grid. */
+const SAME_GRID_DEG = 5;
+
+/** Difference of two orientations modulo 90° (0..45). */
+function quarterDiff(a: number, b: number): number {
+  const d = Math.abs((((a - b) % 90) + 90) % 90);
+  return Math.min(d, 90 - d);
+}
+
+/**
+ * Colour gradient magnitude (Sobel over R, G, B) of `img` in `rect`, quantised to 0..255 by the
+ * crop's maximum.
+ */
+function colourGradient(img: RGBAImage, rect: Rect): Uint8Array {
+  const { width: W, height: H, data } = img;
+  const { x: x0, y: y0, width: w, height: h } = rect;
+  const mag = new Float32Array(w * h);
+  let max = 1e-6;
+  const at = (x: number, y: number, c: number) => data[((Math.min(H - 1, Math.max(0, y)) * W) + Math.min(W - 1, Math.max(0, x))) * 4 + c];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const X = x + x0, Y = y + y0;
+      let m2 = 0;
+      for (let c = 0; c < 3; c++) {
+        const gx = at(X + 1, Y - 1, c) + 2 * at(X + 1, Y, c) + at(X + 1, Y + 1, c) - at(X - 1, Y - 1, c) - 2 * at(X - 1, Y, c) - at(X - 1, Y + 1, c);
+        const gy = at(X - 1, Y + 1, c) + 2 * at(X, Y + 1, c) + at(X + 1, Y + 1, c) - at(X - 1, Y - 1, c) - 2 * at(X, Y - 1, c) - at(X + 1, Y - 1, c);
+        m2 += gx * gx + gy * gy;
+      }
+      const m = Math.sqrt(m2);
+      mag[y * w + x] = m;
+      if (m > max) max = m;
+    }
+  }
+  const out = new Uint8Array(w * h);
+  for (let i = 0; i < out.length; i++) out[i] = Math.min(255, Math.round((255 * mag[i]) / max));
+  return out;
+}
+
+/**
+ * Marker-controlled watershed inside `mask` on the (quantised) gradient: every pixel goes to the
+ * marker whose flood reaches it over the lowest edges, so boundaries settle on the strongest edges
+ * between markers. `labels` holds marker ids (> 0) and is filled in place.
+ */
+function watershed(mask: Mask, grad: Uint8Array, labels: Int32Array): void {
+  const { width: w, height: h } = mask;
+  const buckets: number[][] = Array.from({ length: 256 }, () => []);
+  for (let i = 0; i < labels.length; i++) if (labels[i] > 0) buckets[grad[i]].push(i);
+  for (let level = 0; level < 256; level++) {
+    const b = buckets[level];
+    while (b.length > 0) {
+      const i = b.pop()!;
+      const x = i % w, y = (i - x) / w;
+      const nb = [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1];
+      for (const j of nb) {
+        if (j < 0 || !mask.data[j] || labels[j] !== 0) continue;
+        labels[j] = labels[i];
+        buckets[Math.max(level, grad[j])].push(j);
+      }
+    }
+  }
+}
+
+/**
+ * Split a cluster of touching or slightly overlapping loose pieces along the edges between them.
+ * Markers come from the foreground before closing (pieces 1–3 px apart are separate there) or,
+ * failing that, from k-means of the interior (k = area / piece area). A watershed on the colour
+ * gradient puts the cut on the gap or on the outline of the upper piece. The split is kept only when
+ * every part is piece-sized with a plausible piece outline and the parts lie at clearly different
+ * angles (pieces of an assembled grid share one angle and stay together).
+ */
+function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, img: RGBAImage, W: number, H: number): Candidate[] | null {
+  const k = Math.round(c.area / ra);
+  if (k < 2 || k > 4) return null;
+  const { width: w, height: h } = c.mask;
+  const { x: bx, y: by } = c.bbox;
+  const labels = new Int32Array(w * h);
+  // Markers 1: separate blobs of the foreground before closing.
+  const sub = createMask(w, h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      sub.data[i] = c.mask.data[i] & preClose.data[(y + by) * W + x + bx];
+    }
+  }
+  // Holes inside a piece (dark print) are filled; gaps between pieces open to the outside and stay.
+  const comps = labelComponents(open(fillHoles(sub), 1), 4);
+  const big = comps.stats.filter((st) => st.area >= 0.3 * ra);
+  let viaGap = false;
+  if (big.length >= 2 && big.length <= 4) {
+    viaGap = true;
+    big.forEach((st, n) => {
+      for (let i = 0; i < labels.length; i++) if (comps.labels[i] === st.label) labels[i] = n + 1;
+    });
+  } else {
+    // Markers 2: k-means of interior pixel positions (farthest-point start).
+    const dt = distanceTransform(c.mask).data;
+    const pts: number[] = [];
+    for (let i = 0; i < w * h; i++) if (dt[i] >= 0.12 * body) pts.push(i);
+    if (pts.length < 10 * k) return null;
+    const cx: number[] = [], cy: number[] = [];
+    let far = pts[0], farD = -1;
+    for (const i of pts) if (dt[i] > farD) { farD = dt[i]; far = i; }
+    cx.push(far % w); cy.push(Math.floor(far / w));
+    while (cx.length < k) {
+      let bi = pts[0], bd = -1;
+      for (const i of pts) {
+        const x = i % w, y = (i - x) / w;
+        let d = Infinity;
+        for (let m = 0; m < cx.length; m++) d = Math.min(d, (x - cx[m]) ** 2 + (y - cy[m]) ** 2);
+        if (d > bd) { bd = d; bi = i; }
+      }
+      cx.push(bi % w); cy.push(Math.floor(bi / w));
+    }
+    for (let iter = 0; iter < 10; iter++) {
+      const sx = new Float64Array(k), sy = new Float64Array(k), n = new Float64Array(k);
+      for (const i of pts) {
+        const x = i % w, y = (i - x) / w;
+        let best = 0, bd = Infinity;
+        for (let m = 0; m < k; m++) {
+          const d = (x - cx[m]) ** 2 + (y - cy[m]) ** 2;
+          if (d < bd) { bd = d; best = m; }
+        }
+        sx[best] += x; sy[best] += y; n[best]++;
+      }
+      for (let m = 0; m < k; m++) if (n[m] > 0) { cx[m] = sx[m] / n[m]; cy[m] = sy[m] / n[m]; }
+    }
+    const r2 = (0.15 * body) ** 2;
+    pts.forEach((i) => {
+      const x = i % w, y = (i - x) / w;
+      for (let m = 0; m < k; m++) if ((x - cx[m]) ** 2 + (y - cy[m]) ** 2 <= r2) { labels[i] = m + 1; break; }
+    });
+  }
+  const nLabels = viaGap ? big.length : k;
+  watershed(c.mask, colourGradient(img, c.bbox), labels);
+  const parts: Candidate[] = [];
+  for (let m = 1; m <= nLabels; m++) {
+    const pm = createMask(w, h);
+    for (let i = 0; i < labels.length; i++) if (labels[i] === m) pm.data[i] = 1;
+    // Keep the main blob of the part (stray pixels go nowhere).
+    const lc = labelComponents(pm, 4);
+    if (lc.stats.length === 0) return null;
+    const main = lc.stats.reduce((a, b2) => (b2.area > a.area ? b2 : a));
+    const b = main.bbox;
+    const mm = componentMask(lc.labels, w, main.label, b);
+    parts.push(makeCandidate(fillHoles(mm), { x: b.x + bx, y: b.y + by, width: b.width, height: b.height }, W, H));
+  }
+  const conf = parts.map((p) => p.shape?.confidence ?? 0);
+  if (parts.some((p) => p.area < 0.5 * ra || p.area > 1.6 * ra)) return null;
+  // Gap markers are strong evidence; k-means markers need at least one convincing piece outline.
+  if (Math.max(...conf) < (viaGap ? REFERENCE_CONFIDENCE : 0.7)) return null;
+  // Pieces of an assembled grid share one angle and sit exactly one body apart on that grid. The
+  // angles are only trusted from convincing outlines; otherwise the cluster's own outline must
+  // show two grid directions.
+  if (Math.min(...conf) < UNCERTAIN_CONFIDENCE && c.secondPeak <= TOUCHING_SECOND_PEAK) return null;
+  const ang = parts.map((p) => (p.shape ? bodyOrientation(p.shape) : p.orientation));
+  let loose = false;
+  for (let i = 0; i < parts.length; i++) {
+    for (let j = i + 1; j < parts.length; j++) {
+      if (quarterDiff(ang[i], ang[j]) > SAME_GRID_DEG) loose = true;
+      const a = parts[i].shape, b = parts[j].shape;
+      if (!a || !b) continue;
+      const t = (-ang[i] * Math.PI) / 180;
+      const dx = b.center.x - a.center.x, dy = b.center.y - a.center.y;
+      const u = Math.abs(dx * Math.cos(t) - dy * Math.sin(t)) / a.bodySize, v = Math.abs(dx * Math.sin(t) + dy * Math.cos(t)) / a.bodySize;
+      const onGrid = (Math.abs(Math.max(u, v) - 1) < 0.15 && Math.min(u, v) < 0.15);
+      if (!onGrid) loose = true;
+    }
+  }
+  return loose ? parts : null;
+}
+
+/**
+ * Peel soft illumination effects off a region: glare halos and cast shadows change the table's
+ * brightness smoothly, while a piece ends at a crisp cut edge. Region pixels reachable from outside
+ * through smooth pixels (local high-pass energy of the luminance at table level) are given back to
+ * the table. Kept only when it leaves piece-sized parts with clearly better outlines.
+ */
+function peelSoft(c: Candidate, img: RGBAImage, ra: number, W: number, H: number): Candidate[] | null {
+  const pad = 6;
+  const x0 = Math.max(0, c.bbox.x - pad), y0 = Math.max(0, c.bbox.y - pad);
+  const x1 = Math.min(W, c.bbox.x + c.bbox.width + pad), y1 = Math.min(H, c.bbox.y + c.bbox.height + pad);
+  const w = x1 - x0, h = y1 - y0;
+  const Y = createGray(w, h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const o = ((y + y0) * W + x + x0) * 4;
+      Y.data[y * w + x] = 0.299 * img.data[o] + 0.587 * img.data[o + 1] + 0.114 * img.data[o + 2];
+    }
+  }
+  const local = boxBlurGray(Y, 2);
+  const dev = createGray(w, h);
+  for (let i = 0; i < dev.data.length; i++) dev.data[i] = Math.abs(Y.data[i] - local.data[i]);
+  const energy = boxBlurGray(dev, 1).data;
+  // Region mask in the padded frame; table statistics from the ring outside it.
+  const m = createMask(w, h);
+  for (let y = 0; y < c.bbox.height; y++) {
+    for (let x = 0; x < c.bbox.width; x++) m.data[(y + c.bbox.y - y0) * w + x + c.bbox.x - x0] = c.mask.data[y * c.bbox.width + x];
+  }
+  const ring = dilate(m, 3);
+  const tv: number[] = [];
+  for (let i = 0; i < m.data.length; i++) if (!ring.data[i]) tv.push(energy[i]);
+  if (tv.length < 50) return null;
+  const med = median(tv);
+  const mad = median(tv.map((v) => Math.abs(v - med)));
+  const t = med + 5 * Math.max(1.4826 * mad, 0.25);
+  // Flood from outside through smooth region pixels (4-connected).
+  const flooded = new Uint8Array(w * h);
+  const queue = new Int32Array(w * h);
+  let head = 0, tail = 0;
+  for (let i = 0; i < w * h; i++) if (!m.data[i]) { flooded[i] = 1; queue[tail++] = i; }
+  while (head < tail) {
+    const i = queue[head++];
+    const x = i % w, y = (i - x) / w;
+    for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1]) {
+      if (j < 0 || flooded[j] || energy[j] > t) continue;
+      flooded[j] = 1;
+      queue[tail++] = j;
+    }
+  }
+  const rest = createMask(w, h);
+  let removed = 0;
+  for (let i = 0; i < w * h; i++) {
+    if (!m.data[i]) continue;
+    if (flooded[i]) removed++;
+    else rest.data[i] = 1;
+  }
+  if (removed < 0.08 * c.area) return null;
+  const cleaned = fillHoles(open(rest, 1));
+  const { labels, stats } = labelComponents(cleaned, 8);
+  const parts = stats
+    .filter((st) => st.area >= 0.5 * ra)
+    .map((st) => makeCandidate(componentMask(labels, w, st.label, st.bbox), { x: st.bbox.x + x0, y: st.bbox.y + y0, width: st.bbox.width, height: st.bbox.height }, W, H, st.area));
+  if (parts.length === 0) return null;
+  const before = c.shape?.confidence ?? 0;
+  const ok = Math.max(...parts.map((p) => p.shape?.confidence ?? 0)) >= Math.max(0.6, before + 0.2);
+  return ok ? parts : null;
+}
+
+/**
+ * Colour blockiness of a photo: mean colour-difference step across 8-px block boundaries relative
+ * to elsewhere (1 = none; JPEGs at their original pixel grid measure ≈ 1.8–3.7).
+ */
+function chromaBlockiness(img: RGBAImage): number {
+  const { width: w, height: h, data } = img;
+  let bs = 0, bn = 0, is = 0, inn = 0;
+  const step = Math.max(2, Math.round(h / 400));
+  for (let y = 0; y < h; y += step) {
+    for (let x = 1; x < w; x++) {
+      const o = (y * w + x) * 4, p = o - 4;
+      const d = Math.abs(data[o] - data[o + 1] - data[p] + data[p + 1]) + Math.abs(data[o + 2] - data[o + 1] - data[p + 2] + data[p + 1]);
+      if ((x & 7) === 0) { bs += d; bn++; } else { is += d; inn++; }
+    }
+  }
+  return bn > 0 && is > 0 ? bs / bn / (is / inn) : 1;
+}
+
+/** Blockiness from which outlines are snapped to luminance edges (JPEG colour bleeding). */
+const JPEG_BLOCKINESS = 1.3;
+/** Smallest kept foreground component in blocky JPEGs (about two 8×8 colour blocks). */
+const JPEG_MIN_AREA = 160;
+
+/** Luminance step (table sigmas) from which a region's outline is snapped to the luminance edge. */
+const SNAP_MIN_STEP = 8;
+/** Fraction of the step (and minimum deviation in sigmas) a boundary pixel must reach to stay. */
+const SNAP_FRACTION = 0.15;
+const SNAP_MIN_DEV = 2.5;
+/** Median colour score just inside the outline below which a region is not snapped. */
+const SNAP_MIN_CONTRAST = 12;
+
+/**
+ * Snap an outline to the luminance edge where the piece clearly differs in brightness from the
+ * table. Phone JPEGs store colour at half resolution in 8–16 px blocks, so colour bleeds a few
+ * pixels into the table around every piece and the colour score grows the region into those blocks;
+ * brightness is stored at full resolution. Boundary pixels (outer 3 px) whose brightness is still
+ * table-like (below 30 % of the piece's brightness step, measured just inside) are dropped unless
+ * their colour score is clearly piece-like.
+ */
+function snapOutline(c: Candidate, img: RGBAImage, score: GrayImage, high: number, noise: number, W: number, H: number): Candidate | null {
+  const pad = 9;
+  const x0 = Math.max(0, c.bbox.x - pad), y0 = Math.max(0, c.bbox.y - pad);
+  const x1 = Math.min(W, c.bbox.x + c.bbox.width + pad), y1 = Math.min(H, c.bbox.y + c.bbox.height + pad);
+  const w = x1 - x0, h = y1 - y0;
+  const m = createMask(w, h);
+  for (let y = 0; y < c.bbox.height; y++) {
+    for (let x = 0; x < c.bbox.width; x++) m.data[(y + c.bbox.y - y0) * w + x + c.bbox.x - x0] = c.mask.data[y * c.bbox.width + x];
+  }
+  const Y = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const o = ((y + y0) * W + x + x0) * 4;
+      Y[y * w + x] = 0.299 * img.data[o] + 0.587 * img.data[o + 1] + 0.114 * img.data[o + 2];
+    }
+  }
+  // Table brightness and spread from a ring just outside the region.
+  const near = dilate(m, 3), far = dilate(m, 8);
+  const ring: number[] = [];
+  for (let i = 0; i < w * h; i++) if (far.data[i] && !near.data[i]) ring.push(Y[i]);
+  if (ring.length < 30) return null;
+  const tY = median(ring);
+  const sY = Math.max(noise, 1.4826 * median(ring.map((v) => Math.abs(v - tY))), 1);
+  // The piece's brightness just inside the band (3–6 px in), averaged locally along the outline.
+  const band = erode(m, 3);
+  const deep = erode(m, 6);
+  const D = createGray(w, h), In = createGray(w, h);
+  const ringScore: number[] = [];
+  for (let i = 0; i < w * h; i++) {
+    if (!band.data[i] || deep.data[i]) continue;
+    D.data[i] = (Y[i] - tY) / sY;
+    In.data[i] = 1;
+    const x = i % w, yy = (i - x) / w;
+    ringScore.push(score.data[(yy + y0) * W + x + x0]);
+  }
+  // Pieces that barely stand out (dark print on a dark table) keep their outline: their edge is
+  // not a clean brightness step.
+  if (ringScore.length < 20 || median(ringScore) < SNAP_MIN_CONTRAST) return null;
+  const sumD = boxBlurGray(D, 4).data, cnt = boxBlurGray(In, 4).data;
+  let removed = 0;
+  const keep = cloneMask(m);
+  for (let i = 0; i < w * h; i++) {
+    if (!m.data[i] || band.data[i] || cnt[i] < 0.05) continue;
+    const din = sumD[i] / cnt[i];
+    if (Math.abs(din) < SNAP_MIN_STEP) continue;
+    const x = i % w, yy = (i - x) / w;
+    if (score.data[(yy + y0) * W + x + x0] >= high) continue;
+    if ((Math.sign(din) * (Y[i] - tY)) / sY >= Math.max(SNAP_MIN_DEV, SNAP_FRACTION * Math.abs(din))) continue;
+    keep.data[i] = 0;
+    removed++;
+  }
+  if (removed < 0.005 * c.area) return null;
+  const cleaned = fillHoles(keep);
+  const { labels, stats } = labelComponents(cleaned, 8);
+  if (stats.length === 0) return null;
+  const main = stats.reduce((a, b) => (b.area > a.area ? b : a));
+  if (main.area < 0.85 * c.area) return null;
+  return { ...makeCandidate(componentMask(labels, w, main.label, main.bbox), { x: main.bbox.x + x0, y: main.bbox.y + y0, width: main.bbox.width, height: main.bbox.height }, W, H, main.area), group: c.group, merged: c.merged };
+}
+
 /**
  * Relative piece-size trend over the photo: robust least-squares plane of √area / median √area of
  * the reference pieces against normalised position. Returns null with fewer than 6 references or
@@ -400,6 +745,37 @@ function readingOrder<T extends { bbox: Rect }>(items: T[]): T[] {
   return rows.flatMap((r) => r.sort((a, b) => cx(a) - cx(b)));
 }
 
+/**
+ * Something lying along the photo border, much longer than deep: the table edge with the floor
+ * beyond, the edge of the box lid, a sleeve. Not offered as a piece (a piece or an assembled grid
+ * cut off by the border is at most a few pieces long and at least a sliver deep).
+ */
+function isBorderClutter(c: Candidate, body: number, W: number, H: number): boolean {
+  const { x: bx, y: by, width: w, height: h } = c.bbox;
+  // Measured without thin attachments (a highlight along the table edge, a cable).
+  const m = open(c.mask, 3, 'disk');
+  const b = maskBounds(m);
+  if (!b) return false;
+  const side = [0, 0, 0, 0]; // top, right, bottom, left
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!m.data[y * w + x]) continue;
+      const X = x + bx, Y = y + by;
+      if (Y === 0) side[0]++;
+      if (X === W - 1) side[1]++;
+      if (Y === H - 1) side[2]++;
+      if (X === 0) side[3]++;
+    }
+  }
+  const k = side.indexOf(Math.max(...side));
+  const contact = side[k];
+  const depth = k % 2 === 0 ? b.height : b.width;
+  return contact > CLUTTER_CONTACT * body && contact > CLUTTER_ELONGATION * depth;
+}
+
+const CLUTTER_CONTACT = 3;
+const CLUTTER_ELONGATION = 3;
+
 function isPlausibleSingle(c: Candidate): boolean {
   if (!c.shape || c.touchesBorder || c.shape.confidence < REFERENCE_CONFIDENCE) return false;
   const r = c.area / (c.shape.bodySize * c.shape.bodySize);
@@ -442,7 +818,12 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   const W = photo.width, H = photo.height;
   const patchRatio = opts.patchAreaRatio ?? 1.8;
   const fragRatio = opts.fragmentAreaRatio ?? 0.35;
-  const minArea = opts.minArea ?? Math.max(48, Math.round(5e-5 * W * H));
+  // JPEG photos at their original pixel grid: colour bleeds into the table around every piece, in
+  // blocks of up to 16×16 px (outlines are snapped to brightness edges below; specks of one or two
+  // such blocks are noise).
+  const blockiness = chromaBlockiness(photo);
+  const blocky = blockiness >= JPEG_BLOCKINESS;
+  const minArea = opts.minArea ?? Math.max(blocky ? JPEG_MIN_AREA : 48, Math.round(5e-5 * W * H));
 
   const timings = opts.timings;
   let t0 = performance.now();
@@ -463,6 +844,8 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   const th = chooseThreshold(score);
   let fg = hysteresis(score, th.high, th.low);
   lap('threshold');
+  const diag = opts.diagnostics;
+  if (diag) Object.assign(diag, { score, high: th.high, low: th.low, colour: cloneMask(fg), minArea });
   // Pixels only the texture cue found (colour could not separate them): kept for reporting.
   const texOnly = createMask(W, H);
   const addTexture = (tex: Mask | null) => {
@@ -474,11 +857,19 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   addTexture(textureForeground(score, fg));
   // On a dark table cast shadows are invisible, so luminance texture is safe there and catches dark
   // print whose colour equals the table (on light tables it would also catch the shadows).
-  if (fit.color[0] < DARK_TABLE_L) addTexture(textureForeground(rgbaToGray(scored), fg));
+  // (Not on a patterned table: its pattern is all brightness structure.)
+  if (fit.color[0] < DARK_TABLE_L && fit.palette.length === 0) addTexture(textureForeground(rgbaToGray(scored), fg));
   lap('texture');
+  // Pieces lying 1–3 px apart are still separate here (closing bridges them): kept for splitting.
+  const preClose = cloneMask(fg);
   fg = close(fg, 2);
   fg = fillHoles(fg);
+  const unfiltered = diag ? cloneMask(fg) : null;
   fg = removeSmallComponents(fg, minArea);
+  if (diag && unfiltered) {
+    for (let i = 0; i < fg.data.length; i++) unfiltered.data[i] &= fg.data[i] ^ 1;
+    Object.assign(diag, { texture: texOnly, removed: unfiltered });
+  }
   lap('morphology');
   const { labels, stats } = labelComponents(fg, 8);
   lap('components');
@@ -492,6 +883,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   const refArea = singles.length > 0 ? median(singles.map((c) => c.area)) : others.length > 0 ? median(others.map((c) => c.area)) : 0;
   const refBody = singles.length > 0 ? median(singles.map((c) => c.shape!.bodySize)) : Math.sqrt(refArea);
   const noReference = singles.length === 0 && others.length < 3;
+  if (diag) Object.assign(diag, { refArea, refBody });
   // Expected single-piece area at a position (follows perspective size trends when measurable).
   const sizeTrend = fitSizeTrend(singles, W, H);
   const refAreaAt = (c: Candidate): number => {
@@ -500,13 +892,25 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     return refArea * Math.max(0.5, Math.min(2, f * f));
   };
 
+  // Glare halos and cast shadows grown onto pieces: peel them off where that clearly helps.
+  if (refArea > 0) {
+    const out: Candidate[] = [];
+    for (const c of cands) {
+      const ra = refAreaAt(c);
+      const doubtful = !c.touchesBorder && c.area >= 0.6 * ra && (c.area > 1.3 * ra || !c.shape || c.shape.confidence < 0.7);
+      out.push(...((doubtful ? peelSoft(c, scored, ra, W, H) : null) ?? [c]));
+    }
+    cands = out;
+  }
+
   // Split touching pieces at narrow necks.
   let group = 0;
   if (refArea > 0 && opts.splitTouching !== false) {
     const out: Candidate[] = [];
     for (const c of cands) {
-      const confidentSingle = c.shape !== null && c.shape.confidence >= 0.7;
       const ra = refAreaAt(c);
+      // A clean four-corner outline clearly larger than a piece is two pieces side by side.
+      const confidentSingle = c.shape !== null && c.shape.confidence >= 0.7 && c.shape.bodySize <= 1.2 * refBody * Math.sqrt(ra / refArea);
       if (c.area > 1.4 * ra && !confidentSingle) {
         const parts = splitAtNecks(c, Math.max(2, NECK_RADIUS * refBody * Math.sqrt(ra / refArea)), 0.3 * ra);
         // Accept the split when every part is piece-sized and at least one is a convincing piece
@@ -519,6 +923,13 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
           for (const p of cand) out.push({ ...p, group });
           continue;
         }
+        // Pieces touching along a whole side or slightly overlapping: cut along the edges between them.
+        const cut = splitAtEdges(c, ra, refBody * Math.sqrt(ra / refArea), preClose, scored, W, H);
+        if (cut) {
+          group++;
+          for (const p of cut) out.push({ ...p, group });
+          continue;
+        }
       }
       out.push(c);
     }
@@ -526,9 +937,13 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   }
   if (refArea > 0) cands = mergeFragments(cands, refAreaAt, refBody, W, H);
   lap('split');
+  if (diag) diag.blockiness = blockiness;
+  if (blocky) cands = cands.map((c) => (c.touchesBorder ? c : snapOutline(c, scored, score, th.high, noise, W, H) ?? c));
+  lap('snap');
 
   // Classify and build regions.
   const ordered = readingOrder(cands);
+  const clutterAt = new Set<number>();
   const regions: SegmentedRegion[] = ordered.map((c, i) => {
     const ra = refAreaAt(c);
     const ratio = ra > 0 ? c.area / ra : 1;
@@ -537,8 +952,10 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     // Single pieces vary by ≈ ±25 % in area (tabs vs. blanks), two pieces are ≥ 1.5× the median:
     // between 1.4× and the patch ratio, a region without a convincing single-piece shape is a patch.
     const weakShape = !c.shape || c.shape.confidence < UNCERTAIN_CONFIDENCE;
+    const clutter = c.touchesBorder && ra > 0 && isBorderClutter(c, refBody * Math.sqrt(ra / refArea), W, H);
+    if (clutter) clutterAt.add(i);
     let kind: RegionKind = 'piece';
-    if (ratio < fragRatio) kind = 'unknown';
+    if (ratio < fragRatio || clutter) kind = 'unknown';
     else if ((ratio > patchRatio && !confidentSingle) || (ratio > 1.4 && weakShape)) kind = 'patch';
     // Without any size reference (no convincing single piece, < 3 regions), a region without a
     // convincing single-piece shape is taken as an assembled patch (lone patches score ≤ 0.4,
@@ -565,10 +982,11 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   ordered.forEach((c, i) => {
     if (c.group !== undefined) groups.set(c.group, [...(groups.get(c.group) ?? []), i + 1]);
   });
+  const regionDiag: RegionDiagnostics[] = [];
   ordered.forEach((c, i) => {
     const r = regions[i].region;
     const issues: QualityIssue[] = r.issues;
-    if (c.touchesBorder) {
+    if (c.touchesBorder && !clutterAt.has(i)) {
       issues.push({ code: 'cut_off', severity: 'warning', message: 'Piece is cut off by the photo edge.', hint: 'Keep all pieces fully inside the frame.', regionIds: [r.id], area: r.bbox });
     }
     if (r.kind === 'unknown' && refArea > 0 && c.area < fragRatio * refAreaAt(c)) {
@@ -584,9 +1002,15 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     const contrast = median(outlineScores(score, fg, regions[i]));
     const texFrac = maskFraction(texOnly, c.mask, c.bbox);
     const reassembled = (c.merged ?? 1) > 1;
-    const unreliable = r.kind === 'unknown' || reassembled || (r.kind === 'piece' && (!c.shape || c.shape.confidence < UNCERTAIN_CONFIDENCE)) ||
+    // Specks (far below a piece) are fragments, not pieces that are hard to see; border clutter is no piece.
+    const speck = r.kind === 'unknown' && (clutterAt.has(i) || (refArea > 0 && c.area < 0.15 * refAreaAt(c)));
+    const unreliable = (r.kind === 'unknown' && !speck) || reassembled || (r.kind === 'piece' && (!c.shape || c.shape.confidence < UNCERTAIN_CONFIDENCE)) ||
       (r.kind === 'patch' && texFrac > 3 * TEXTURE_ASSISTED);
     const hardToSee = reassembled || contrast < LOW_REGION_CONTRAST || (texFrac > TEXTURE_ASSISTED && contrast < 2.5 * LOW_REGION_CONTRAST);
+    if (diag) {
+      const ra = refAreaAt(c);
+      regionDiag.push({ id: r.id, contrast, textureFraction: texFrac, merged: c.merged ?? 1, areaRatio: ra > 0 ? c.area / ra : 1, shapeConfidence: c.shape?.confidence ?? 0, split: c.group !== undefined });
+    }
     if (!c.touchesBorder && unreliable && hardToSee) {
       issues.push({ code: 'low_contrast', severity: 'warning', message: 'This piece is hard to tell from the background; its outline may be wrong.', hint: 'Use a plain background that contrasts with the pieces.', regionIds: [r.id], area: r.bbox });
     }
@@ -595,6 +1019,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     }
   });
 
+  if (diag) diag.regions = regionDiag;
   const bodies = regions.filter((r) => r.region.shape).map((r) => r.region.shape!.bodySize);
   const background: BackgroundModel = {
     ...fit,

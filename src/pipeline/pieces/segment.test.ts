@@ -6,6 +6,7 @@ import { resizeRGBA } from '../../cv/resize';
 import { DEBUG_IMAGES, loadTestAsset, savePng } from '../../testing/nodeImageIO';
 import { generateJigsaw, renderPiecesPhoto, Rng, type RGB, type RenderOptions } from '../../testing/synth';
 import { segmentPieces } from './segment';
+import type { SegmentDiagnostics } from './types';
 import { cropPhoto, drawOverlay, evaluateScene, makeTouching, maskIoU, type SceneEval } from './testkit';
 
 const PAINTINGS = {
@@ -374,6 +375,102 @@ describe('segmentPieces on hard tables', () => {
     const { recall, precision } = summary(seg, truth, cut);
     expect(recall).toBeGreaterThanOrEqual(0.95);
     expect(precision).toBe(1);
+  });
+});
+
+describe('segmentPieces on real-photo conditions', () => {
+  const evaluate = (seg: ReturnType<typeof segmentPieces>, truth: Parameters<typeof evaluateScene>[1], cut: Parameters<typeof evaluateScene>[2]) => {
+    const ev = evaluateScene(seg, truth, cut, 0.8);
+    const matched = new Set<number>();
+    for (const p of ev.pieces) if (p.detected) matched.add(p.truthIndex);
+    // Regions offered as pieces / patches that are none (fragments and 'unknown' are not offered).
+    const offeredFalse = ev.falseRegions - seg.regions.filter((r) => r.region.kind === 'unknown' && !r.region.issues.some((i) => i.code === 'fragment')).length;
+    return { recall: matched.size / truth.length, offeredFalse, ev };
+  };
+  const debug = (name: string, photo: RGBAImage, seg: ReturnType<typeof segmentPieces>, truth: Parameters<typeof drawOverlay>[2]) => {
+    if (DEBUG_IMAGES) savePng(`.debug/pieces/real-${name}.png`, drawOverlay(photo, seg, truth));
+  };
+
+  it('separates loose pieces lying 1–3 px apart or slightly overlapping', () => {
+    for (const seed of [1, 2]) {
+      const { photo, truth, cut } = scene('starry-night', 'dark', seed, { pairs: { count: 4, gap: [-2, 3] } });
+      const seg = segmentPieces(photo);
+      debug(`pairs-${seed}`, photo, seg, truth);
+      const { recall } = evaluate(seg, truth, cut);
+      console.log(`close pairs s${seed}: recall ${recall.toFixed(2)}`);
+      expect(recall).toBeGreaterThanOrEqual(0.8);
+    }
+  });
+
+  it('does not offer the table edge or the box lid at the photo border as pieces', () => {
+    const { photo, truth, cut } = scene('great-wave', 'wood', 2, { clutter: ['table-edge', 'box-edge'] });
+    const seg = segmentPieces(photo);
+    debug('clutter', photo, seg, truth);
+    const { recall, offeredFalse } = evaluate(seg, truth, cut);
+    expect(recall).toBeGreaterThanOrEqual(0.9);
+    expect(offeredFalse).toBe(0);
+    expect(seg.quality.issues.some((i) => i.code === 'cut_off' && i.regionIds?.some((id) => seg.regions[id - 1].region.kind === 'unknown'))).toBe(false);
+  });
+
+  it('learns a patterned tablecloth as table and warns about it', () => {
+    for (const pattern of [{ kind: 'dots' as const }, { kind: 'check' as const }]) {
+      const { photo, truth, cut } = scene('starry-night', 'dark', 2, { pattern });
+      const seg = segmentPieces(photo);
+      debug(`pattern-${pattern.kind}`, photo, seg, truth);
+      const { recall, offeredFalse } = evaluate(seg, truth, cut);
+      console.log(`pattern ${pattern.kind}: palette ${seg.background.palette.length}, recall ${recall.toFixed(2)}, false ${offeredFalse}`);
+      expect(seg.background.palette.length).toBeGreaterThan(0);
+      expect(recall).toBeGreaterThanOrEqual(0.75);
+      expect(offeredFalse).toBeLessThanOrEqual(2);
+      expect(seg.quality.issues.find((i) => i.code === 'low_contrast')?.message).toMatch(/patterned/);
+    }
+    // A plain table has no palette.
+    expect(segmentPieces(scene('great-wave', 'wood', 1).photo, { assessQuality: false }).background.palette).toEqual([]);
+  });
+
+  it('keeps outlines on brightness edges in blocky JPEG photos', () => {
+    const { photo, truth, cut } = scene('great-wave', 'dark', 2, { jpegQuality: 70 });
+    const diagnostics: SegmentDiagnostics = {};
+    const seg = segmentPieces(photo, { diagnostics });
+    debug('jpeg', photo, seg, truth);
+    const { recall, ev } = evaluate(seg, truth, cut);
+    const singles = ev.pieces.filter((p) => !p.isPatch && p.detected);
+    expect(diagnostics.blockiness).toBeGreaterThan(1.3);
+    expect(recall).toBe(1);
+    expect(singles.filter((p) => p.shapeFound).length).toBeGreaterThanOrEqual(0.8 * singles.length);
+    // JPEG colour blocks are not reported as crumbs.
+    expect(seg.regions.filter((r) => r.region.area < 160)).toEqual([]);
+  });
+
+  it('peels glare halos off the pieces they touch', () => {
+    const { photo, truth, cut } = scene('great-wave', 'grey', 2, { illumination: 0.3, glare: { count: 4, radius: [0.04, 0.07] } });
+    const seg = segmentPieces(photo);
+    debug('glare', photo, seg, truth);
+    const { recall } = evaluate(seg, truth, cut);
+    console.log(`glare: recall ${recall.toFixed(2)}`);
+    expect(recall).toBeGreaterThanOrEqual(0.85);
+  });
+
+  it('treats an over-exposed corner of a light table as table', () => {
+    const { photo, truth, cut } = scene('starry-night', 'light', 2, { gain: 1.12, illumination: 0.2 });
+    const seg = segmentPieces(photo);
+    debug('overexposed', photo, seg, truth);
+    let clipped = 0;
+    for (let i = 0; i < photo.data.length; i += 4) if (photo.data[i] === 255 && photo.data[i + 1] === 255 && photo.data[i + 2] === 255) clipped++;
+    const { recall, offeredFalse } = evaluate(seg, truth, cut);
+    expect(clipped).toBeGreaterThan(0.01 * photo.width * photo.height);
+    expect(recall).toBeGreaterThanOrEqual(0.95);
+    expect(offeredFalse).toBe(0);
+  });
+
+  it('ignores soft cast shadows and a light cardboard rim on a dark table', () => {
+    const { photo, truth, cut } = scene('starry-night', 'dark', 2, { rim: {}, edgeDarkening: 0.15, shadow: 0.45, shadowOffset: [6, 4], shadowBlur: 3.5 });
+    const seg = segmentPieces(photo);
+    debug('rim-shadow', photo, seg, truth);
+    const { recall, ev } = evaluate(seg, truth, cut);
+    const singles = ev.pieces.filter((p) => !p.isPatch && p.detected);
+    expect(recall).toBeGreaterThanOrEqual(0.9);
+    expect(singles.filter((p) => p.shapeFound).length).toBeGreaterThanOrEqual(0.8 * singles.length);
   });
 });
 

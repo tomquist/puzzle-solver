@@ -8,6 +8,7 @@ import { createFloat, createMask, createRGBA, type FloatImage, type Mask, type R
 import { gaussianBlurFloat } from '../cv/filter';
 import { fillPolygon } from '../cv/raster';
 import { sampleRGBA, warpRGBA } from '../cv/warp';
+import jpeg from 'jpeg-js';
 import { SIDE_PROFILE_SAMPLES, type PieceKind, type PieceShape, type SideKind, type SideShape } from '../model/types';
 
 // ---------------------------------------------------------------------------------------------
@@ -307,6 +308,30 @@ export interface RenderOptions {
   edgeWidth?: number;
   /** Drop shadow strength 0..1 (default 0.3). */
   shadow?: number;
+  /** Shadow offset in px: a number shifts down-right by that much per axis (default 2); [dx, dy] any direction. */
+  shadowOffset?: number | [number, number];
+  /** Softness (Gaussian sigma, px) of the shadow (default 2.2). */
+  shadowBlur?: number;
+  /**
+   * Visible cardboard: the cut edge of a real piece shows its light core, and seen slightly from the
+   * side the edge wall is a light band along one side of the piece (outside the printed outline).
+   */
+  rim?: RimStyle;
+  /** Structured table surface (wood grain, woven cloth, patterned tablecloth) instead of a plain colour. */
+  pattern?: TablePattern;
+  /** Objects cut by the photo border (box lid, table edge, finger); never overlap pieces, not in the truth. */
+  clutter?: ClutterKind[];
+  /** Radial vignetting: brightness falls to (1 − vignette) in the corners (default 0). */
+  vignette?: number;
+  /** Specular glare: bright soft spots (partly clipping) on pieces and table. */
+  glare?: GlareStyle;
+  /** Simulate phone JPEG compression (4:2:0 chroma, this quality 1..100) as the last step. */
+  jpegQuality?: number;
+  /**
+   * Put some items in close pairs: the first 2·count items form pairs whose outlines are `gap` px
+   * apart (random in [min, max]; negative = the second piece overlaps the first by that much).
+   */
+  pairs?: { count: number; gap?: [number, number] };
   /** Supersampling per axis for anti-aliased borders (default 4). */
   supersample?: number;
   /**
@@ -316,6 +341,42 @@ export interface RenderOptions {
    */
   patch?: PatchStyle | false;
   seed?: number;
+}
+
+/** Cardboard edge of the pieces (see {@link RenderOptions.rim}). */
+export interface RimStyle {
+  /** Visible wall width in px (default 2.5). */
+  thickness?: number;
+  /** Direction (degrees, clockwise from +x) in which the wall shows (default 60 = down-right). */
+  direction?: number;
+  /** Cardboard core colour (default light grey-beige). */
+  color?: RGB;
+  /** Lightening of the outermost px of the print towards the core colour, 0..1 (default 0.5). */
+  light?: number;
+}
+
+/** Structured table surfaces (colours default to sensible values derived from `background`). */
+export type TablePattern =
+  /** Wood grain: warped growth rings with thin dark lines and fibres. `scale` multiplies the ring spacing (default 1). */
+  | { kind: 'wood'; colors?: [RGB, RGB]; scale?: number }
+  /** Plain-weave fabric: threads `period` px apart (default 6), shading contrast 0..1 (default 0.35). */
+  | { kind: 'weave'; period?: number; contrast?: number }
+  /** Gingham tablecloth: two-colour check, `period` px per repeat (default 64). */
+  | { kind: 'check'; colors?: [RGB, RGB]; period?: number }
+  /** Polka-dot print: dots of `radius` px (default 7) on a hex grid `period` px apart (default 40). */
+  | { kind: 'dots'; colors?: [RGB, RGB]; period?: number; radius?: number };
+
+/** Things at the photo border that are not pieces. */
+export type ClutterKind = 'box-edge' | 'table-edge' | 'finger';
+
+/** Specular glare spots (see {@link RenderOptions.glare}). */
+export interface GlareStyle {
+  /** Number of spots (default 3). */
+  count?: number;
+  /** Spot radius range as a fraction of the shorter photo side (default [0.03, 0.08]). */
+  radius?: [number, number];
+  /** Peak brightness added, fraction of full scale (default 0.8; ≥ 0.6 clips). */
+  strength?: number;
 }
 
 /** Appearance of assembled patches (see {@link RenderOptions.patch}). */
@@ -440,6 +501,286 @@ function boundsOf(pts: readonly Point[]): { x0: number; y0: number; x1: number; 
   return { x0, y0, x1, y1 };
 }
 
+// ---------------------------------------------------------------------------------------------
+// Real-photo effects (all opt-in; each draws from its own random stream so that enabling one
+// does not change anything else in the scene)
+// ---------------------------------------------------------------------------------------------
+
+/** Separate deterministic random stream `k` of a scene. */
+function streamRng(seed: number | undefined, k: number): Rng {
+  return new Rng((((seed ?? 1) * 104729) ^ (k * 2654435761)) >>> 0);
+}
+
+/** Smooth value noise (values about −1..1) sampled at arbitrary coordinates (lattice spacing 1). */
+function noiseField(rng: Rng): (x: number, y: number) => number {
+  const N = 256;
+  const g = new Float32Array(N * N);
+  for (let i = 0; i < g.length; i++) g[i] = rng.uniform(-1, 1);
+  return (x, y) => {
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    const fx = x - x0, fy = y - y0;
+    const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+    const i0 = ((x0 % N) + N) % N, j0 = ((y0 % N) + N) % N, i1 = (i0 + 1) % N, j1 = (j0 + 1) % N;
+    const a = g[j0 * N + i0], b = g[j0 * N + i1], c = g[j1 * N + i0], d = g[j1 * N + i1];
+    return (a * (1 - sx) + b * sx) * (1 - sy) + (c * (1 - sx) + d * sx) * sy;
+  };
+}
+
+const mixRGB = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const scaleRGB = (a: RGB, f: number): RGB => [a[0] * f, a[1] * f, a[2] * f];
+const smooth01 = (t: number) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
+
+/** Paint a structured table surface into `scene` (float sRGB, 3 channels). */
+function paintPattern(scene: FloatImage, p: TablePattern, bg: RGB, rng: Rng): void {
+  const { width: W, height: H, data } = scene;
+  const put = (i: number, c: RGB) => {
+    data[i * 3] = c[0];
+    data[i * 3 + 1] = c[1];
+    data[i * 3 + 2] = c[2];
+  };
+  if (p.kind === 'wood') {
+    const [light, dark] = p.colors ?? [scaleRGB(bg, 1.15), scaleRGB(bg, 0.55)];
+    const ang = rng.uniform(-0.15, 0.15) + (rng.bool() ? Math.PI / 2 : 0);
+    const ca = Math.cos(ang), sa = Math.sin(ang);
+    const period = 16 * (p.scale ?? 1);
+    const n1 = noiseField(rng), n2 = noiseField(rng), n3 = noiseField(rng);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const u = x * ca + y * sa, v = -x * sa + y * ca;
+        const w = 1.6 * n1(u / 260, v / 70) + 0.35 * n2(u / 45, v / 14);
+        const ring = 0.5 + 0.5 * Math.sin(2 * Math.PI * (v / period + w));
+        const line = ring ** 10;
+        const fib = n3(u / 30, v / 1.3);
+        const t = Math.min(1, Math.max(0, 0.55 * line + 0.3 * (0.5 + 0.25 * w) + 0.15 * (0.5 + 0.5 * fib)));
+        put(y * W + x, mixRGB(light, dark, t));
+      }
+    }
+  } else if (p.kind === 'weave') {
+    const per = p.period ?? 6, con = p.contrast ?? 0.35;
+    const ang = rng.uniform(-0.3, 0.3);
+    const ca = Math.cos(ang), sa = Math.sin(ang);
+    const tv = new Float32Array(4096);
+    for (let i = 0; i < tv.length; i++) tv[i] = rng.uniform(-1, 1);
+    const warpTint: RGB = scaleRGB(bg, 1.04), weftTint: RGB = scaleRGB(bg, 0.94);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const u = x * ca + y * sa + 1e4, v = -x * sa + y * ca + 1e4;
+        const i = Math.floor(u / per), j = Math.floor(v / per);
+        const fx = u / per - i, fy = v / per - j;
+        const warpTop = ((i + j) & 1) === 0;
+        const f = warpTop ? fx : fy;
+        const prof = 1 - 4 * (f - 0.5) * (f - 0.5);
+        const thread = warpTop ? tv[i & 4095] : tv[(j + 2048) & 4095];
+        const k = 1 + con * (prof - 0.6) + 0.08 * thread;
+        put(y * W + x, scaleRGB(warpTop ? warpTint : weftTint, k));
+      }
+    }
+  } else if (p.kind === 'check') {
+    const [a, b] = p.colors ?? [[236, 232, 226], [186, 44, 52]];
+    const per = p.period ?? 64;
+    const ang = rng.uniform(-0.35, 0.35);
+    const ca = Math.cos(ang), sa = Math.sin(ang);
+    const band = (t: number) => {
+      // 1 inside the first half of each period, soft 1 px edges.
+      const m = ((t % per) + per) % per;
+      return smooth01(Math.min(m + 0.5, per / 2 - m + 0.5));
+    };
+    const ox = rng.uniform(0, per), oy = rng.uniform(0, per);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const u = x * ca + y * sa + ox, v = -x * sa + y * ca + oy;
+        put(y * W + x, mixRGB(a, b, (band(u) + band(v)) / 2));
+      }
+    }
+  } else {
+    const [a, b] = p.colors ?? [[42, 62, 112], [232, 226, 210]];
+    const per = p.period ?? 40, r = p.radius ?? 7;
+    const ang = rng.uniform(0, Math.PI / 3);
+    const ca = Math.cos(ang), sa = Math.sin(ang);
+    const rowH = (per * Math.sqrt(3)) / 2;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const u = x * ca + y * sa, v = -x * sa + y * ca;
+        const j = Math.round(v / rowH);
+        const shift = (j & 1) * per * 0.5;
+        const i = Math.round((u - shift) / per);
+        const d = Math.hypot(u - (i * per + shift), v - j * rowH);
+        put(y * W + x, mixRGB(a, b, smooth01(r + 0.5 - d)));
+      }
+    }
+  }
+}
+
+/** Anti-aliased coverage of a polygon over the whole photo (supersampled). */
+function polygonCoverage(poly: Point[], W: number, H: number, ss: number): { rect: Rect; cov: Float32Array } | null {
+  const b = boundsOf(poly);
+  const x0 = Math.max(0, Math.floor(b.x0) - 1), y0 = Math.max(0, Math.floor(b.y0) - 1);
+  const x1 = Math.min(W, Math.ceil(b.x1) + 2), y1 = Math.min(H, Math.ceil(b.y1) + 2);
+  if (x1 <= x0 || y1 <= y0) return null;
+  const w = x1 - x0, h = y1 - y0;
+  const m = createMask(w * ss, h * ss);
+  fillPolygon(m, poly.map((p) => ({ x: (p.x - x0 + 0.5) * ss - 0.5, y: (p.y - y0 + 0.5) * ss - 0.5 })), 1);
+  const cov = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let n = 0;
+      for (let sy = 0; sy < ss; sy++) {
+        const row = (y * ss + sy) * w * ss + x * ss;
+        for (let sx = 0; sx < ss; sx++) n += m.data[row + sx];
+      }
+      cov[y * w + x] = n / (ss * ss);
+    }
+  }
+  return { rect: { x: x0, y: y0, width: w, height: h }, cov };
+}
+
+/** A clutter object: outline (may extend beyond the photo) and how to colour a covered pixel. */
+interface ClutterObject {
+  poly: Point[];
+  shade: (x: number, y: number) => RGB;
+}
+
+/**
+ * Clutter at the photo border for a W×H photo: random parameters are drawn once by the caller's
+ * stream (`params`), so the geometry follows the photo size chosen during placement.
+ */
+function makeClutter(kinds: ClutterKind[], rng: Rng, body: number, reference: RGBAImage): (W: number, H: number) => ClutterObject[] {
+  const specs = kinds.map((kind, k) => ({
+    kind, side: (rng.int(4) + k) % 4, a: rng.uniform(0.2, 0.8), span: rng.uniform(0.35, 0.6), depth: rng.uniform(0.06, 0.11),
+    tilt: rng.uniform(-0.25, 0.25), hue: rng.uniform(0, 1), dir: rng.uniform(-0.5, 0.5),
+  }));
+  const noise = noiseField(rng);
+  return (W, H) =>
+    specs.map((s): ClutterObject => {
+      // (t, d): position along the side and depth inwards from it.
+      const L = s.side % 2 === 0 ? W : H, D = s.side % 2 === 0 ? H : W;
+      const at = (t: number, d: number): Point =>
+        s.side === 0 ? { x: t, y: d } : s.side === 1 ? { x: W - d, y: t } : s.side === 2 ? { x: W - t, y: H - d } : { x: d, y: H - t };
+      const td = (x: number, y: number): [number, number] =>
+        s.side === 0 ? [x, y] : s.side === 1 ? [y, W - x] : s.side === 2 ? [W - x, H - y] : [H - y, x];
+      if (s.kind === 'finger') {
+        const t0 = s.a * L, w = 0.45 * body, len = 1.5 * body;
+        const ax = Math.sin(s.dir), ad = Math.cos(s.dir); // finger axis (t, d)
+        const nx = Math.cos(s.dir), nd = -Math.sin(s.dir); // across the finger
+        const cT = t0 + len * ax, cD = len * ad, bT = t0 - body * ax, bD = -body * ad;
+        const pts: Point[] = [at(bT + (nx * w) / 2, bD + (nd * w) / 2)];
+        for (let i = 0; i <= 16; i++) {
+          const f = (Math.PI * i) / 16;
+          pts.push(at(cT + (w / 2) * (Math.cos(f) * nx + Math.sin(f) * ax), cD + (w / 2) * (Math.cos(f) * nd + Math.sin(f) * ad)));
+        }
+        pts.push(at(bT - (nx * w) / 2, bD - (nd * w) / 2));
+        const skin: RGB = [224, 172, 140];
+        return {
+          poly: pts,
+          shade: (x, y) => {
+            const [t, d] = td(x, y);
+            const across = Math.min(1, Math.abs((t - t0) * nx + d * nd) / (w / 2));
+            return scaleRGB(skin, 0.7 + 0.3 * Math.cos((across * Math.PI) / 2) + 0.04 * noise(x / 3, y / 3));
+          },
+        };
+      }
+      const depth = s.depth * D;
+      const full = s.kind === 'table-edge';
+      const t0 = full ? -0.1 * L : (s.a - s.span / 2) * L, t1 = full ? 1.1 * L : (s.a + s.span / 2) * L;
+      const d0 = depth * (1 - s.tilt), d1 = depth * (1 + s.tilt);
+      const poly = [at(t0, -60), at(t1, -60), at(t1, d1), at(t0, d0)];
+      const edgeAt = (t: number) => d0 + ((d1 - d0) * (t - t0)) / (t1 - t0);
+      if (full) {
+        const floor: RGB = [66, 58, 54];
+        return {
+          poly,
+          shade: (x, y) => {
+            // Floor beyond the table, with a light bevel along the table edge.
+            const [t, d] = td(x, y);
+            const bevel = Math.exp(-((edgeAt(t) - d) ** 2) / (2 * 1.5 * 1.5));
+            return mixRGB(scaleRGB(floor, 1 + 0.12 * noise(x / 4, y / 4)), [235, 225, 210], 0.7 * bevel);
+          },
+        };
+      }
+      // Box lid corner: coloured rim along the inner edge, part of the picture printed further out.
+      const lid = hsvToRgb(s.hue, 0.7, 0.7);
+      const px = [0, 0, 0, 0];
+      return {
+        poly,
+        shade: (x, y) => {
+          const [t, d] = td(x, y);
+          if (edgeAt(t) - d < 0.3 * depth) return lid;
+          const u = (((t * 1.3) % reference.width) + reference.width) % reference.width;
+          const v = ((((depth - d) * 1.3 + 40) % reference.height) + reference.height) % reference.height;
+          sampleRGBA(reference, u, v, px);
+          return [px[0], px[1], px[2]];
+        },
+      };
+    });
+}
+
+/** Rectangles (photo coordinates, with margin) that pieces must keep clear of. */
+function clutterZones(objs: ClutterObject[], W: number, H: number, margin: number): { x0: number; y0: number; x1: number; y1: number }[] {
+  return objs.map((o) => {
+    const b = boundsOf(o.poly);
+    return { x0: Math.max(0, b.x0) - margin, y0: Math.max(0, b.y0) - margin, x1: Math.min(W, b.x1) + margin, y1: Math.min(H, b.y1) + margin };
+  });
+}
+
+/** Phone-style JPEG round trip: 4:2:0 chroma subsampling, then jpeg-js at `quality`. */
+function jpegRoundTrip(img: RGBAImage, quality: number): RGBAImage {
+  const { width: w, height: h } = img;
+  const src = img.data;
+  const sub = new Uint8ClampedArray(src);
+  // Average chroma over 2×2 blocks (keep luma per pixel).
+  for (let y = 0; y < h; y += 2) {
+    for (let x = 0; x < w; x += 2) {
+      let cb = 0, cr = 0, n = 0;
+      const idx: number[] = [];
+      for (let dy = 0; dy < 2 && y + dy < h; dy++) {
+        for (let dx = 0; dx < 2 && x + dx < w; dx++) {
+          const o = ((y + dy) * w + x + dx) * 4;
+          const r = src[o], g = src[o + 1], b = src[o + 2];
+          cb += -0.168736 * r - 0.331264 * g + 0.5 * b;
+          cr += 0.5 * r - 0.418688 * g - 0.081312 * b;
+          n++;
+          idx.push(o);
+        }
+      }
+      cb /= n;
+      cr /= n;
+      for (const o of idx) {
+        const Y = 0.299 * src[o] + 0.587 * src[o + 1] + 0.114 * src[o + 2];
+        sub[o] = Y + 1.402 * cr;
+        sub[o + 1] = Y - 0.344136 * cb - 0.714136 * cr;
+        sub[o + 2] = Y + 1.772 * cb;
+      }
+    }
+  }
+  const enc = jpeg.encode({ width: w, height: h, data: sub }, Math.max(1, Math.min(100, Math.round(quality))));
+  const dec = jpeg.decode(enc.data, { useTArray: true, formatAsRGBA: true });
+  return { width: dec.width, height: dec.height, data: new Uint8ClampedArray(dec.data.buffer, dec.data.byteOffset, dec.data.length) };
+}
+
+/** Outline resampled to ≤ `step` px spacing (for distance computations). */
+function densify(pts: Point[], step: number): Point[] {
+  const out: Point[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / step));
+    for (let k = 0; k < n; k++) out.push({ x: a.x + ((b.x - a.x) * k) / n, y: a.y + ((b.y - a.y) * k) / n });
+  }
+  return out;
+}
+
+/** Smallest distance between two point sets, `b` shifted by (dx, dy). */
+function minDistance(a: Point[], b: Point[], dx: number, dy: number): number {
+  let best = Infinity;
+  for (const p of a) {
+    for (const q of b) {
+      const ex = q.x + dx - p.x, ey = q.y + dy - p.y;
+      const d = ex * ex + ey * ey;
+      if (d < best) best = d;
+    }
+  }
+  return Math.sqrt(best);
+}
+
 function finishPhoto(scene: FloatImage, rng: Rng, opts: RenderOptions): RGBAImage {
   const { width: W, height: H } = scene;
   const gain = toRGB(opts.gain, 1);
@@ -448,12 +789,33 @@ function finishPhoto(scene: FloatImage, rng: Rng, opts: RenderOptions): RGBAImag
   const ang = rng.uniform(0, 2 * Math.PI);
   const ax = Math.cos(ang), ay = Math.sin(ang), q = rng.uniform(-0.5, 0.5);
   const s = scene.data;
+  const vig = opts.vignette ?? 0;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const u = x / W - 0.5, v = y / H - 0.5;
-      const f = 1 + illum * (ax * u + ay * v) * 2 + illum * q * (u * u + v * v) * 2;
+      let f = 1 + illum * (ax * u + ay * v) * 2 + illum * q * (u * u + v * v) * 2;
+      if (vig > 0) f *= 1 - vig * 2 * (u * u + v * v);
       const o = (y * W + x) * 3;
       for (let c = 0; c < 3; c++) s[o + c] = s[o + c] * gain[c] * f + offset[c];
+    }
+  }
+  if (opts.glare) {
+    // Specular spots: additive white, soft elliptical falloff (clips where strong).
+    const g = streamRng(opts.seed, 4);
+    const n = opts.glare.count ?? 3, [r0, r1] = opts.glare.radius ?? [0.03, 0.08], amp = 255 * (opts.glare.strength ?? 0.8);
+    for (let k = 0; k < n; k++) {
+      const cx = g.uniform(0.1, 0.9) * W, cy = g.uniform(0.1, 0.9) * H;
+      const r = g.uniform(r0, r1) * Math.min(W, H), asp = g.uniform(0.45, 1), th = g.uniform(0, Math.PI);
+      const ct = Math.cos(th), st = Math.sin(th);
+      const R = Math.ceil(3 * r);
+      for (let y = Math.max(0, Math.floor(cy - R)); y < Math.min(H, Math.ceil(cy + R)); y++) {
+        for (let x = Math.max(0, Math.floor(cx - R)); x < Math.min(W, Math.ceil(cx + R)); x++) {
+          const du = ((x - cx) * ct + (y - cy) * st) / r, dv = (-(x - cx) * st + (y - cy) * ct) / (r * asp);
+          const add = amp * Math.exp(-(du * du + dv * dv) / 2);
+          const o = (y * W + x) * 3;
+          for (let c = 0; c < 3; c++) s[o + c] += add;
+        }
+      }
     }
   }
   const blurred = opts.blurSigma && opts.blurSigma > 0 ? gaussianBlurFloat(scene, opts.blurSigma) : scene;
@@ -494,6 +856,10 @@ export function renderPiecesPhoto(
     theta: number;
     scale: number;
     local: { x0: number; y0: number; x1: number; y1: number };
+    /** Placement bounds: `local` plus the items attached to this one (close pairs). */
+    ext?: { x0: number; y0: number; x1: number; y1: number };
+    /** Close pairs: this item lies at the position of item `to` plus `off`. */
+    attach?: { to: number; off: Point };
     pos?: Point;
   }
   const items: Item[] = pieces.map((entry) => {
@@ -511,11 +877,56 @@ export function renderPiecesPhoto(
     return { indices, refOutlines: indices.map((i) => cut.pieces[i].outline), union, pivot, theta, scale: sc, local };
   });
 
+  // Close pairs: the second item of a pair is attached to the first at a given outline gap.
+  if (opts.pairs && opts.pairs.count > 0) {
+    const prng2 = streamRng(opts.seed, 1);
+    const [g0, g1] = opts.pairs.gap ?? [1, 3];
+    for (let k = 0; k < Math.min(opts.pairs.count, Math.floor(items.length / 2)); k++) {
+      const A = items[2 * k], B = items[2 * k + 1];
+      const local = (it: Item) => it.union.map((p) => applyMat3(similarityAbout(it.pivot, { x: 0, y: 0 }, it.theta, it.scale), p));
+      const la = local(A), lb = local(B);
+      const coarseA = densify(la, 2), coarseB = densify(lb, 2), fineA = densify(la, 0.5), fineB = densify(lb, 0.5);
+      const ca = { x: (A.local.x0 + A.local.x1) / 2, y: (A.local.y0 + A.local.y1) / 2 }, cb = { x: (B.local.x0 + B.local.x1) / 2, y: (B.local.y0 + B.local.y1) / 2 };
+      const phi = prng2.uniform(0, 2 * Math.PI), dx = Math.cos(phi), dy = Math.sin(phi);
+      const gap = prng2.uniform(g0, g1);
+      const target = Math.max(0.5, gap);
+      const offAt = (t: number) => ({ x: ca.x - cb.x + dx * t, y: ca.y - cb.y + dy * t });
+      const dist = (t: number, fine: boolean) => {
+        const o = offAt(t);
+        return minDistance(fine ? fineA : coarseA, fine ? fineB : coarseB, o.x, o.y);
+      };
+      // Walk B in from far away until the outlines come within reach, then bisect.
+      let hi = Math.hypot(A.local.x1 - A.local.x0, A.local.y1 - A.local.y0) / 2 + Math.hypot(B.local.x1 - B.local.x0, B.local.y1 - B.local.y0) / 2 + 10;
+      let lo = hi;
+      while (lo > 0 && dist(lo, false) > target + 2) { hi = lo; lo -= 2; }
+      lo = Math.max(0, lo - 2);
+      for (let it = 0; it < 14; it++) {
+        const mid = (lo + hi) / 2;
+        if (dist(mid, true) > target) hi = mid; else lo = mid;
+      }
+      // Overlap: push B further in by the overlap depth.
+      const t = gap < 0 ? hi + gap : hi;
+      B.attach = { to: 2 * k, off: offAt(t) };
+    }
+  }
+  for (const it of items) it.ext = { ...it.local };
+  for (const it of items) {
+    if (!it.attach) continue;
+    const e = items[it.attach.to].ext!, o = it.attach.off;
+    items[it.attach.to].ext = { x0: Math.min(e.x0, it.local.x0 + o.x), y0: Math.min(e.y0, it.local.y0 + o.y), x1: Math.max(e.x1, it.local.x1 + o.x), y1: Math.max(e.y1, it.local.y1 + o.y) };
+  }
+
+  // Clutter at the photo border (geometry follows the photo size).
+  const bodyPx = cellSize * (opts.scale === undefined ? defScale : typeof opts.scale === 'number' ? opts.scale : (opts.scale[0] + opts.scale[1]) / 2);
+  const clutterFor = opts.clutter && opts.clutter.length > 0 ? makeClutter(opts.clutter, streamRng(opts.seed, 3), bodyPx, reference) : null;
+
   // Placement (random, non-overlapping axis-aligned boxes with margin).
   const place = (W: number, H: number): boolean => {
-    const placed: { x0: number; y0: number; x1: number; y1: number }[] = [];
+    const placed: { x0: number; y0: number; x1: number; y1: number }[] = clutterFor ? clutterZones(clutterFor(W, H), W, H, margin) : [];
     for (const it of items) {
-      const w = it.local.x1 - it.local.x0, h = it.local.y1 - it.local.y0;
+      if (it.attach) continue;
+      const ext = it.ext!;
+      const w = ext.x1 - ext.x0, h = ext.y1 - ext.y0;
       let ok = false;
       for (let attempt = 0; attempt < 3000 && !ok; attempt++) {
         const x0 = rng.uniform(margin, W - margin - w);
@@ -524,11 +935,12 @@ export function renderPiecesPhoto(
         const box = { x0, y0, x1: x0 + w, y1: y0 + h };
         if (placed.some((b) => box.x0 < b.x1 + margin && box.x1 + margin > b.x0 && box.y0 < b.y1 + margin && box.y1 + margin > b.y0)) continue;
         placed.push(box);
-        it.pos = { x: x0 - it.local.x0, y: y0 - it.local.y0 };
+        it.pos = { x: x0 - ext.x0, y: y0 - ext.y0 };
         ok = true;
       }
       if (!ok) return false;
     }
+    for (const it of items) if (it.attach) it.pos = { x: items[it.attach.to].pos!.x + it.attach.off.x, y: items[it.attach.to].pos!.y + it.attach.off.y };
     return true;
   };
   let W = opts.width, H = opts.height;
@@ -536,7 +948,9 @@ export function renderPiecesPhoto(
     if (!place(W, H)) throw new Error(`renderPiecesPhoto: cannot place ${items.length} items in ${W}x${H}`);
   } else {
     let area = 0;
-    for (const it of items) area += (it.local.x1 - it.local.x0 + margin) * (it.local.y1 - it.local.y0 + margin);
+    for (const it of items) if (!it.attach) area += (it.ext!.x1 - it.ext!.x0 + margin) * (it.ext!.y1 - it.ext!.y0 + margin);
+    // Clutter takes a border strip of the photo.
+    if (clutterFor) area *= 1 + 0.25 * opts.clutter!.length;
     let side = Math.sqrt(area * 2.4);
     for (let tries = 0; ; tries++) {
       W = opts.width ?? Math.ceil(side * 1.15);
@@ -554,11 +968,35 @@ export function renderPiecesPhoto(
   const tex = opts.backgroundTexture ?? 0;
   const noiseA = tex > 0 ? smoothNoise(PW, PH, 60, rng) : null;
   const noiseB = tex > 0 ? smoothNoise(PW, PH, 9, rng) : null;
-  for (let i = 0; i < PW * PH; i++) {
-    const t = noiseA && noiseB ? tex * (0.7 * noiseA[i] + 0.3 * noiseB[i]) : 0;
-    scene.data[i * 3] = bg[0] + t;
-    scene.data[i * 3 + 1] = bg[1] + t;
-    scene.data[i * 3 + 2] = bg[2] + t;
+  if (opts.pattern) {
+    paintPattern(scene, opts.pattern, bg, streamRng(opts.seed, 2));
+    if (noiseA && noiseB) for (let i = 0; i < PW * PH; i++) {
+      const t = tex * (0.7 * noiseA[i] + 0.3 * noiseB[i]);
+      for (let c = 0; c < 3; c++) scene.data[i * 3 + c] += t;
+    }
+  } else {
+    for (let i = 0; i < PW * PH; i++) {
+      const t = noiseA && noiseB ? tex * (0.7 * noiseA[i] + 0.3 * noiseB[i]) : 0;
+      scene.data[i * 3] = bg[0] + t;
+      scene.data[i * 3 + 1] = bg[1] + t;
+      scene.data[i * 3 + 2] = bg[2] + t;
+    }
+  }
+  if (clutterFor) {
+    for (const obj of clutterFor(PW, PH)) {
+      const c = polygonCoverage(obj.poly, PW, PH, ss);
+      if (!c) continue;
+      for (let y = 0; y < c.rect.height; y++) {
+        for (let x = 0; x < c.rect.width; x++) {
+          const a = c.cov[y * c.rect.width + x];
+          if (a <= 0) continue;
+          const X = c.rect.x + x, Y = c.rect.y + y;
+          const col = obj.shade(X, Y);
+          const o = (Y * PW + X) * 3;
+          for (let k = 0; k < 3; k++) scene.data[o + k] = scene.data[o + k] * (1 - a) + a * col[k];
+        }
+      }
+    }
   }
 
   const truth: PieceTruth[] = [];
@@ -568,7 +1006,12 @@ export function renderPiecesPhoto(
   const style = opts.patch === false ? null : opts.patch ?? {};
   const seamDark = (style?.seam ?? 0.8) * edgeDark;
   const px = [0, 0, 0, 0];
-  const renders: { bx: number; by: number; bw: number; bh: number; cov: Float32Array; label: Int32Array; owner: Int32Array; Tinv: Mat3[]; seamDark: number; seamW: number }[] = [];
+  const renders: { bx: number; by: number; bw: number; bh: number; cov: Float32Array; label: Int32Array; owner: Int32Array; Tinv: Mat3[]; seamDark: number; seamW: number; wall: Float32Array | null }[] = [];
+  const rim = opts.rim;
+  const rimT = rim ? rim.thickness ?? 2.5 : 0;
+  const rimDir = (((rim?.direction ?? 60) * Math.PI) / 180);
+  const rimColor: RGB = rim?.color ?? [212, 204, 188];
+  const rimLight = rim ? rim.light ?? 0.5 : 0;
   const norm = (deg: number) => (((deg % 360) + 360) % 360) % 360;
 
   // Patch details draw from their own random stream, so placements match the rigid style.
@@ -595,8 +1038,9 @@ export function renderPiecesPhoto(
     const Tinv = memberT.map((m) => mat3Invert(m));
     const photoOutlines = it.refOutlines.map((o, k) => o.map((p) => applyMat3(memberT[k], p)));
     const ub = boundsOf(photoOutlines.flat());
-    const bx = Math.max(0, Math.floor(ub.x0) - 4), by = Math.max(0, Math.floor(ub.y0) - 4);
-    const bw = Math.min(PW, Math.ceil(ub.x1) + 5) - bx, bh = Math.min(PH, Math.ceil(ub.y1) + 5) - by;
+    const padR = rim ? Math.ceil(rimT) + 1 : 0;
+    const bx = Math.max(0, Math.floor(ub.x0) - 4 - padR), by = Math.max(0, Math.floor(ub.y0) - 4 - padR);
+    const bw = Math.min(PW, Math.ceil(ub.x1) + 5 + padR) - bx, bh = Math.min(PH, Math.ceil(ub.y1) + 5 + padR) - by;
     // Supersampled coverage, per-pixel piece label (centre inside) and owner (most coverage).
     const cov = new Float32Array(bw * bh);
     const label = new Int32Array(bw * bh).fill(-1);
@@ -622,7 +1066,30 @@ export function renderPiecesPhoto(
         }
       }
     });
-    renders.push({ bx, by, bw, bh, cov, label, owner, Tinv, seamDark: multi ? seamDark : 0.5 * edgeDark, seamW: multi ? 1.0 : 0.8 });
+    // Cardboard wall: the outline swept by up to `thickness` px in the rim direction.
+    let wall: Float32Array | null = null;
+    if (rim && rimT > 0) {
+      wall = new Float32Array(bw * bh);
+      ssMask.data.fill(0);
+      const steps = Math.max(1, Math.ceil(rimT / 0.5));
+      for (const o of photoOutlines) {
+        for (let k = 0; k <= steps; k++) {
+          const sx = (rimT * k * Math.cos(rimDir)) / steps, sy = (rimT * k * Math.sin(rimDir)) / steps;
+          fillPolygon(ssMask, o.map((p) => ({ x: (p.x + sx - bx + 0.5) * ss - 0.5, y: (p.y + sy - by + 0.5) * ss - 0.5 })), 1);
+        }
+      }
+      for (let y = 0; y < bh; y++) {
+        for (let x = 0; x < bw; x++) {
+          let n = 0;
+          for (let sy = 0; sy < ss; sy++) {
+            const row = (y * ss + sy) * bw * ss + x * ss;
+            for (let sx = 0; sx < ss; sx++) n += ssMask.data[row + sx];
+          }
+          wall[y * bw + x] = n / (ss * ss);
+        }
+      }
+    }
+    renders.push({ bx, by, bw, bh, cov, label, owner, Tinv, seamDark: multi ? seamDark : 0.5 * edgeDark, seamW: multi ? 1.0 : 0.8, wall });
 
     const deg = (it.theta * 180) / Math.PI;
     const members: PatchMemberTruth[] = it.indices.map((i, k) => {
@@ -662,16 +1129,17 @@ export function renderPiecesPhoto(
   // Drop shadows (soft, offset down-right) on the background.
   if (shadowStrength > 0) {
     const sh = new Float32Array(PW * PH);
-    const off = 2;
+    const so = opts.shadowOffset ?? 2;
+    const offX = Math.round(typeof so === 'number' ? so : so[0]), offY = Math.round(typeof so === 'number' ? so : so[1]);
     for (const r of renders) {
       for (let y = 0; y < r.bh; y++) {
         for (let x = 0; x < r.bw; x++) {
-          const X = r.bx + x + off, Y = r.by + y + off;
-          if (X < PW && Y < PH) sh[Y * PW + X] = Math.max(sh[Y * PW + X], r.cov[y * r.bw + x]);
+          const X = r.bx + x + offX, Y = r.by + y + offY;
+          if (X >= 0 && Y >= 0 && X < PW && Y < PH) sh[Y * PW + X] = Math.max(sh[Y * PW + X], r.wall ? r.wall[y * r.bw + x] : r.cov[y * r.bw + x]);
         }
       }
     }
-    const blurred = gaussianBlurFloat({ width: PW, height: PH, channels: 1, data: sh }, 2.2).data;
+    const blurred = gaussianBlurFloat({ width: PW, height: PH, channels: 1, data: sh }, opts.shadowBlur ?? 2.2).data;
     for (let i = 0; i < PW * PH; i++) {
       const f = 1 - shadowStrength * blurred[i];
       scene.data[i * 3] *= f;
@@ -694,6 +1162,11 @@ export function renderPiecesPhoto(
       for (let x = 0; x < bw; x++) {
         const i = y * bw + x;
         const a = cov[i];
+        if (r.wall && r.wall[i] > 0) {
+          // Cardboard wall first; the print is composited over it.
+          const o = ((r.by + y) * PW + r.bx + x) * 3, wa = r.wall[i];
+          for (let c = 0; c < 3; c++) scene.data[o + c] = scene.data[o + c] * (1 - wa) + wa * rimColor[c] * 0.92;
+        }
         if (a <= 0) continue;
         const X = r.bx + x, Y = r.by + y;
         const p = applyMat3(r.Tinv[Math.max(0, owner[i])], { x: X, y: Y });
@@ -706,12 +1179,19 @@ export function renderPiecesPhoto(
         let f = 1 - edgeDark * Math.exp(-(de * de) / (2 * edgeW * edgeW));
         if (ds < 1e8) f *= 1 - r.seamDark * Math.exp(-(ds * ds) / (2 * r.seamW * r.seamW));
         const o = (Y * PW + X) * 3;
-        for (let c = 0; c < 3; c++) scene.data[o + c] = scene.data[o + c] * (1 - a) + a * px[c] * f;
+        if (rimLight > 0) {
+          // Light cardboard core at the cut edge.
+          const l = rimLight * Math.exp(-(de * de) / (2 * 0.7 * 0.7));
+          for (let c = 0; c < 3; c++) scene.data[o + c] = scene.data[o + c] * (1 - a) + a * (px[c] * f * (1 - l) + rimColor[c] * l);
+        } else {
+          for (let c = 0; c < 3; c++) scene.data[o + c] = scene.data[o + c] * (1 - a) + a * px[c] * f;
+        }
       }
     }
   }
 
-  return { photo: finishPhoto(scene, rng, opts), truth };
+  const photo = finishPhoto(scene, rng, opts);
+  return { photo: opts.jpegQuality ? jpegRoundTrip(photo, opts.jpegQuality) : photo, truth };
 }
 
 // ---------------------------------------------------------------------------------------------

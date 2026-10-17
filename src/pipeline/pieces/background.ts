@@ -5,7 +5,9 @@
  * photo, which absorbs smooth lighting gradients. It is initialised robustly from the photo's
  * border band and refined iteratively from all samples that look like background. The foreground
  * score is a noise-normalised colour distance to the model that tolerates soft cast shadows
- * (moderately darker pixels with proportionally scaled chroma).
+ * (moderately darker pixels with proportionally scaled chroma). A patterned cloth (or the floor
+ * beyond a table edge) adds further table colours: the score is then the distance to the nearest
+ * table colour or blend of two.
  */
 import { rgbToLab } from '../../cv/color';
 import { solveLinear } from '../../cv/geometry';
@@ -21,11 +23,21 @@ const W_L = 0.5;
 const RHO_MIN = 0.8;
 /** Cost (in sigmas) of explaining a pixel as the deepest accepted shadow; shallower shadows cost less. */
 const SHADOW_PENALTY = 2.5;
+/** Modelled table lightness from which saturated pixels are compared by lightness only (over-exposure). */
+const CLIP_TABLE_L = 85;
 /** Floors for the per-channel noise sigma (Lab units), so noise-free backgrounds stay sane. */
 const SIGMA_FLOOR: [number, number, number] = [1.2, 1, 1];
 
 /** The fitted part of a {@link BackgroundModel} (segmentation statistics are added later). */
-export type BackgroundFit = Pick<BackgroundModel, 'color' | 'coefficients' | 'sigma' | 'width' | 'height' | 'lightingRatio'>;
+export type BackgroundFit = Pick<BackgroundModel, 'color' | 'coefficients' | 'sigma' | 'width' | 'height' | 'lightingRatio' | 'bandFit' | 'palette'>;
+
+/** A further table colour (patterned cloth, floor beyond the table edge); see BackgroundModel.palette. */
+export type PaletteColour = BackgroundModel['palette'][number];
+
+/** Share of the border band a further table colour must cover. */
+const PALETTE_MIN_SHARE = 0.1;
+/** Cost (sigmas) of explaining a pixel as a blend of two table colours (pattern edges, mixed weave). */
+const MIX_PENALTY = 1;
 
 function evalPoly(k: readonly number[], u: number, v: number): number {
   return k[0] + k[1] * u + k[2] * v + k[3] * u * u + k[4] * u * v + k[5] * v * v;
@@ -111,6 +123,8 @@ interface Samples {
   v: Float32Array;
   lab: Float32Array; // 3 per sample
   band: Uint8Array;
+  /** 1 = a channel is saturated (≥ 254): no noise, colour unreliable (over-exposed table). */
+  clip: Uint8Array;
   gw: number;
   gh: number;
 }
@@ -120,7 +134,7 @@ function takeSamples(photo: RGBAImage): Samples {
   const step = Math.max(1, Math.round(Math.sqrt((w * h) / 25000)));
   const gw = Math.ceil(w / step), gh = Math.ceil(h / step);
   const n = gw * gh;
-  const u = new Float32Array(n), v = new Float32Array(n), c = new Float32Array(n * 3), band = new Uint8Array(n);
+  const u = new Float32Array(n), v = new Float32Array(n), c = new Float32Array(n * 3), band = new Uint8Array(n), clip = new Uint8Array(n);
   const bw = Math.max(2 * step, Math.round(0.04 * Math.min(w, h)));
   for (let gy = 0, i = 0; gy < gh; gy++) {
     const y = Math.min(h - 1, gy * step + (step >> 1));
@@ -134,9 +148,10 @@ function takeSamples(photo: RGBAImage): Samples {
       c[i * 3 + 1] = lab[1];
       c[i * 3 + 2] = lab[2];
       band[i] = x < bw || y < bw || x >= w - bw || y >= h - bw ? 1 : 0;
+      clip[i] = Math.max(data[p], data[p + 1], data[p + 2]) >= 254 ? 1 : 0;
     }
   }
-  return { n, u, v, lab: c, band, gw, gh };
+  return { n, u, v, lab: c, band, clip, gw, gh };
 }
 
 /** Weighted least-squares quadratic fit of one channel; null when singular. */
@@ -177,17 +192,45 @@ function fitChannel(s: Samples, ch: number, weight: Float32Array): number[] | nu
 export function fitBackground(photo: RGBAImage): BackgroundFit {
   const { width, height } = photo;
   const s = takeSamples(photo);
-  // 1) Robust start from the border band: per-channel median and MAD.
-  const bandIdx: number[] = [];
-  for (let i = 0; i < s.n; i++) if (s.band[i]) bandIdx.push(i);
+  // Over-exposed (clipped) table has no noise: leave it out of the spread estimates unless it is
+  // most of the table (it would make the spread, and so every score threshold, far too tight).
+  let clipped = 0;
+  for (let i = 0; i < s.n; i++) clipped += s.clip[i];
+  const skipClipped = clipped > 0 && s.n - clipped >= 0.3 * s.n;
+  // 1) Robust start from the border band: per-channel median and spread.
+  let bandIdx: number[] = [];
+  for (let i = 0; i < s.n; i++) if (s.band[i] && !(skipClipped && s.clip[i])) bandIdx.push(i);
+  if (bandIdx.length < 3 * NT) {
+    bandIdx = [];
+    for (let i = 0; i < s.n; i++) if (s.band[i]) bandIdx.push(i);
+  }
   const color: [number, number, number] = [0, 0, 0];
   const sigma: [number, number, number] = [0, 0, 0];
   const tmp = new Float32Array(bandIdx.length);
+  // Local spread: differences between neighbouring band samples (noise + texture, but not a second
+  // surface such as the floor beyond the table edge, which would inflate the global spread and let
+  // that surface into the first fit).
+  const inBand = new Uint8Array(s.n);
+  for (const i of bandIdx) inBand[i] = 1;
+  const diffs: number[][] = [[], [], []];
+  for (const i of bandIdx) {
+    const gx = i % s.gw;
+    for (const j of [gx + 1 < s.gw ? i + 1 : -1, i + s.gw < s.n ? i + s.gw : -1]) {
+      if (j < 0 || !inBand[j]) continue;
+      for (let ch = 0; ch < 3; ch++) diffs[ch].push(Math.abs(s.lab[i * 3 + ch] - s.lab[j * 3 + ch]));
+    }
+  }
+  const bandAll: number[] = [];
+  for (let i = 0; i < s.n; i++) if (s.band[i]) bandAll.push(i);
+  const all = new Float32Array(bandAll.length);
   for (let ch = 0; ch < 3; ch++) {
-    for (let j = 0; j < bandIdx.length; j++) tmp[j] = s.lab[bandIdx[j] * 3 + ch];
-    color[ch] = median(tmp);
-    for (let j = 0; j < bandIdx.length; j++) tmp[j] = Math.abs(tmp[j] - color[ch]);
-    sigma[ch] = Math.max(SIGMA_FLOOR[ch], 1.4826 * median(tmp));
+    for (let j = 0; j < bandAll.length; j++) all[j] = s.lab[bandAll[j] * 3 + ch];
+    color[ch] = median(all);
+    for (let j = 0; j < bandIdx.length; j++) tmp[j] = Math.abs(s.lab[bandIdx[j] * 3 + ch] - color[ch]);
+    const global = 1.4826 * median(tmp);
+    const local = diffs[ch].length >= 20 ? (1.4826 * median(diffs[ch])) / Math.SQRT2 : Infinity;
+    // Lightness also varies with the lighting gradient (fitted next), so only chroma is limited.
+    sigma[ch] = Math.max(SIGMA_FLOOR[ch], ch === 0 ? global : Math.min(global, 2 * local));
   }
   const coefficients: [number[], number[], number[]] = [
     [color[0], 0, 0, 0, 0, 0],
@@ -231,7 +274,7 @@ export function fitBackground(photo: RGBAImage): BackgroundFit {
     // Re-estimate the spread from the residuals of confidently-background samples.
     let m = 0;
     for (let i = 0; i < s.n; i++) {
-      if (weight[i] <= 0.3) continue;
+      if (weight[i] <= 0.3 || (skipClipped && s.clip[i])) continue;
       for (let ch = 0; ch < 3; ch++) res[ch][m] = Math.abs(s.lab[i * 3 + ch] - evalPoly(coefficients[ch], s.u[i], s.v[i]));
       m++;
     }
@@ -247,7 +290,242 @@ export function fitBackground(photo: RGBAImage): BackgroundFit {
   }
   const lo = quantile(Ys, 0.05), hi = quantile(Ys, 0.95);
   const ratio = Ys.length >= 20 && lo > 1e-4 ? hi / lo : lightingRatio({ coefficients });
-  return { color, coefficients, sigma, width, height, lightingRatio: ratio };
+  const fit: BackgroundFit = { color, coefficients, sigma, width, height, lightingRatio: ratio, bandFit: 1, palette: [] };
+  findPalette(s, fit);
+  // How well the table model explains the border band (low for a patterned cloth it cannot follow).
+  let bandN = 0, bandIn = 0;
+  for (let i = 0; i < s.n; i++) {
+    if (!s.band[i]) continue;
+    bandN++;
+    if (sampleDistance(s, i, fit) < 3.5) bandIn++;
+  }
+  fit.bandFit = bandN > 0 ? bandIn / bandN : 1;
+  return fit;
+}
+
+/** Lighting factor of the main surface at (u, v) relative to lightness `ref` ((L + 16) ratio). */
+function lightFactor(fit: BackgroundFit, u: number, v: number, ref: number): number {
+  return Math.max(0.2, (evalPoly(fit.coefficients[0], u, v) + 16) / (ref + 16));
+}
+
+/** A palette colour under the lighting at (u, v). */
+function paletteAt(fit: BackgroundFit, k: number, u: number, v: number): [number, number, number] {
+  const p = fit.palette[k];
+  const f = lightFactor(fit, u, v, p.refL);
+  return [f * (p.color[0] + 16) - 16, f * p.color[1], f * p.color[2]];
+}
+
+/**
+ * Distance (sigmas) of Lab colour (L, a, b) from the segment between table colours P and Q: a blend
+ * of two colours of a patterned cloth (anti-aliased pattern edges, blur). `is*` are inverse sigmas.
+ */
+function mixDistance(L: number, a: number, b: number, P: readonly number[], Q: readonly number[], isL: number, isa: number, isb: number): number {
+  const wl = Math.sqrt(W_L);
+  const px = P[0] * isL * wl, py = P[1] * isa, pz = P[2] * isb;
+  const dx = Q[0] * isL * wl - px, dy = Q[1] * isa - py, dz = Q[2] * isb - pz;
+  const cx = L * isL * wl - px, cy = a * isa - py, cz = b * isb - pz;
+  const len2 = dx * dx + dy * dy + dz * dz;
+  const t = len2 > 1e-9 ? Math.max(0, Math.min(1, (cx * dx + cy * dy + cz * dz) / len2)) : 0;
+  const ex = cx - t * dx, ey = cy - t * dy, ez = cz - t * dz;
+  return Math.sqrt(ex * ex + ey * ey + ez * ez + MIX_PENALTY * MIX_PENALTY);
+}
+
+/** Distance of a colour at (u, v) to the whole table model (main surface, palette colours, blends). */
+function modelDistance(L: number, a: number, b: number, u: number, v: number, fit: BackgroundFit): number {
+  const k = fit.coefficients;
+  const main = [evalPoly(k[0], u, v), evalPoly(k[1], u, v), evalPoly(k[2], u, v)];
+  const is = fit.sigma;
+  let d = distance(L, a, b, main[0], main[1], main[2], 1 / is[0], 1 / is[1], 1 / is[2]);
+  const cols = [main];
+  for (let j = 0; j < fit.palette.length; j++) {
+    const c = paletteAt(fit, j, u, v);
+    const sg = fit.palette[j].sigma;
+    d = Math.min(d, distance(L, a, b, c[0], c[1], c[2], 1 / sg[0], 1 / sg[1], 1 / sg[2]));
+    for (let m = 0; m < cols.length; m++) {
+      const sm = m === 0 ? is : fit.palette[m - 1].sigma;
+      d = Math.min(d, mixDistance(L, a, b, cols[m], c, 1 / Math.max(sm[0], sg[0]), 1 / Math.max(sm[1], sg[1]), 1 / Math.max(sm[2], sg[2])));
+    }
+    cols.push(c);
+  }
+  return d;
+}
+
+function sampleDistance(s: Samples, i: number, fit: BackgroundFit): number {
+  return modelDistance(s.lab[i * 3], s.lab[i * 3 + 1], s.lab[i * 3 + 2], s.u[i], s.v[i], fit);
+}
+
+/**
+ * Further table colours: a patterned cloth (check, dots) or the floor beyond the table edge shows
+ * as compact colour clusters in the border band that the smooth main surface does not explain. Up
+ * to two are added, each the densest colour of the unexplained band samples (lighting-compensated,
+ * so one paint under a gradient stays one colour), covering ≥ 10 % of the band with a spread like
+ * plain paint (pieces lying on the border are too varied and too small a share).
+ */
+function findPalette(s: Samples, fit: BackgroundFit): void {
+  const band: number[] = [];
+  let meanL = 0;
+  for (let i = 0; i < s.n; i++) {
+    if (!s.band[i]) continue;
+    band.push(i);
+    meanL += evalPoly(fit.coefficients[0], s.u[i], s.v[i]);
+  }
+  if (band.length < 50) return;
+  meanL /= band.length;
+  const wl = Math.sqrt(W_L);
+  // Lighting-compensated Lab of a sample (as if lit like the band's mean).
+  const comp = (i: number, ref: number): [number, number, number] => {
+    const f = lightFactor(fit, s.u[i], s.v[i], ref);
+    return [(s.lab[i * 3] + 16) / f - 16, s.lab[i * 3 + 1] / f, s.lab[i * 3 + 2] / f];
+  };
+  const mainSigma: [number, number, number] = [fit.sigma[0], fit.sigma[1], fit.sigma[2]];
+  for (let round = 0; round < 2; round++) {
+    const out = band.filter((i) => sampleDistance(s, i, fit) >= 3.5);
+    if (out.length < PALETTE_MIN_SHARE * band.length) break;
+    // Densest colour: 4-unit Lab bins, counted over each bin's 3×3×3 neighbourhood.
+    const pts = out.map((i) => comp(i, meanL));
+    const key = (q: readonly number[]) => `${Math.floor((q[0] * wl) / 4)},${Math.floor(q[1] / 4)},${Math.floor(q[2] / 4)}`;
+    const bins = new Map<string, number>();
+    for (const q of pts) bins.set(key(q), (bins.get(key(q)) ?? 0) + 1);
+    let bestKey = '', bestN = -1;
+    for (const k of bins.keys()) {
+      const [x, y, z] = k.split(',').map(Number);
+      let n = 0;
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) n += bins.get(`${x + dx},${y + dy},${z + dz}`) ?? 0;
+      if (n > bestN) { bestN = n; bestKey = k; }
+    }
+    const [bx, by, bz] = bestKey.split(',').map(Number);
+    const centre = [(bx + 0.5) * 4 / wl, (by + 0.5) * 4, (bz + 0.5) * 4];
+    // Members: within 8 units (lightness weighted) of the mode, refined once around their median;
+    // the share also counts the blends around the colour (pattern edges, within 16 units).
+    const within = (c: readonly number[], q: readonly number[], r: number) => Math.hypot((q[0] - c[0]) * wl, q[1] - c[1], q[2] - c[2]) <= r;
+    let members = out.filter((_, j) => within(centre, pts[j], 8));
+    if (members.length < 10) break;
+    const med = [0, 1, 2].map((ch) => median(members.map((i) => comp(i, meanL)[ch])));
+    members = out.filter((_, j) => within(med, pts[j], 8));
+    if (members.length < 10) break;
+    // Its footprint: the colour itself plus its blends with the main surface (pattern edges).
+    let footprint = 0;
+    const is = [1 / Math.max(2, mainSigma[0]), 1 / Math.max(2, mainSigma[1]), 1 / Math.max(2, mainSigma[2])];
+    out.forEach((i, j) => {
+      const q = pts[j];
+      if (within(med, q, 16)) { footprint++; return; }
+      const f = lightFactor(fit, s.u[i], s.v[i], meanL);
+      const k = fit.coefficients;
+      const m = [(evalPoly(k[0], s.u[i], s.v[i]) + 16) / f - 16, evalPoly(k[1], s.u[i], s.v[i]) / f, evalPoly(k[2], s.u[i], s.v[i]) / f];
+      if (mixDistance(q[0], q[1], q[2], m, med, is[0], is[1], is[2]) < 3.5) footprint++;
+    });
+    if (footprint < PALETTE_MIN_SHARE * band.length) break;
+    // Colour and spread under the lighting at the members' mean.
+    let refL = 0;
+    for (const i of members) refL += evalPoly(fit.coefficients[0], s.u[i], s.v[i]);
+    refL /= members.length;
+    const color: [number, number, number] = [0, 0, 0], sigma: [number, number, number] = [0, 0, 0];
+    const vals = new Float32Array(members.length);
+    for (let ch = 0; ch < 3; ch++) {
+      members.forEach((i, j) => { vals[j] = comp(i, refL)[ch]; });
+      color[ch] = median(vals);
+      members.forEach((i, j) => { vals[j] = Math.abs(comp(i, refL)[ch] - color[ch]); });
+      // Spread of the paint itself: the MAD again over the core, without the blends at pattern edges.
+      const mad = median(vals);
+      const core = Array.from(vals).filter((v) => v <= 2.5 * mad);
+      sigma[ch] = Math.max(SIGMA_FLOOR[ch], 1.2 * 1.4826 * (core.length >= 10 ? median(core) : mad));
+    }
+    // Plain paint is about as uniform as a plain table.
+    if (sigma[1] > 3 * mainSigma[1] + 2 || sigma[2] > 3 * mainSigma[2] + 2 || sigma[0] > 3 * mainSigma[0] + 8) break;
+    fit.palette.push({ color, sigma, refL, interior: 0 });
+  }
+  if (fit.palette.length === 0) return;
+  // With the other colours known, the main surface's own spread (a fine pattern inflates it).
+  const res: number[][] = [[], [], []];
+  for (const i of band) {
+    const L = s.lab[i * 3], a = s.lab[i * 3 + 1], b = s.lab[i * 3 + 2];
+    const k = fit.coefficients;
+    const m = [evalPoly(k[0], s.u[i], s.v[i]), evalPoly(k[1], s.u[i], s.v[i]), evalPoly(k[2], s.u[i], s.v[i])];
+    const dm = distance(L, a, b, m[0], m[1], m[2], 1 / fit.sigma[0], 1 / fit.sigma[1], 1 / fit.sigma[2]);
+    if (dm >= 3.5) continue;
+    let closerElsewhere = false;
+    for (let j = 0; j < fit.palette.length && !closerElsewhere; j++) {
+      const c = paletteAt(fit, j, s.u[i], s.v[i]), sg = fit.palette[j].sigma;
+      if (distance(L, a, b, c[0], c[1], c[2], 1 / sg[0], 1 / sg[1], 1 / sg[2]) < dm) closerElsewhere = true;
+    }
+    if (closerElsewhere) continue;
+    res[0].push(Math.abs(L - m[0]));
+    res[1].push(Math.abs(a - m[1]));
+    res[2].push(Math.abs(b - m[2]));
+  }
+  if (res[0].length >= 30) for (let ch = 0; ch < 3; ch++) fit.sigma[ch] = Math.max(SIGMA_FLOOR[ch], Math.min(fit.sigma[ch], 1.4826 * median(res[ch])));
+  // How much of the middle of the photo (central 70 % per axis) shows each further colour: a pattern
+  // spreads over the whole table, the floor beyond a table edge stays near the border.
+  if (fit.palette.length === 0) return;
+  const count = new Float64Array(fit.palette.length);
+  let n = 0;
+  for (let i = 0; i < s.n; i++) {
+    if (Math.abs(s.u[i]) > 0.7 || Math.abs(s.v[i]) > 0.7) continue;
+    n++;
+    for (let k = 0; k < fit.palette.length; k++) {
+      const c = paletteAt(fit, k, s.u[i], s.v[i]), sg = fit.palette[k].sigma;
+      if (distance(s.lab[i * 3], s.lab[i * 3 + 1], s.lab[i * 3 + 2], c[0], c[1], c[2], 1 / sg[0], 1 / sg[1], 1 / sg[2]) < 3) count[k]++;
+    }
+  }
+  fit.palette.forEach((p, k) => { p.interior = n > 0 ? count[k] / n : 0; });
+}
+
+/**
+ * Foreground score against a table with several colours (see {@link foregroundScore}): distance to
+ * the nearest table colour or blend of two. The table colours are evaluated once per 8-px run
+ * (lighting changes slowly).
+ */
+function paletteScore(photo: RGBAImage, model: BackgroundFit, out: GrayImage): GrayImage {
+  const { width: w, height: h, data: d } = photo;
+  const nc = model.palette.length + 1;
+  const sig = [model.sigma, ...model.palette.map((p) => p.sigma)];
+  const inv = sig.map((s) => [1 / s[0], 1 / s[1], 1 / s[2]]);
+  const pairInv: number[][][] = [];
+  for (let i = 0; i < nc; i++) {
+    pairInv.push([]);
+    for (let j = 0; j < nc; j++) pairInv[i].push([1 / Math.max(sig[i][0], sig[j][0]), 1 / Math.max(sig[i][1], sig[j][1]), 1 / Math.max(sig[i][2], sig[j][2])]);
+  }
+  const k = model.coefficients;
+  const lut = F_LUT, lin = LIN;
+  const cols: number[][] = Array.from({ length: nc }, () => [0, 0, 0]);
+  for (let y = 0; y < h; y++) {
+    const v = norm(y, h);
+    for (let x0 = 0; x0 < w; x0 += 8) {
+      const u = norm(Math.min(w - 1, x0 + 4), w);
+      cols[0][0] = evalPoly(k[0], u, v); cols[0][1] = evalPoly(k[1], u, v); cols[0][2] = evalPoly(k[2], u, v);
+      for (let j = 1; j < nc; j++) {
+        const c = paletteAt(model, j - 1, u, v);
+        cols[j][0] = c[0]; cols[j][1] = c[1]; cols[j][2] = c[2];
+      }
+      for (let x = x0; x < Math.min(w, x0 + 8); x++) {
+        const p = (y * w + x) << 2;
+        const rl = lin[d[p]], gl = lin[d[p + 1]], bl = lin[d[p + 2]];
+        let t = (0.4339499 * rl + 0.3762098 * gl + 0.1898403 * bl) * F_N;
+        let i = t | 0;
+        const fx = lut[i] + (t - i) * (lut[i + 1] - lut[i]);
+        t = (0.2126729 * rl + 0.7151522 * gl + 0.072175 * bl) * F_N;
+        i = t | 0;
+        const fy = lut[i] + (t - i) * (lut[i + 1] - lut[i]);
+        t = (0.0177566 * rl + 0.109468 * gl + 0.8727755 * bl) * F_N;
+        i = t | 0;
+        const fz = lut[i] + (t - i) * (lut[i + 1] - lut[i]);
+        const L = 116 * fy - 16, A = 500 * (fx - fy), B = 200 * (fy - fz);
+        let best = Infinity;
+        for (let a = 0; a < nc; a++) {
+          const c = cols[a], q = inv[a];
+          const dd = distance(L, A, B, c[0], c[1], c[2], q[0], q[1], q[2]);
+          if (dd < best) best = dd;
+          for (let b2 = 0; b2 < a; b2++) {
+            const r = pairInv[a][b2];
+            const m = mixDistance(L, A, B, cols[b2], c, r[0], r[1], r[2]);
+            if (m < best) best = m;
+          }
+        }
+        out.data[y * w + x] = best;
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -257,6 +535,7 @@ export function fitBackground(photo: RGBAImage): BackgroundFit {
 export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayImage {
   const { width: w, height: h, data: d } = photo;
   const out = createGray(w, h);
+  if (model.palette.length > 0) return paletteScore(photo, model, out);
   const o = out.data;
   const [kL, ka, kb] = model.coefficients;
   const isL = 1 / model.sigma[0], isa = 1 / model.sigma[1], isb = 1 / model.sigma[2];
@@ -289,7 +568,10 @@ export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayIma
       const bL = AL + BL * u + CL * uu, ba = Aa + Ba * u + Ca * uu, bb = Ab + Bb * u + Cb * uu;
       const dL = (L - bL) * isL, da = (A - ba) * isa, db = (B - bb) * isb;
       let d2 = wl * dL * dL + da * da + db * db;
-      if (L < bL) {
+      if (bL >= CLIP_TABLE_L && d[p] >= 254 && d[p + 1] >= 254 && d[p + 2] >= 254) {
+        // Over-exposed light table: the clipped colour is meaningless, compare lightness only.
+        d2 = Math.min(d2, wl * dL * dL);
+      } else if (L < bL) {
         const ref = bL + 16;
         let rho = ref > 1 ? (L + 16) / ref : 1;
         if (rho < rhoMin) rho = rhoMin;

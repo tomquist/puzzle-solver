@@ -228,6 +228,91 @@ describe('renderPiecesPhoto', () => {
   });
 });
 
+describe('renderPiecesPhoto real-photo options', () => {
+  const ref = resizeRGBA(loadTestAsset('starry-night'), 640, 507);
+  const cut = generateJigsaw(8, 10, ref.width, ref.height, 5);
+  const items = [3, 14, 45, 60, 71];
+  const base = { seed: 9, scale: 1.4, background: [40, 42, 48] as [number, number, number], width: 760, height: 560 };
+  const plain = renderPiecesPhoto(ref, cut, items, base);
+  const lum = (img: RGBAImage, x: number, y: number) => {
+    const i = (y * img.width + x) * 4;
+    return 0.299 * img.data[i] + 0.587 * img.data[i + 1] + 0.114 * img.data[i + 2];
+  };
+  const minOutlineGap = (a: Point[], b: Point[]) => {
+    let best = Infinity;
+    for (const p of a) for (const q of b) best = Math.min(best, Math.hypot(p.x - q.x, p.y - q.y));
+    return best;
+  };
+
+  it('leaves the default rendering untouched by the new options', () => {
+    // Every effect draws from its own random stream: switching one on keeps the placement.
+    const withJpeg = renderPiecesPhoto(ref, cut, items, { ...base, jpegQuality: 90, vignette: 0.2 });
+    expect(withJpeg.truth.map((t) => t.bbox)).toEqual(plain.truth.map((t) => t.bbox));
+    expect(meanAbsDiff(withJpeg.photo, plain.photo)).toBeGreaterThan(0.2);
+    expect(meanAbsDiff(withJpeg.photo, plain.photo)).toBeLessThan(10);
+  });
+
+  it('draws a light cardboard wall beside each piece in the rim direction', () => {
+    const { photo, truth } = renderPiecesPhoto(ref, cut, items, { ...base, rim: { thickness: 3, direction: 90 }, shadow: 0 });
+    // Just below the lowest outline point the wall is light; the table elsewhere stays dark.
+    let wall = 0, n = 0;
+    for (const t of truth) {
+      const p = t.outline.reduce((a, q) => (q.y > a.y ? q : a));
+      wall += lum(photo, Math.round(p.x), Math.round(p.y) + 2);
+      n++;
+    }
+    expect(wall / n).toBeGreaterThan(120);
+    expect(lum(photo, 5, 5)).toBeLessThan(70);
+  });
+
+  it('places close pairs at the requested outline gap (negative = overlap)', () => {
+    const { truth } = renderPiecesPhoto(ref, cut, [3, 14, 45, 60], { ...base, width: undefined, height: undefined, pairs: { count: 2, gap: [2, 2] } });
+    expect(minOutlineGap(truth[0].outline, truth[1].outline)).toBeGreaterThan(1);
+    expect(minOutlineGap(truth[0].outline, truth[1].outline)).toBeLessThan(3.5);
+    expect(minOutlineGap(truth[2].outline, truth[3].outline)).toBeLessThan(3.5);
+    const over = renderPiecesPhoto(ref, cut, [3, 14], { ...base, width: undefined, height: undefined, pairs: { count: 1, gap: [-3, -3] } });
+    expect(minOutlineGap(over.truth[0].outline, over.truth[1].outline)).toBeLessThan(1);
+  });
+
+  it('paints patterned tables, clutter at the border, vignetting and glare', () => {
+    const check = renderPiecesPhoto(ref, cut, items, { ...base, pattern: { kind: 'check' } });
+    // Gingham: white and red squares in the table area.
+    let white = 0, red = 0;
+    for (let i = 0; i < check.photo.data.length; i += 4) {
+      const [r, g, b2] = [check.photo.data[i], check.photo.data[i + 1], check.photo.data[i + 2]];
+      if (r > 200 && g > 200 && b2 > 200) white++;
+      if (r > 150 && g < 80 && b2 < 90) red++;
+    }
+    expect(white).toBeGreaterThan(0.1 * check.photo.width * check.photo.height);
+    expect(red).toBeGreaterThan(0.1 * check.photo.width * check.photo.height);
+
+    const clutter = renderPiecesPhoto(ref, cut, items, { ...base, width: undefined, height: undefined, clutter: ['table-edge'] });
+    // The floor beyond the table edge darkens one side of the border band; no piece lies there.
+    const sides = [0, 0, 0, 0];
+    const { width: W, height: H } = clutter.photo;
+    for (let k = 0; k < 40; k++) {
+      sides[0] += lum(clutter.photo, Math.round(((k + 0.5) / 40) * W), 2);
+      sides[1] += lum(clutter.photo, W - 3, Math.round(((k + 0.5) / 40) * H));
+      sides[2] += lum(clutter.photo, Math.round(((k + 0.5) / 40) * W), H - 3);
+      sides[3] += lum(clutter.photo, 2, Math.round(((k + 0.5) / 40) * H));
+    }
+    expect(Math.max(...sides) - Math.min(...sides)).toBeGreaterThan(40 * 8);
+
+    const vig = renderPiecesPhoto(ref, cut, [], { ...base, vignette: 0.4 });
+    expect(lum(vig.photo, 3, 3)).toBeLessThan(0.75 * lum(vig.photo, 380, 280));
+
+    const glare = renderPiecesPhoto(ref, cut, items, { ...base, background: [120, 120, 125], glare: { count: 3, strength: 1 } });
+    let clipped = 0;
+    for (let i = 0; i < glare.photo.data.length; i += 4) if (glare.photo.data[i] === 255 && glare.photo.data[i + 1] === 255) clipped++;
+    expect(clipped).toBeGreaterThan(100);
+    if (DEBUG_IMAGES) {
+      savePng('.debug/synth/real-check.png', check.photo);
+      savePng('.debug/synth/real-clutter.png', clutter.photo);
+      savePng('.debug/synth/real-glare.png', glare.photo);
+    }
+  });
+});
+
 describe('renderBoxPhoto / perturbReference', () => {
   const ref = resizeRGBA(loadTestAsset('great-wave'), 640, 430);
 
