@@ -189,10 +189,13 @@ function rectGap(a: Rect, b: Rect): number {
   return Math.hypot(dx, dy);
 }
 
-/** A thin elongated region (seam stub, crack, piece of cable): mean width (area per length) below THIN_WIDTH. */
+/**
+ * A thin elongated region (seam stub, crack, piece of cable): mean width (area per length) below
+ * THIN_WIDTH and at least THIN_ELONGATION times longer than wide (a knob that fell off is compact).
+ */
 function isThin(c: Candidate, body: number): boolean {
   const len = Math.max(c.bbox.width, c.bbox.height);
-  return len >= 0.3 * body && c.area / len < THIN_WIDTH * body;
+  return len >= 0.3 * body && c.area / len < THIN_WIDTH * body && len * len >= THIN_ELONGATION * c.area;
 }
 
 /**
@@ -278,6 +281,8 @@ function medianScore(score: GrayImage, c: Candidate): number {
 const THIN_WIDTH = 0.3;
 /** Length (fraction of the body size) from which a thin structure is removed (shorter ones: corners, necks, knobs). */
 const THIN_LENGTH = 0.7;
+/** Length² / area from which a small region counts as elongated (a disc: 1.27; a 3:1 bar: 3). */
+const THIN_ELONGATION = 2.5;
 
 /**
  * Remove thin elongated structures from a region: plank gaps and tile seams, cracks, cables and
@@ -981,11 +986,14 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   // Shadow zones and local lighting the smooth surface cannot follow: learn them from the table
   // around the pieces found so far (coarse grid, cells of at least two pieces) and segment again.
   if (p.ref.refBody > 0 && fit.palette.length === 0) {
-    // Excluded: clear objects (median score above the high threshold). Weak blobs, which may be the
-    // shadow zone itself, stay in the estimate (a cell spans several pieces, so the median is robust).
+    // Excluded: clear objects (median score above the high threshold) and anything piece-shaped.
+    // Other weak blobs, which may be the shadow zone itself, stay in the estimate (a cell spans
+    // several pieces, so the median is robust).
     const exclude = createMask(W, H);
     for (const c of p.cands) {
-      if (c.area < 0.25 * p.ref.refArea || medianScore(p.score, c) < p.th.high) continue;
+      if (c.area < 0.25 * p.ref.refArea) continue;
+      const pieceLike = c.area >= 0.5 * p.ref.refArea && c.shape !== null && c.shape.confidence >= MIN_SHAPE_CONFIDENCE;
+      if (!pieceLike && medianScore(p.score, c) < p.th.high) continue;
       for (let y = 0; y < c.bbox.height; y++) {
         for (let x = 0; x < c.bbox.width; x++) if (c.mask.data[y * c.bbox.width + x]) exclude.data[(y + c.bbox.y) * W + x + c.bbox.x] = 1;
       }

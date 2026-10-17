@@ -34,6 +34,8 @@ export type BackgroundFit = Pick<BackgroundModel, 'color' | 'coefficients' | 'si
 /** A further table colour (patterned cloth, floor beyond the table edge); see BackgroundModel.palette. */
 export type PaletteColour = BackgroundModel['palette'][number];
 
+/** Largest local table residual (sigmas) from which local corrections are used at all. */
+const LOCAL_MIN_RESIDUAL = 3;
 /** Share of the border band a further table colour must cover. */
 const PALETTE_MIN_SHARE = 0.1;
 /** Cost (sigmas) of explaining a pixel as a blend of two table colours (pattern edges, mixed weave). */
@@ -94,13 +96,13 @@ function localRow(g: LocalTableGrid, y: number): Float32Array {
  * pixels (`exclude` = clear objects) in a `cell`-sized window around each node of a grid with half
  * that spacing, so shadow zones and local lighting the quadratic surface cannot follow become
  * table. Nodes with too little table are filled from their neighbours. Returns null when the
- * residuals are negligible everywhere (< 2 sigmas).
+ * residuals are negligible everywhere (< LOCAL_MIN_RESIDUAL sigmas).
  */
 export function fitLocalTable(photo: RGBAImage, fit: BackgroundFit, exclude: Mask, cell: number): LocalTableGrid | null {
   const { width: w, height: h, data } = photo;
   const cols = Math.max(1, Math.round((2 * w) / cell)), rows = Math.max(1, Math.round((2 * h) / cell));
   const cellW = w / cols, cellH = h / rows;
-  const step = Math.max(2, Math.round(cell / 24));
+  const step = Math.max(2, Math.round(cell / 18));
   const res = new Float32Array(cols * rows * 3);
   const valid = new Uint8Array(cols * rows);
   const k = fit.coefficients;
@@ -156,7 +158,7 @@ export function fitLocalTable(photo: RGBAImage, fit: BackgroundFit, exclude: Mas
   for (let i = 0; i < cols * rows; i++) {
     for (let c = 0; c < 3; c++) big = Math.max(big, Math.abs(res[i * 3 + c]) / fit.sigma[c]);
   }
-  return big >= 2 ? { cols, rows, cellW, cellH, residual: res } : null;
+  return big >= LOCAL_MIN_RESIDUAL ? { cols, rows, cellW, cellH, residual: res } : null;
 }
 
 /**
