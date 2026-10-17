@@ -11,7 +11,6 @@ import { close, dilate, fillHoles, open } from '../../cv/morphology';
 import { findOuterContours } from '../../cv/contour';
 import { convexHull, polygonPerimeter, simplifyPolygon } from '../../cv/polygon';
 import { resizeRGBA } from '../../cv/resize';
-import { otsuThreshold } from '../../cv/threshold';
 import { isConvexClockwise, quadArea } from './geometry';
 
 /** Distance from p to segment a–b. */
@@ -92,17 +91,14 @@ function fitPlane(xs: number[], ys: number[], vs: number[]): [number, number, nu
 export interface SegmentResult {
   /** Quad of the largest non-table region (working coordinates), if any. */
   quad: Quad | null;
-  /** Foreground (not table) mask at the segmentation resolution. */
+  /** Foreground (not table) mask at the segmentation resolution (for debugging). */
   fg: Mask;
-  /** Segmentation-to-working scale. */
-  scale: number;
-  /** Otsu separability of the table-distance histogram (0..1). */
-  separability: number;
 }
 
 /**
- * Segment the box from the table: robust Lab colour model of the photo border, distance map,
- * Otsu threshold, morphology, largest component → quad.
+ * Segment the box from the table: robust Lab model of the photo border (lightness with a linear
+ * illumination gradient), distance map thresholded relative to the table's own spread, morphology,
+ * largest component → quad.
  */
 export function segmentBox(work: RGBAImage, maxSide = 320): SegmentResult {
   const f = Math.min(1, maxSide / Math.max(work.width, work.height));
@@ -141,7 +137,6 @@ export function segmentBox(work: RGBAImage, maxSide = 320): SegmentResult {
       dist.data[i] = Math.min(50, Math.hypot(lab[i * 3] - (l0 + dl * x), lab[i * 3 + 1] - mA, lab[i * 3 + 2] - mB) / spread);
     }
   }
-  const { separability } = otsuThreshold(dist);
   // Threshold from the table's own distance distribution (robust to a lid touching the border).
   const sortedD = dists.map((d) => d / spread).sort((p, q) => p - q);
   const q90 = sortedD[Math.floor(0.9 * (sortedD.length - 1))] ?? 2;
@@ -160,7 +155,7 @@ export function segmentBox(work: RGBAImage, maxSide = 320): SegmentResult {
       quad = q.map((p) => ({ x: (p.x + 0.5) * scale - 0.5, y: (p.y + 0.5) * scale - 0.5 })) as Quad;
     }
   }
-  return { quad, fg, scale, separability };
+  return { quad, fg };
 }
 
 /**

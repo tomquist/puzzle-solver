@@ -105,6 +105,7 @@ describe('detectBox', () => {
       }
       expect(det.confidence).toBeGreaterThan(0.3);
       expect(det.confidence).toBeLessThan(0.85);
+      expect(det.quality.issues.map((i) => i.code)).toContain('cut_off');
     }
   });
 
@@ -115,6 +116,7 @@ describe('detectBox', () => {
     expect(cornerErrorPct(a.quad, [{ x: -0.5, y: -0.5 }, { x: inside.photo.width - 0.5, y: -0.5 }, { x: inside.photo.width - 0.5, y: inside.photo.height - 0.5 }, { x: -0.5, y: inside.photo.height - 0.5 }])).toBeLessThan(0.5);
     expect(a.confidence).toBeLessThan(0.45);
     expect(a.quality.issues.map((i) => i.code)).toContain('box_not_found');
+    expect(a.quality.issues.map((i) => i.code)).toContain('cut_off');
 
     const flat = createRGBA(1000, 750, [128, 128, 128, 255]);
     const b = detectBox(flat);
@@ -154,9 +156,12 @@ describe('detectBox', () => {
     let best = Infinity;
     let timings: Record<string, number> = {};
     for (let i = 0; i < 3; i++) {
+      // Wall time, or this process's CPU time when other processes compete for the cores.
       const t = performance.now();
+      const cpu = process.cpuUsage();
       const { result, debug } = detectBoxDebug(big);
-      const ms = performance.now() - t;
+      const used = process.cpuUsage(cpu);
+      const ms = Math.min(performance.now() - t, (used.user + used.system) / 1000);
       if (ms < best) { best = ms; timings = debug.timings; }
       expect(cornerErrorPct(result.quad, truth)).toBeLessThan(0.5);
     }

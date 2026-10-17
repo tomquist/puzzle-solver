@@ -304,6 +304,17 @@ describe('segmentPieces special cases', () => {
     fillPolygon(tm, truth[0].outline.map((p) => ({ x: p.x - rect.x, y: p.y - rect.y })), 1);
     expect(maskIoU(tm, rect, seg.regions[0].mask, seg.regions[0].region.bbox)).toBeGreaterThan(0.9);
   });
+
+  it('classifies a lone assembled patch as a patch (no single piece for reference)', () => {
+    const ref = PAINTINGS['great-wave'];
+    const cut = generateJigsaw(8, 10, ref.width, ref.height, 4);
+    for (const item of [[11, 12, 21, 22], [33, 34, 35], [70, 71]]) {
+      const { photo } = renderPiecesPhoto(ref, cut, [item], { seed: 2, scale: 1.2, background: [128, 128, 128] });
+      const seg = segmentPieces(photo);
+      expect(seg.regions.map((r) => r.region.kind)).toEqual(['patch']);
+      expect(seg.medianBodySize).toBeUndefined();
+    }
+  });
 });
 
 describe('segmentPieces performance', () => {

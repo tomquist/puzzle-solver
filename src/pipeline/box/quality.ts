@@ -3,10 +3,9 @@
  * reference image. Measurements come from the shared metrics in `pipeline/quality/metrics`; this
  * module only decides thresholds, messages and hints.
  */
-import { rgbaToGray } from '../../cv/color';
+import { rgbaToGray, saturationValue } from '../../cv/color';
 import { applyMat3, type Quad } from '../../cv/geometry';
 import { cropRGBA, createMask, type Mask, type RGBAImage, type Rect } from '../../cv/image';
-import { saturationValue } from '../../cv/color';
 import { componentMask, labelComponents } from '../../cv/components';
 import { traceOuterContour } from '../../cv/contour';
 import { distanceTransform } from '../../cv/distance';
@@ -63,20 +62,28 @@ interface GlareResult {
  * clipped core from bright white paper around it.
  */
 function measureGlare(img: RGBAImage, mask: Mask): GlareResult {
-  const a = measureGlareAt(img, mask, 0.965, 0.1);
-  const b = measureGlareAt(img, mask, 0.985, 0.06);
-  return a.fraction >= b.fraction ? a : b;
-}
-
-function measureGlareAt(img: RGBAImage, mask: Mask, minValue: number, maxSaturation: number): GlareResult {
-  const { width: W, height: H } = img;
-  const g = glareMask(img, { minValue, maxSaturation });
+  const loose = glareMask(img, { minValue: 0.965, maxSaturation: 0.1 });
   let inside = 0;
-  for (let i = 0; i < g.data.length; i++) {
-    g.data[i] = g.data[i] && mask.data[i] ? 1 : 0;
+  for (let i = 0; i < loose.data.length; i++) {
+    loose.data[i] = loose.data[i] && mask.data[i] ? 1 : 0;
     inside += mask.data[i];
   }
   if (inside === 0) return { fraction: 0 };
+  // The strict (clipped) mask is a subset of the loose one: only re-test flagged pixels.
+  const strict = createMask(img.width, img.height);
+  for (let i = 0, p = 0; i < loose.data.length; i++, p += 4) {
+    if (!loose.data[i]) continue;
+    const [sat, val] = saturationValue(img.data[p], img.data[p + 1], img.data[p + 2]);
+    if (val >= 0.985 && sat <= 0.06) strict.data[i] = 1;
+  }
+  const a = glareBlobs(img, mask, loose, inside);
+  const b = glareBlobs(img, mask, strict, inside);
+  return a.fraction >= b.fraction ? a : b;
+}
+
+/** Fraction of the masked area covered by glare-like blobs of candidate mask `g` (see measureGlare). */
+function glareBlobs(img: RGBAImage, mask: Mask, g: Mask, inside: number): GlareResult {
+  const { width: W, height: H } = img;
   const cleaned = open(g, 1);
   const { stats, labels } = labelComponents(cleaned, 8);
   const minBlob = Math.max(12, 0.0015 * inside);
@@ -139,7 +146,7 @@ function measureBlur(img: RGBAImage, quad: Quad, tile: number, downscale: number
   const H = unitSquareToQuad(quad);
   if (!H) return 0;
   const vals: number[] = [];
-  for (const [u, v] of [[0.3, 0.3], [0.7, 0.3], [0.5, 0.5], [0.3, 0.7], [0.7, 0.7]]) {
+  for (const [u, v] of [[0.3, 0.35], [0.7, 0.35], [0.5, 0.65]]) {
     const c = applyMat3(H, { x: u, y: v });
     const rect = { x: Math.round(c.x - tile / 2), y: Math.round(c.y - tile / 2), width: tile, height: tile };
     let crop = cropRGBA(img, rect);
@@ -162,8 +169,11 @@ function exposureIssues(mean: number, p95: number, blown: number, what: string):
   return out;
 }
 
-/** Quality report of a box photo given the detected picture quad (photo coordinates). */
-export function assessBoxPhoto(photo: RGBAImage, work: WorkImage, quad: Quad, confidence: number): QualityReport {
+/**
+ * Quality report of a box photo given the detected picture quad (photo coordinates). `cutOff`
+ * marks a quad with sides on the photo border (the picture continues beyond the photo).
+ */
+export function assessBoxPhoto(photo: RGBAImage, work: WorkImage, quad: Quad, confidence: number, cutOff = false): QualityReport {
   const issues: QualityIssue[] = [];
   const metrics: Record<string, number> = { confidence };
   const wq = quad.map((p) => toWork(work, p));
@@ -183,7 +193,7 @@ export function assessBoxPhoto(photo: RGBAImage, work: WorkImage, quad: Quad, co
   metrics.pictureHeight = size.height;
   // Blur at (at most) the resolution the reference will have.
   const down = Math.min(1, 3000 / longSide);
-  const blur = measureBlur(photo, quad, Math.round(Math.min(384, Math.max(96, 0.2 * longSide)) / Math.max(down, 0.1)), down);
+  const blur = measureBlur(photo, quad, Math.round(Math.min(256, Math.max(96, 0.2 * longSide)) / Math.max(down, 0.1)), down);
   metrics.blur = blur;
   const glare = measureGlare(work.rgba, mask);
   metrics.glareFraction = glare.fraction;
@@ -216,13 +226,20 @@ export function assessBoxPhoto(photo: RGBAImage, work: WorkImage, quad: Quad, co
     });
   }
   issues.push(...exposureIssues(ex.mean, ex.p95, blown, 'picture'));
-  if (ratio < BOX_QUALITY.perspectiveRatio || angleDev > BOX_QUALITY.perspectiveAngle) {
+  if (cutOff) {
+    issues.push({
+      code: 'cut_off',
+      severity: 'warning',
+      message: 'The picture is cut off by the edge of the photo.',
+      hint: 'Step back or zoom out so the whole picture fits in the photo; missing parts cannot be matched.',
+    });
+  } else if (ratio < BOX_QUALITY.perspectiveRatio || angleDev > BOX_QUALITY.perspectiveAngle) {
     issues.push({ code: 'perspective', severity: 'warning', message: 'The box is photographed at a steep angle.', hint: 'Shoot from straight above so the box looks rectangular.' });
   }
   if (longSide < BOX_QUALITY.lowResWarn) {
-    issues.push({ code: 'low_resolution', severity: 'warning', message: `The picture is only about ${Math.round(longSide)} px wide in the photo.`, hint: 'Move closer so the box fills the photo, or use the full camera resolution.' });
+    issues.push({ code: 'low_resolution', severity: 'warning', message: `The picture is only about ${Math.round(longSide)} px across in the photo.`, hint: 'Move closer so the box fills the photo, or use the full camera resolution.' });
   } else if (longSide < BOX_QUALITY.lowResInfo) {
-    issues.push({ code: 'low_resolution', severity: 'info', message: `The picture is about ${Math.round(longSide)} px wide in the photo.`, hint: 'A closer or higher-resolution photo gives a sharper reference.' });
+    issues.push({ code: 'low_resolution', severity: 'info', message: `The picture is about ${Math.round(longSide)} px across in the photo.`, hint: 'A closer or higher-resolution photo gives a sharper reference.' });
   }
   return { score: reportScore(issues), issues, metrics };
 }

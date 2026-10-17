@@ -30,10 +30,10 @@ const MIN_SHAPE_CONFIDENCE = 0.3;
 const UNCERTAIN_CONFIDENCE = 0.5;
 /**
  * Opening radius (fraction of the body size) that separates touching pieces: contacts narrower
- * than ~1/3 body size break, while pieces of an assembled patch share whole sides and stay joined.
- * (A single piece with two opposite blanks has a waist of ≈ 0.4 body sizes.)
+ * than ~0.4 body sizes break, while pieces of an assembled patch share whole sides and stay joined.
+ * Only regions clearly larger than one piece are split, so narrow-waisted single pieces are safe.
  */
-const NECK_RADIUS = 0.17;
+const NECK_RADIUS = 0.2;
 /**
  * Relative height of a second outline-orientation peak above which a patch looks like loose pieces
  * at different rotations (assembled patches share one grid: measured ≤ 0.31 vs. up to 0.95).
@@ -257,6 +257,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   const others = cands.filter((c) => !c.touchesBorder);
   const refArea = singles.length > 0 ? median(singles.map((c) => c.area)) : others.length > 0 ? median(others.map((c) => c.area)) : 0;
   const refBody = singles.length > 0 ? median(singles.map((c) => c.shape!.bodySize)) : Math.sqrt(refArea);
+  const noReference = singles.length === 0 && others.length < 3;
   // Expected single-piece area at a position (follows perspective size trends when measurable).
   const sizeTrend = fitSizeTrend(singles, W, H);
   const refAreaAt = (c: Candidate): number => {
@@ -274,10 +275,11 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
       const ra = refAreaAt(c);
       if (c.area > 1.4 * ra && !confidentSingle) {
         const parts = splitAtNecks(c, Math.max(2, NECK_RADIUS * refBody * Math.sqrt(ra / refArea)), 0.3 * ra);
-        // Accept the split only when every part is a plausible piece (or patch) on its own.
+        // Accept the split when every part is piece-sized and at least one is a convincing piece
+        // (the contact area may spoil the other outline).
         const cand = parts?.map((p) => makeCandidate(p.mask, p.bbox, W, H)) ?? [];
-        const plausible = cand.length >= 2 && cand.every((p) => p.area >= 0.5 * ra && (p.touchesBorder || p.area > patchRatio * ra || (p.shape !== null && p.shape.confidence >= REFERENCE_CONFIDENCE)));
-        if ((globalThis as unknown as { __splitDebug?: boolean }).__splitDebug) console.log('SPLIT', parts?.length ?? 0, cand.map((p) => `${p.area}/${(p.area / ra).toFixed(2)}/${p.shape?.confidence.toFixed(2)}`).join(' '));
+        const plausible = cand.length >= 2 && cand.every((p) => p.area >= 0.5 * ra) &&
+          cand.some((p) => p.area > patchRatio * ra || (p.shape !== null && p.shape.confidence >= REFERENCE_CONFIDENCE));
         if (plausible) {
           group++;
           for (const p of cand) out.push({ ...p, group });
@@ -303,6 +305,10 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     let kind: RegionKind = 'piece';
     if (ratio < fragRatio) kind = 'unknown';
     else if ((ratio > patchRatio && !confidentSingle) || (ratio > 1.4 && weakShape)) kind = 'patch';
+    // Without any size reference (no convincing single piece, < 3 regions), a region without a
+    // convincing single-piece shape is taken as an assembled patch (lone patches score ≤ 0.4,
+    // lone pieces ≥ 0.9).
+    else if (noReference && weakShape) kind = 'patch';
     const shape = kind === 'piece' && c.shape && c.shape.confidence >= MIN_SHAPE_CONFIDENCE ? c.shape : undefined;
     const orientationDeg = shape ? bodyOrientation(shape) : c.orientation;
     const region: DetectedRegion = {

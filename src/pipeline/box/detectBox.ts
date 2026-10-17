@@ -103,13 +103,17 @@ interface Structure {
 function analyseStructure(ranked: QuadCandidate[], work: WorkImage, f: GradientField): Structure {
   const top = ranked[0];
   const isBand = (b: number[]) => Math.max(...b) > 0.006;
-  // Outermost related quad (the lid when the picture itself ranked first).
+  // Best enclosing quad (the lid when the picture itself ranked first).
   let outer = top;
+  let outerScore = -1;
   for (const c of ranked) {
     if (c === top || c.support < Math.max(0.45, 0.7 * top.support) || c.score < 0.3 * top.score) continue;
     const nb = nestedBands(c.quad, top.quad);
     if (!nb || !isBand(nb.bands)) continue;
-    if (c.areaFrac > outer.areaFrac) outer = c;
+    if (c.score > outerScore) {
+      outer = c;
+      outerScore = c.score;
+    }
   }
   let cur = outer;
   let lid: QuadCandidate | undefined;
@@ -212,12 +216,12 @@ export function detectBoxDebug(photo: RGBAImage, opts: DetectBoxOptions = {}): {
   ];
   const refineOn = opts.refine ?? true;
   const radius = 2.5 / Math.min(work.sx, work.sy) + 3;
-  const toFinal = (c: QuadCandidate): { quad: Quad; refined: number } => {
+  const toFinal = (c: QuadCandidate, refine = refineOn): { quad: Quad; refined: number } => {
     let q = photoQuadOf(c.quad);
     // Snap border sides exactly onto the photo border.
     const fixed = c.lines.map((li) => pool.lines[li].border !== undefined);
     q = snapBorderSides(q, c.lines.map((li) => pool.lines[li].border), photo.width, photo.height);
-    if (!refineOn) return { quad: q, refined: 1 };
+    if (!refine) return { quad: q, refined: 1 };
     const r = refineQuad(photo, q, { radius, fixed });
     const fr = r.inlierFraction.reduce((a, b) => a + b, 0) / 4;
     if (fr <= 0) return { quad: r.quad, refined: fr };
@@ -229,6 +233,7 @@ export function detectBoxDebug(photo: RGBAImage, opts: DetectBoxOptions = {}): {
 
   let result: BoxDetection;
   let evidence: FrameEvidence | undefined;
+  let cutOff = false;
   if (!ranked.length) {
     result = {
       quad: wholePhoto,
@@ -242,6 +247,7 @@ export function detectBoxDebug(photo: RGBAImage, opts: DetectBoxOptions = {}): {
     lap('structure');
     const pic = toFinal(st.picture);
     const picIsWhole = st.picture.borderSides === 4;
+    cutOff = st.picture.borderSides > 0;
     const topScore = Math.max(st.picture.score, st.lid?.score ?? 0);
     const candidates: BoxDetection['candidates'] = [{ quad: pic.quad, score: round3(topScore), label: picIsWhole ? 'whole-photo' : 'picture' }];
     const used: QuadCandidate[] = [st.picture];
@@ -259,7 +265,8 @@ export function detectBoxDebug(photo: RGBAImage, opts: DetectBoxOptions = {}): {
       if (used.some((u) => maxCornerDistance(u.quad, c.quad) < tol)) continue;
       if (c.score < 0.4 * ranked[0].score) break;
       if (c.borderSides === 4) continue;
-      candidates.push({ quad: toFinal(c).quad, score: round3(c.score), label: 'alternative' });
+      // Alternatives keep their working-resolution corners (cheaper; the user adjusts them anyway).
+      candidates.push({ quad: toFinal(c, false).quad, score: round3(c.score), label: 'alternative' });
       used.push(c);
     }
     if (!picIsWhole) candidates.push({ quad: wholePhoto, score: 0.05, label: 'whole-photo' });
@@ -277,13 +284,14 @@ export function detectBoxDebug(photo: RGBAImage, opts: DetectBoxOptions = {}): {
       const wi = candidates.findIndex((c) => c.label === 'whole-photo');
       const [whole] = candidates.splice(wi, 1);
       candidates.unshift({ ...whole, score: round3(candidates[0].score) });
+      cutOff = false;
     }
     // Scores follow the preference order (best first).
     for (let i = 1; i < candidates.length; i++) candidates[i].score = round3(Math.min(candidates[i].score, 0.98 * candidates[i - 1].score));
     result = { quad: candidates[0].quad, confidence: round3(confidence), candidates, quality: { score: 0, issues: [], metrics: {} } };
   }
   lap('refine');
-  result.quality = assessBoxPhoto(photo, work, result.quad, result.confidence);
+  result.quality = assessBoxPhoto(photo, work, result.quad, result.confidence, cutOff);
   lap('quality');
   return { result, debug: { work, lines: pool.lines, ranked, evidence, timings } };
 }

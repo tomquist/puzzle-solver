@@ -1,12 +1,14 @@
 /**
- * Nested structure of a box lid: the picture printed inside a frame. Works in the rectified
- * coordinates of a base quad (unit square), where the frame's inner and outer edges are parallel.
+ * Searches relative to a candidate quad, in its rectified coordinates (unit square), where the
+ * edges of a printed frame are parallel to the lid's and perspective is accounted for exactly.
  *
+ * - `snapSideLines` re-fits each side locally (both ends move independently) to the strongest edge.
  * - `directedLines` scans lines parallel to each side (inwards and outwards) and returns the
  *   offsets with strong edge support, so the picture edge inside a lid (or the lid around a
  *   picture) becomes a line candidate even when the global Hough transform missed it.
  * - `nestedBands` / `frameEvidence` decide whether the band between two nested quads looks like a
  *   printed frame (uniform colour, little texture) rather than part of the picture.
+ * - `edgeBaseline` measures how busy the surroundings of a quad's sides are (texture vs boundary).
  */
 import { applyMat3, mat3Invert, type Mat3, type Point, type Quad } from '../../cv/geometry';
 import type { RGBAImage } from '../../cv/image';
@@ -94,7 +96,7 @@ function sideLineEnds(s: number, da: number, db: number): [Point, Point] {
   }
 }
 
-/** Mean support along the image of unit segment p→q restricted to [a, b] of its length. */
+/** Mean support along the middle 84 % of the image of unit segment p→q (lateral search ±r px). */
 function snapSupport(f: GradientField, H: Mat3, p: Point, q: Point, samples: number, r: number): number {
   const P = applyMat3(H, p), Q = applyMat3(H, q);
   const len = Math.hypot(Q.x - P.x, Q.y - P.y);
@@ -123,7 +125,7 @@ export function snapSideLines(f: GradientField, quad: Quad, range = 0.1, perSide
     const perp = s % 2 === 0 ? (sides[1] + sides[3]) / 2 : (sides[0] + sides[2]) / 2;
     const along = s % 2 === 0 ? (sides[0] + sides[2]) / 2 : (sides[1] + sides[3]) / 2;
     if (perp < 10 || along < 10) continue;
-    const coarse = 4 / perp;
+    const coarse = 5 / perp;
     const n = Math.max(1, Math.ceil(range / coarse));
     const dim = 2 * n + 1;
     const grid = new Float32Array(dim * dim);

@@ -10,7 +10,7 @@ import { assessReference } from './quality';
 import { addGlare, blurRGBA, painting, renderScene, saveOverlay, scaleExposure, type SceneSpec } from './testkit';
 
 /** Codes that must stay quiet on clean photos ('low_resolution' info depends on the photo size). */
-const DEGRADATION_CODES: QualityCode[] = ['blurry', 'glare', 'too_dark', 'too_bright', 'box_not_found', 'perspective'];
+const DEGRADATION_CODES: QualityCode[] = ['blurry', 'glare', 'too_dark', 'too_bright', 'box_not_found', 'perspective', 'cut_off'];
 
 const clean: SceneSpec[] = [
   { name: 'q-sn-frame', painting: 'starry-night', opts: { seed: 51, width: 1200, height: 900, frameWidth: 0.06 } },

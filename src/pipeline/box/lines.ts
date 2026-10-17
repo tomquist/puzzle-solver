@@ -5,7 +5,7 @@
  */
 import { canny } from '../../cv/edges';
 import type { Point } from '../../cv/geometry';
-import type { Mask } from '../../cv/image';
+import type { GrayImage, Mask } from '../../cv/image';
 import { fitLine, houghLines, lineFromPolar } from '../../cv/lines';
 import { supportNear, type GradientField } from './field';
 
@@ -85,7 +85,8 @@ export function borderLines(f: GradientField, maxSupport: number): ScoredLine[] 
     const prefix = new Float32Array(count + 1);
     // Texture fraction in a window 1..5 px deep, ±3 px along the border.
     const inward = border === 0 ? { x: 0, y: 1 } : border === 1 ? { x: -1, y: 0 } : border === 2 ? { x: 0, y: -1 } : { x: 1, y: 0 };
-    const base = { x: p.x + 0.5 * inward.x + 0.5 * Math.abs(d.x) * 0, y: p.y + 0.5 * inward.y };
+    // From the outer pixel edge (-0.5) to the centre of the first pixel row/column.
+    const base = { x: p.x + 0.5 * inward.x + 0.5 * d.x, y: p.y + 0.5 * inward.y + 0.5 * d.y };
     const tex = new Float32Array(count);
     for (let k = 0; k < count; k++) {
       let n = 0, hit = 0;
@@ -103,15 +104,9 @@ export function borderLines(f: GradientField, maxSupport: number): ScoredLine[] 
       const v = maxSupport * Math.max(0, Math.min(1, (tex[k] - 0.08) / 0.3));
       prefix[k + 1] = prefix[k] + v;
     }
+    // d is (1, 0) or (0, 1), which normalizeLine keeps, so sample k stays at parameter t0 + k.
     const l = normalizeLine(p, d, (w - 1) / 2, (h - 1) / 2);
     const range = clipLine(l, w, h) ?? [0, len];
-    // normalizeLine may flip the direction; keep the profile aligned with increasing t.
-    const flipped = l.d.x * d.x + l.d.y * d.y < 0;
-    if (flipped) {
-      const rev = new Float32Array(count + 1);
-      for (let k = 0; k < count; k++) rev[k + 1] = rev[k] + (prefix[count - k] - prefix[count - k - 1]);
-      return { ...l, n: { x: -l.d.y, y: l.d.x }, t0: range[0], count, prefix: rev, source: 'border', border };
-    }
     return { ...l, n: { x: -l.d.y, y: l.d.x }, t0: range[0], count, prefix, source: 'border', border };
   };
   return [
@@ -240,7 +235,7 @@ export interface EdgeCandidates {
 }
 
 /** Canny edges and Hough line candidates (refined against the edge pixels) on the working image. */
-export function houghCandidates(gray: { width: number; height: number; data: Float32Array }, f: GradientField, maxLines = 36): EdgeCandidates {
+export function houghCandidates(gray: GrayImage, f: GradientField, maxLines = 36): EdgeCandidates {
   const { width: w, height: h } = gray;
   const minDim = Math.min(w, h);
   const edges = canny(gray, f.lo * 1.2, f.lo * 2.8, 0);

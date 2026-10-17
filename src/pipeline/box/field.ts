@@ -18,50 +18,46 @@ export interface WorkImage {
 }
 
 /**
- * Integer-factor box downscale (exact area average of k×k blocks); much faster than the general
- * resampler for the large first step from camera resolution.
+ * Integer-factor box downscale: average of each k×k block (every `stride`-th pixel in both
+ * directions, which keeps the anti-aliasing but reads 4× fewer pixels for stride 2). Much faster
+ * than the general resampler for the big first step from camera resolution.
  */
-function blockDownscale(img: RGBAImage, k: number): RGBAImage {
+export function blockDownscale(img: RGBAImage, k: number, stride = 1): RGBAImage {
   const w = Math.floor(img.width / k), h = Math.floor(img.height / k);
   const out = createRGBA(w, h);
   const src = img.data, dst = out.data;
   const W = img.width;
   const acc = new Uint32Array(w * 3);
-  const inv = 1 / (k * k);
+  const per = Math.ceil(k / stride);
+  const inv = 1 / (per * per);
   // Read whole pixels as 32-bit words when the buffer is aligned (one load instead of three).
-  const aligned = src.byteOffset % 4 === 0;
-  const src32 = aligned ? new Uint32Array(src.buffer, src.byteOffset, img.width * img.height) : null;
   const little = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+  const src32 = little && src.byteOffset % 4 === 0 ? new Uint32Array(src.buffer, src.byteOffset, img.width * img.height) : null;
   for (let y = 0; y < h; y++) {
     acc.fill(0);
-    for (let dy = 0; dy < k; dy++) {
-      if (src32 && little) {
-        let p = (y * k + dy) * W;
-        for (let x = 0, a = 0; x < w; x++, a += 3) {
-          let r = 0, g = 0, b = 0;
-          for (let dx = 0; dx < k; dx++) {
-            const v = src32[p++];
+    for (let dy = 0; dy < k; dy += stride) {
+      const row = (y * k + dy) * W;
+      for (let x = 0, a = 0; x < w; x++, a += 3) {
+        let r = 0, g = 0, b = 0;
+        const p0 = row + x * k;
+        if (src32) {
+          for (let dx = 0; dx < k; dx += stride) {
+            const v = src32[p0 + dx];
             r += v & 255;
             g += (v >>> 8) & 255;
             b += (v >>> 16) & 255;
           }
-          acc[a] += r;
-          acc[a + 1] += g;
-          acc[a + 2] += b;
+        } else {
+          for (let dx = 0; dx < k; dx += stride) {
+            const p = (p0 + dx) * 4;
+            r += src[p];
+            g += src[p + 1];
+            b += src[p + 2];
+          }
         }
-        continue;
-      }
-      let p = ((y * k + dy) * W) * 4;
-      for (let x = 0; x < w; x++) {
-        let r = 0, g = 0, b = 0;
-        for (let dx = 0; dx < k; dx++, p += 4) {
-          r += src[p];
-          g += src[p + 1];
-          b += src[p + 2];
-        }
-        acc[x * 3] += r;
-        acc[x * 3 + 1] += g;
-        acc[x * 3 + 2] += b;
+        acc[a] += r;
+        acc[a + 1] += g;
+        acc[a + 2] += b;
       }
     }
     let o = y * w * 4;
@@ -85,7 +81,7 @@ export function makeWorkImage(photo: RGBAImage, target: number): WorkImage {
   let sx = 1, sy = 1;
   const k = Math.floor(long / target);
   if (k >= 2) {
-    img = blockDownscale(photo, k);
+    img = blockDownscale(photo, k, k >= 4 ? 2 : 1);
     sx = sy = 1 / k;
   }
   const l2 = Math.max(img.width, img.height);

@@ -407,19 +407,21 @@ function scoreOf(issues: QualityIssue[]): number {
 }
 
 /**
- * Fast live-camera feedback on a small (~320 px) frame: sharpness, brightness, clipping and a
- * short message when the frame is not good enough. Runs in a few milliseconds.
+ * Fast live-camera feedback on a small (~320 px) frame: sharpness (content-normalised blur metric),
+ * brightness, clipping and a short message when the frame is not good enough. ≈ 5 ms for 320×240.
  */
 export function assessFrame(frame: RGBAImage): FrameQuality {
   const gray = rgbaToGray(frame);
   const radius = Math.max(2, Math.round(Math.max(frame.width, frame.height) / 120));
   const bm = blurMetric(gray, undefined, radius);
+  // Sharp frames measure ≈ 0.25–0.35, Gaussian blur σ = 1 px ≈ 0.5–0.6, σ = 1.5 px ≈ 0.62–0.72.
   const sharpness = Math.max(0, Math.min(1, (0.8 - bm) / 0.45));
   const ex = exposureStats(frame);
-  const clipped = ex.clippedLow + ex.clippedHigh;
+  const high = clipping(frame).clipped;
+  const clipped = Math.min(1, ex.clippedLow + high);
   let message: string | undefined;
   if (ex.mean < 0.12 || ex.p95 < 0.25) message = 'Too dark – add light';
-  else if (ex.clippedHigh > 0.12 || ex.mean > 0.88) message = 'Too bright – avoid direct light';
-  else if (sharpness < 0.4) message = 'Blurry – hold still and tap to focus';
+  else if (high > 0.1 || ex.mean > 0.9) message = 'Too bright – avoid direct light';
+  else if (sharpness < 0.45) message = 'Blurry – hold still and tap to focus';
   return { sharpness, brightness: ex.mean, clipped, ok: message === undefined, ...(message ? { message } : {}) };
 }
