@@ -176,6 +176,52 @@ export function snapSideLines(f: GradientField, quad: Quad, range = 0.1, perSide
   return out;
 }
 
+/**
+ * Texture baseline of a quad's edges (0..1): for each side, the lowest edge support on parallel
+ * lines 3–10 % inside and outside (a real boundary has a calm strip nearby – table, frame or a calm
+ * part of the picture – while texture is busy everywhere); median over the sides that are not on
+ * the photo border. High values mean the "edges" are just texture.
+ */
+export function edgeBaseline(f: GradientField, quad: Quad, skipSide: boolean[] = []): number {
+  const H = unitSquareToQuad(quad);
+  if (!H) return 1;
+  const sides = quadSides(quad);
+  const vals: number[] = [];
+  for (let s = 0; s < 4; s++) {
+    if (skipSide[s]) continue;
+    const perp = s % 2 === 0 ? (sides[1] + sides[3]) / 2 : (sides[0] + sides[2]) / 2;
+    const along = s % 2 === 0 ? (sides[0] + sides[2]) / 2 : (sides[1] + sides[3]) / 2;
+    if (perp < 10) continue;
+    const samples = Math.max(16, Math.min(64, Math.round(along / 8)));
+    let low = Infinity;
+    for (const frac of [0.03, 0.06, 0.1]) {
+      const d = Math.max(5 / perp, frac);
+      for (const sign of [1, -1]) {
+        const [p, q] = sideLineUnit(s, sign * d, 0.1, 0.9);
+        const P = applyMat3(H, p), Q = applyMat3(H, q);
+        const len = Math.hypot(Q.x - P.x, Q.y - P.y);
+        if (len < 1) continue;
+        const nx = -(Q.y - P.y) / len, ny = (Q.x - P.x) / len;
+        let sum = 0, inside = 0;
+        for (let k = 0; k < samples; k++) {
+          const t = (k + 0.5) / samples;
+          const m = applyMat3(H, { x: p.x + t * (q.x - p.x), y: p.y + t * (q.y - p.y) });
+          if (m.x < 2 || m.y < 2 || m.x > f.width - 3 || m.y > f.height - 3) continue;
+          sum += supportNear(f, m.x, m.y, nx, ny, 2);
+          inside++;
+        }
+        // Lines that leave the photo say nothing about the texture there.
+        if (inside >= 0.7 * samples) low = Math.min(low, sum / inside);
+      }
+    }
+    if (Number.isFinite(low)) vals.push(low);
+  }
+  if (!vals.length) return 0;
+  vals.sort((a, b) => a - b);
+  const m = vals.length >> 1;
+  return vals.length % 2 ? vals[m] : (vals[m - 1] + vals[m]) / 2;
+}
+
 export interface NestedBands {
   /** Band widths top, right, bottom, left as fractions of the outer quad (unit square). */
   bands: [number, number, number, number];
@@ -215,10 +261,14 @@ export interface FrameEvidence {
   flatness: number;
   /** Worst side: fraction of samples just inside the inner quad that share the frame colour. */
   innerSimilarity: number;
+  /** Fraction of samples just outside the outer quad that share the frame colour (table, not frame). */
+  outerSimilarity: number;
   /** Combined evidence 0..1. */
   evidence: number;
   /** Number of sides with a measurable band. */
   bandSides: number;
+  /** Narrowest measurable band (fraction of the outer quad). */
+  minBand: number;
 }
 
 /**
@@ -229,12 +279,13 @@ export interface FrameEvidence {
  */
 export function frameEvidence(img: RGBAImage, f: GradientField, outer: Quad, bands: [number, number, number, number]): FrameEvidence {
   const H = unitSquareToQuad(outer);
-  const none: FrameEvidence = { uniformity: 0, flatness: 0, innerSimilarity: 1, evidence: 0, bandSides: 0 };
+  const none: FrameEvidence = { uniformity: 0, flatness: 0, innerSimilarity: 1, outerSimilarity: 1, evidence: 0, bandSides: 0, minBand: 0 };
   if (!H) return none;
   const sides = quadSides(outer);
   const [bt, br, bb, bl] = bands;
-  interface SideSamples { out: number[][]; flat: number; ins: number[][] }
+  interface SideSamples { out: number[][]; flat: number; ins: number[][]; beyond: number[][] }
   const per: SideSamples[] = [];
+  let minBand = Infinity;
   const read = (u: number, v: number, into: number[][]): number => {
     const p = applyMat3(H, { x: u, y: v });
     const x = Math.round(p.x), y = Math.round(p.y);
@@ -252,7 +303,7 @@ export function frameEvidence(img: RGBAImage, f: GradientField, outer: Quad, ban
     // Depths in pixels from the inner side: outside (towards the outer quad) and inside.
     const outD = [2.5, Math.min(4, bandPx - 1.5)];
     const inD = [2.5, 4.5, 7];
-    const ss: SideSamples = { out: [], flat: 0, ins: [] };
+    const ss: SideSamples = { out: [], flat: 0, ins: [], beyond: [] };
     for (let k = 0; k < 48; k++) {
       const a = a0 + ((k + 0.5) / 48) * (a1 - a0);
       for (const dp of outD) {
@@ -260,8 +311,12 @@ export function frameEvidence(img: RGBAImage, f: GradientField, outer: Quad, ban
         if (m >= 0 && m < 2.5 * f.lo) ss.flat++;
       }
       for (const dp of inD) read(...uvAt(s, a, b + dp / perp), ss.ins);
+      for (const dp of [2.5, 4]) read(...uvAt(s, a, -dp / perp), ss.beyond);
     }
-    if (ss.out.length >= 8) per.push(ss);
+    if (ss.out.length >= 8) {
+      per.push(ss);
+      minBand = Math.min(minBand, b);
+    }
   }
   if (!per.length) return none;
   const all = per.flatMap((p) => p.out);
@@ -271,6 +326,8 @@ export function frameEvidence(img: RGBAImage, f: GradientField, outer: Quad, ban
   });
   const close = (p: number[]) => Math.hypot(p[0] - med[0], p[1] - med[1], p[2] - med[2]) < 32;
   let uSum = 0, fSum = 0, minSide = 1, innerSimilarity = 0;
+  const beyond = per.flatMap((p) => p.beyond);
+  const outerSimilarity = beyond.length ? beyond.filter(close).length / beyond.length : 0;
   for (const p of per) {
     const u = p.out.filter(close).length / p.out.length;
     const fl = p.flat / p.out.length;
@@ -280,9 +337,10 @@ export function frameEvidence(img: RGBAImage, f: GradientField, outer: Quad, ban
     if (p.ins.length) innerSimilarity = Math.max(innerSimilarity, p.ins.filter(close).length / p.ins.length);
   }
   const uniformity = uSum / per.length, flatness = fSum / per.length;
-  // Every band side must look like frame; the picture just inside must differ on every side.
-  const evidence = minSide < 0.4 ? 0 : Math.min(uniformity, flatness) * (1 - innerSimilarity);
-  return { uniformity, flatness, innerSimilarity, evidence, bandSides: per.length };
+  // Every band side must look like frame; the picture just inside must differ on every side; a band
+  // that simply continues outside the outer quad is more likely table (or shadow) than frame.
+  const evidence = minSide < 0.4 ? 0 : Math.min(uniformity, flatness) * (1 - innerSimilarity) * (1 - 0.6 * outerSimilarity);
+  return { uniformity, flatness, innerSimilarity, outerSimilarity, evidence, bandSides: per.length, minBand };
 }
 
 /** Unit-square coordinates of position `a` along side s at inward depth d. */

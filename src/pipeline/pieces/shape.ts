@@ -17,10 +17,14 @@ export interface ShapeOptions {
 }
 
 const DEG = 180 / Math.PI;
+/** Side excursions deeper than this fraction of the side length are implausible for a knob. */
+const DEEP_SIDE = 0.48;
 /** Half-width (deg) of the window around the histogram peak used to refine the dominant orientation. */
 const ALIGN_WINDOW = 20;
 /** Half-width (deg) within which outline length counts as aligned with the dominant orientation. */
 const ALIGNED_TOL = 7;
+/** Minimum angular distance (deg) of a second orientation peak from the dominant one. */
+const SECOND_PEAK_MIN_SEPARATION = 20;
 
 /** Reduce an angle in degrees to (−45, 45]. */
 export function reduceQuarter(deg: number): number {
@@ -81,6 +85,8 @@ interface SideEval {
   clarity: number;
   /** Number of separate large excursions (a real side has at most one knob). */
   lobes: number;
+  /** Largest |deviation| / length. */
+  extent: number;
 }
 
 /**
@@ -161,10 +167,10 @@ function evalSide(path: Point[], A: Point, B: Point, flatTol: number): SideEval 
     kind = pos >= neg ? 'tab' : 'blank';
     // Knobs reach ≈ 0.2–0.35 of the side; both directions large means the corners are wrong.
     clarity = Math.min(1, (big - flatTol) / (0.75 * flatTol)) * Math.min(1, Math.max(0, (big - 1.2 * small) / big) * 1.5);
-    if (big > 0.6) clarity *= 0.3;
+    if (big > DEEP_SIDE) clarity *= 0.4;
     if (clarity < 0.15) kind = 'unknown';
   }
-  return { side: { kind, length, profile }, clarity, lobes };
+  return { side: { kind, length, profile }, clarity, lobes, extent: ext };
 }
 
 interface QuadCandidate {
@@ -177,7 +183,6 @@ interface QuadCandidate {
  * ratio, area relative to the outline area and sharpness of the outline turns at the corners.
  */
 function quadCost(P: Point[], turn: number[], outlineArea: number): number {
-  let cross = 0;
   const len = [0, 0, 0, 0];
   let angErr = 0;
   for (let j = 0; j < 4; j++) {
@@ -185,7 +190,6 @@ function quadCost(P: Point[], turn: number[], outlineArea: number): number {
     const x1 = b.x - a.x, y1 = b.y - a.y, x2 = c.x - b.x, y2 = c.y - b.y;
     const cr = x1 * y2 - y1 * x2;
     if (cr <= 0) return Infinity; // not convex / not clockwise
-    cross += cr;
     len[j] = Math.hypot(c.x - b.x, c.y - b.y);
     const turnAt = Math.atan2(cr, x1 * x2 + y1 * y2) * DEG; // exterior angle, 90 for a rectangle
     angErr += Math.abs(turnAt - 90);
@@ -207,7 +211,6 @@ function quadCost(P: Point[], turn: number[], outlineArea: number): number {
   let eSharp = 0;
   for (const t of turn) eSharp += Math.min(1, Math.abs(t - 90) / 60);
   eSharp /= 4;
-  void cross;
   return (2 * angErr) / 4 / 90 + 2.5 * ePar + 2 * eAsp + 3 * eArea + 0.8 * eSharp;
 }
 
@@ -233,7 +236,7 @@ export function analyzePieceShape(contour: Point[], opts: ShapeOptions = {}): Pi
   const k = Math.max(2, Math.round((0.08 * Lest) / ds));
   const turn = turningAngles(coarse, k);
 
-  // Corner candidates: convex turning maxima (non-maximum suppression over ±k/2... ±k).
+  // Corner candidates: convex turning-angle maxima (non-maximum suppression over ±0.7 k).
   const nms = Math.max(1, Math.round(0.7 * k));
   let cand: number[] = [];
   for (let i = 0; i < N; i++) {
@@ -287,6 +290,8 @@ export function analyzePieceShape(contour: Point[], opts: ShapeOptions = {}): Pi
       sides.push(s);
       if (s.lobes >= 2) sidePenalty += 0.6;
       if (s.side.kind === 'unknown') sidePenalty += 0.3;
+      // Knobs reach ≈ 0.2–0.4 of the side: deeper excursions mean a corner sits on a knob.
+      if (s.extent > DEEP_SIDE) sidePenalty += 0.5 + 2 * (s.extent - DEEP_SIDE);
     }
     const total = q.cost + sidePenalty;
     evaluated.push({ idx: q.idx, total });
@@ -295,7 +300,7 @@ export function analyzePieceShape(contour: Point[], opts: ShapeOptions = {}): Pi
   if (!best) return null;
   // Second best among quads that differ by a clearly different corner.
   for (const e of evaluated) {
-    if (e === undefined || e.idx === best.q.idx) continue;
+    if (e.idx === best.q.idx) continue;
     const differs = e.idx.some((i) => best!.q.idx.every((j) => Math.min(Math.abs(i - j), N - Math.abs(i - j)) > k));
     if (differs && e.total < second) second = e.total;
   }
@@ -340,7 +345,6 @@ export function analyzePieceShape(contour: Point[], opts: ShapeOptions = {}): Pi
   let confidence = rectConf * sideConf * (0.5 + 0.5 * margin);
   if (kind === 'unknown') confidence *= 0.5;
   confidence = Math.max(0, Math.min(1, confidence));
-  if ((globalThis as unknown as { __shapeDebug?: boolean }).__shapeDebug) console.log('DBG cost', best.q.cost.toFixed(3), 'total', best.total.toFixed(3), 'second', second.toFixed(3), 'rect', rectConf.toFixed(2), 'side', sideConf.toFixed(2), 'clar', sideEvals.map((e) => e.clarity.toFixed(2)).join('/'), 'margin', margin.toFixed(2), 'L', Lest.toFixed(0));
   return { corners, sides, angleDeg, bodySize, center, kind, confidence };
 }
 
@@ -409,12 +413,14 @@ export function dominantOrientation(contour: Point[]): number {
 }
 
 /**
- * Orientation analysis behind {@link dominantOrientation}: the dominant angle and the fraction of
- * the straight outline length aligned with it (±7°), a measure of how grid-like the outline is.
+ * Orientation analysis behind {@link dominantOrientation}: the dominant angle, the fraction of the
+ * straight outline length aligned with it (±7°), and the height of the strongest other orientation
+ * peak (≥ 20° away) relative to the dominant one (high for clusters of differently rotated pieces).
  */
-export function orientationHistogram(contour: Point[]): { angle: number; alignment: number } {
-  if (contour.length < 8) return { angle: 0, alignment: 0 };
+export function orientationHistogram(contour: Point[]): { angle: number; alignment: number; secondPeak: number } {
+  if (contour.length < 3) return { angle: 0, alignment: 0, secondPeak: 0 };
   const perim = polygonPerimeter(contour);
+  if (!(perim > 0)) return { angle: 0, alignment: 0, secondPeak: 0 };
   const N = Math.max(32, Math.min(4096, Math.round(perim / 1.5)));
   const pts = smoothContour(resampleContour(contour, N), 1.5);
   const step = perim / N;
@@ -469,5 +475,14 @@ export function orientationHistogram(contour: Point[]): { angle: number; alignme
     if (cx === 0 && cy === 0) break;
     mean = (Math.atan2(cy, cx) * DEG) / 4;
   }
-  return { angle: reduceQuarter(mean), alignment: total > 0 ? aligned / total : 0 };
+  // Strongest histogram peak clearly away from the dominant one, relative to it.
+  let second = 0;
+  for (let i = 0; i < BINS; i++) {
+    let d = Math.abs((i + 0.5) / 2 - peakDeg);
+    d = Math.min(d, 90 - d);
+    if (d < SECOND_PEAK_MIN_SEPARATION) continue;
+    const isPeak = sm[i] >= sm[(i + 1) % BINS] && sm[i] >= sm[(i - 1 + BINS) % BINS];
+    if (isPeak && sm[i] > second) second = sm[i];
+  }
+  return { angle: reduceQuarter(mean), alignment: total > 0 ? aligned / total : 0, secondPeak: sm[peak] > 0 ? second / sm[peak] : 0 };
 }

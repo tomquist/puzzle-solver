@@ -1,7 +1,7 @@
 /**
  * Find the puzzle picture on a photo of the box lid (or poster).
  *
- * 1. Downscale to a ~1000 px working image; Sobel gradient field with noise-adaptive thresholds.
+ * 1. Downscale to a ~800 px working image; colour Sobel gradient field with noise-adaptive thresholds.
  * 2. Line candidates from independent cues: Hough lines on straight Canny edges, the sides of the
  *    colour-segmented box (table modelled from the photo border), the sides of large connected
  *    edge outlines, and the photo border (for photos that cut the box off).
@@ -14,17 +14,16 @@
  * 6. Corners refined at full resolution (robust line fits to colour-edge profiles).
  */
 import type { Quad } from '../../cv/geometry';
-import type { RGBAImage } from '../../cv/image';
+import type { Mask, RGBAImage } from '../../cv/image';
 import type { BoxDetection } from '../../model/types';
 import { makeGradientField, makeWorkImage, toPhoto, type GradientField, type WorkImage } from './field';
-import { directedLines, frameEvidence, nestedBands, snapSideLines, type FrameEvidence } from './frame';
+import { directedLines, edgeBaseline, frameEvidence, nestedBands, snapSideLines, type FrameEvidence } from './frame';
 import { maxCornerDistance } from './geometry';
 import { borderLines, houghCandidates, refitToEdges, sameLine, scoreLine, totalSupport, type Line, type LineSource, type ScoredLine } from './lines';
 import { assessBoxPhoto } from './quality';
-import { enumerateQuads, type QuadCandidate } from './quads';
+import { enumerateQuads, evaluateQuad, type QuadCandidate } from './quads';
 import { refineQuad } from './refine';
 import { contourQuads, segmentBox } from './segment';
-import type { Mask } from '../../cv/image';
 
 export interface DetectBoxOptions {
   /** Longer side of the working image (default 800). */
@@ -125,7 +124,9 @@ function analyseStructure(ranked: QuadCandidate[], work: WorkImage, f: GradientF
       if (!nb || !isBand(nb.bands)) continue;
       const ev = frameEvidence(work.rgba, f, cur.quad, nb.bands);
       const need = ev.bandSides >= 3 ? 0.35 : 0.55;
-      if (ev.evidence < need) {
+      // A narrow band (< 2.5 %) on only one or two sides is a shadow or the lid's side wall, not a frame.
+      const tooThin = ev.bandSides <= 2 && ev.minBand < 0.025;
+      if (ev.evidence < need || tooThin) {
         const v = c.support * c.geom;
         if (!bestWeak || v > bestWeak.v) bestWeak = { c, v };
         continue;
@@ -142,6 +143,8 @@ function analyseStructure(ranked: QuadCandidate[], work: WorkImage, f: GradientF
     cur = best.c;
     evidence = best.ev;
   }
+  // Stepped outwards but found no frame inside: the outer quad is not a lid around the picture.
+  if (!lid && cur !== top) return { picture: top, frameInner };
   return { picture: cur, lid, frameInner, evidence };
 }
 
@@ -172,7 +175,7 @@ export function detectBoxDebug(photo: RGBAImage, opts: DetectBoxOptions = {}): {
   if (seg.quad) for (const l of quadLines(seg.quad)) pool.add(l, 'segment', true);
   for (const q of cq) for (const l of quadLines(q)) pool.add(l, 'contour', true);
   pool.prune(MAX_POOL - 4);
-  for (const b of borderLines(W, H, 0.55)) pool.addRaw(b);
+  for (const b of borderLines(field, 0.8)) pool.addRaw(b);
   const ctx = { width: W, height: H, lines: pool.lines };
   let ranked = enumerateQuads(ctx);
   lap('enumerate');
@@ -186,6 +189,17 @@ export function detectBoxDebug(photo: RGBAImage, opts: DetectBoxOptions = {}): {
     pool.prune(MAX_POOL - 4);
     for (const b of border) pool.addRaw(b);
     ranked = enumerateQuads({ width: W, height: H, lines: pool.lines });
+  }
+  // The whole photo (all four sides on the border) competes on the same terms: it wins when the
+  // picture continues beyond every border (photo taken from too close).
+  const bIdx = [0, 1, 2, 3].map((b) => pool.lines.findIndex((l) => l.border === b));
+  if (bIdx.every((i) => i >= 0)) {
+    const corners = [{ x: -0.5, y: -0.5 }, { x: W - 0.5, y: -0.5 }, { x: W - 0.5, y: H - 0.5 }, { x: -0.5, y: H - 0.5 }];
+    const whole = evaluateQuad({ width: W, height: H, lines: pool.lines }, bIdx, corners, 4);
+    if (whole && whole.score > 0) {
+      ranked.push(whole);
+      ranked.sort((a, b) => b.score - a.score);
+    }
   }
   lap('directed');
 
@@ -206,7 +220,11 @@ export function detectBoxDebug(photo: RGBAImage, opts: DetectBoxOptions = {}): {
     if (!refineOn) return { quad: q, refined: 1 };
     const r = refineQuad(photo, q, { radius, fixed });
     const fr = r.inlierFraction.reduce((a, b) => a + b, 0) / 4;
-    return { quad: r.quad, refined: fr };
+    if (fr <= 0) return { quad: r.quad, refined: fr };
+    // Second pass in a narrow window: less chance to latch onto picture edges near the border.
+    const r2 = refineQuad(photo, r.quad, { radius: Math.max(2.5, 0.35 * radius), fixed });
+    const fr2 = r2.inlierFraction.reduce((a, b) => a + b, 0) / 4;
+    return fr2 >= 0.8 * fr ? { quad: r2.quad, refined: fr2 } : { quad: r.quad, refined: fr };
   };
 
   let result: BoxDetection;
@@ -223,7 +241,9 @@ export function detectBoxDebug(photo: RGBAImage, opts: DetectBoxOptions = {}): {
     evidence = st.evidence;
     lap('structure');
     const pic = toFinal(st.picture);
-    const candidates: BoxDetection['candidates'] = [{ quad: pic.quad, score: round3(st.picture.score), label: 'picture' }];
+    const picIsWhole = st.picture.borderSides === 4;
+    const topScore = Math.max(st.picture.score, st.lid?.score ?? 0);
+    const candidates: BoxDetection['candidates'] = [{ quad: pic.quad, score: round3(topScore), label: picIsWhole ? 'whole-photo' : 'picture' }];
     const used: QuadCandidate[] = [st.picture];
     if (st.lid) {
       candidates.push({ quad: toFinal(st.lid).quad, score: round3(st.lid.score), label: 'lid' });
@@ -238,15 +258,29 @@ export function detectBoxDebug(photo: RGBAImage, opts: DetectBoxOptions = {}): {
       if (candidates.length >= 5) break;
       if (used.some((u) => maxCornerDistance(u.quad, c.quad) < tol)) continue;
       if (c.score < 0.4 * ranked[0].score) break;
+      if (c.borderSides === 4) continue;
       candidates.push({ quad: toFinal(c).quad, score: round3(c.score), label: 'alternative' });
       used.push(c);
     }
-    candidates.push({ quad: wholePhoto, score: 0.05, label: 'whole-photo' });
+    if (!picIsWhole) candidates.push({ quad: wholePhoto, score: 0.05, label: 'whole-photo' });
     let confidence = Math.max(0, Math.min(1, (st.picture.support - 0.25) / 0.55)) * Math.min(1, st.picture.geom + 0.15);
     confidence *= Math.pow(0.7, st.picture.borderSides);
+    // A box photo shows the picture reasonably large; tiny quads are rarely the target.
+    confidence *= Math.min(1, Math.max(0.2, (st.picture.areaFrac - 0.02) / 0.13));
     confidence *= 0.75 + 0.25 * Math.min(1, pic.refined / 0.6);
+    // Edges that are no stronger than the texture next to them are not evidence of a box.
+    const baseline = edgeBaseline(field, st.picture.quad, st.picture.lines.map((li) => pool.lines[li].border !== undefined));
+    confidence *= Math.max(0, 1 - 1.3 * baseline);
     confidence = Math.max(0.02, Math.min(0.99, confidence));
-    result = { quad: pic.quad, confidence: round3(confidence), candidates, quality: { score: 0, issues: [], metrics: {} } };
+    if (confidence < 0.15 && !picIsWhole) {
+      // Nothing convincing: start the manual corner editing from the whole photo.
+      const wi = candidates.findIndex((c) => c.label === 'whole-photo');
+      const [whole] = candidates.splice(wi, 1);
+      candidates.unshift({ ...whole, score: round3(candidates[0].score) });
+    }
+    // Scores follow the preference order (best first).
+    for (let i = 1; i < candidates.length; i++) candidates[i].score = round3(Math.min(candidates[i].score, 0.98 * candidates[i - 1].score));
+    result = { quad: candidates[0].quad, confidence: round3(confidence), candidates, quality: { score: 0, issues: [], metrics: {} } };
   }
   lap('refine');
   result.quality = assessBoxPhoto(photo, work, result.quad, result.confidence);

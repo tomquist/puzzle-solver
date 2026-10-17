@@ -17,10 +17,10 @@ import { median } from './util';
 const NT = 6;
 /** Weight of lightness differences relative to chroma (lighting varies more than colour). */
 const W_L = 0.5;
-/** Lowest (L* + 16) ratio still explained as a cast shadow (≈ 40 % RGB darkening). */
-const RHO_MIN = 0.84;
-/** Fraction of a shadow's lightness drop that still counts as foreground evidence. */
-const SHADOW_PENALTY = 0.35;
+/** Lowest (L* + 16) ratio still explained as a cast shadow (≈ 50 % darkening in linear light). */
+const RHO_MIN = 0.8;
+/** Cost (in sigmas) of explaining a pixel as the deepest accepted shadow; shallower shadows cost less. */
+const SHADOW_PENALTY = 2.5;
 /** Floors for the per-channel noise sigma (Lab units), so noise-free backgrounds stay sane. */
 const SIGMA_FLOOR: [number, number, number] = [1.2, 1, 1];
 
@@ -44,6 +44,23 @@ export function backgroundAt(model: Pick<BackgroundModel, 'coefficients' | 'widt
 }
 
 /**
+ * Ratio of the brightest to the darkest modelled background luminance (CIE Y) over the photo, a
+ * scale-free measure of the lighting gradient (1 = perfectly even).
+ */
+export function lightingRatio(model: Pick<BackgroundModel, 'coefficients'>): number {
+  let lo = Infinity, hi = -Infinity;
+  for (let gy = 0; gy <= 8; gy++) {
+    for (let gx = 0; gx <= 8; gx++) {
+      const L = Math.max(0, Math.min(100, evalPoly(model.coefficients[0], gx / 4 - 1, gy / 4 - 1)));
+      const Y = ((L + 16) / 116) ** 3;
+      if (Y < lo) lo = Y;
+      if (Y > hi) hi = Y;
+    }
+  }
+  return lo > 1e-4 ? hi / lo : 1;
+}
+
+/**
  * Noise-normalised colour distance of a Lab pixel to the background colour (bL, ba, bb), tolerant
  * to cast shadows. `is*` are inverse sigmas. Shared by the model fit and the per-pixel score.
  */
@@ -55,7 +72,7 @@ function distance(L: number, a: number, b: number, bL: number, ba: number, bb: n
     const ref = bL + 16;
     const rho = ref > 1 ? Math.max(RHO_MIN, (L + 16) / ref) : 1;
     const sL = (L + 16 - rho * ref) * isL, sa = (a - rho * ba) * isa, sb = (b - rho * bb) * isb;
-    const pen = SHADOW_PENALTY * (1 - rho) * ref * isL;
+    const pen = (SHADOW_PENALTY * (1 - rho)) / (1 - RHO_MIN);
     const s2 = W_L * sL * sL + sa * sa + sb * sb + pen * pen;
     if (s2 < d2) d2 = s2;
   }
@@ -245,7 +262,7 @@ export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayIma
   const us = new Float32Array(w);
   for (let x = 0; x < w; x++) us[x] = norm(x, w);
   const lut = F_LUT, lin = LIN;
-  const wl = W_L, rhoMin = RHO_MIN, pen0 = SHADOW_PENALTY * isL;
+  const wl = W_L, rhoMin = RHO_MIN, pen0 = SHADOW_PENALTY / (1 - RHO_MIN);
   for (let y = 0; y < h; y++) {
     const v = norm(y, h);
     // c(u) = A + B·u + k3·u² per channel for this row.
@@ -276,7 +293,7 @@ export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayIma
         let rho = ref > 1 ? (L + 16) / ref : 1;
         if (rho < rhoMin) rho = rhoMin;
         const sL = (L + 16 - rho * ref) * isL, sa = (A - rho * ba) * isa, sb = (B - rho * bb) * isb;
-        const pen = pen0 * (1 - rho) * ref;
+        const pen = pen0 * (1 - rho);
         const s2 = wl * sL * sL + sa * sa + sb * sb + pen * pen;
         if (s2 < d2) d2 = s2;
       }

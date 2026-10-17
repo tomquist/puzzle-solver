@@ -6,8 +6,12 @@
 import { rgbaToGray } from '../../cv/color';
 import { applyMat3, type Quad } from '../../cv/geometry';
 import { cropRGBA, createMask, type Mask, type RGBAImage, type Rect } from '../../cv/image';
+import { saturationValue } from '../../cv/color';
+import { componentMask, labelComponents } from '../../cv/components';
+import { traceOuterContour } from '../../cv/contour';
+import { distanceTransform } from '../../cv/distance';
 import { open } from '../../cv/morphology';
-import { labelComponents } from '../../cv/components';
+import { convexHull, polygonArea } from '../../cv/polygon';
 import { fillPolygon } from '../../cv/raster';
 import { resizeRGBA } from '../../cv/resize';
 import type { GridSpec, QualityIssue, QualityReport } from '../../model/types';
@@ -20,12 +24,13 @@ export const BOX_QUALITY = {
   /** Below this detection confidence the user is asked to place the corners. */
   minConfidence: 0.45,
   /** blurMetric (0 sharp .. 1 blurry) above which the picture is reported blurry. */
-  blurWarn: 0.5,
+  blurWarn: 0.55,
   /** Fraction of the picture covered by glare blobs. */
   glareWarn: 0.004,
   darkMean: 0.16,
-  darkP95: 0.3,
-  brightClipped: 0.12,
+  darkP95: 0.38,
+  /** Fraction of the picture with blown-out luminance (≥ 250). */
+  brightBlown: 0.2,
   brightMean: 0.88,
   /** Min opposite-side ratio / max corner-angle deviation before 'perspective' fires. */
   perspectiveRatio: 0.7,
@@ -50,9 +55,22 @@ interface GlareResult {
   area?: Rect;
 }
 
-/** Glare blobs (bright, colourless, not tiny) inside `mask`. */
+/**
+ * Specular glare inside `mask`: bright, colourless blobs (shared `glareMask`) that are compact
+ * (solidity) and surrounded by a bright, desaturated halo – a reflection washes out the picture
+ * gradually, whereas white paint ends at a sharp edge next to normally coloured content. Blobs are
+ * taken from a near-white and from a saturated (clipped) mask; the latter separates a reflection's
+ * clipped core from bright white paper around it.
+ */
 function measureGlare(img: RGBAImage, mask: Mask): GlareResult {
-  const g = glareMask(img, { minValue: 0.965, maxSaturation: 0.1 });
+  const a = measureGlareAt(img, mask, 0.965, 0.1);
+  const b = measureGlareAt(img, mask, 0.985, 0.06);
+  return a.fraction >= b.fraction ? a : b;
+}
+
+function measureGlareAt(img: RGBAImage, mask: Mask, minValue: number, maxSaturation: number): GlareResult {
+  const { width: W, height: H } = img;
+  const g = glareMask(img, { minValue, maxSaturation });
   let inside = 0;
   for (let i = 0; i < g.data.length; i++) {
     g.data[i] = g.data[i] && mask.data[i] ? 1 : 0;
@@ -60,12 +78,40 @@ function measureGlare(img: RGBAImage, mask: Mask): GlareResult {
   }
   if (inside === 0) return { fraction: 0 };
   const cleaned = open(g, 1);
-  const { stats } = labelComponents(cleaned, 8);
-  const minBlob = Math.max(6, 0.0004 * inside);
+  const { stats, labels } = labelComponents(cleaned, 8);
+  const minBlob = Math.max(12, 0.0015 * inside);
+  const blobs = stats.filter((s) => s.area >= minBlob).sort((a, b) => b.area - a.area).slice(0, 12);
   let total = 0;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  for (const s of stats) {
-    if (s.area < minBlob) continue;
+  for (const s of blobs) {
+    const hull = convexHull(traceOuterContour(componentMask(labels, W, s.label, s.bbox, 1)));
+    const solidity = s.area / Math.max(1, polygonArea(hull));
+    if (solidity < 0.85) continue;
+    // Halo: inner ring (0.2–0.7 R from the blob) vs outer ring (1.3–2 R).
+    const R = Math.sqrt(s.area / Math.PI);
+    const pad = Math.ceil(2.1 * R) + 1;
+    const wx0 = Math.max(0, s.bbox.x - pad), wy0 = Math.max(0, s.bbox.y - pad);
+    const ww = Math.min(W, s.bbox.x + s.bbox.width + pad) - wx0, wh = Math.min(H, s.bbox.y + s.bbox.height + pad) - wy0;
+    const outside = createMask(ww, wh);
+    for (let y = 0; y < wh; y++) for (let x = 0; x < ww; x++) outside.data[y * ww + x] = labels[(y + wy0) * W + x + wx0] === s.label ? 0 : 1;
+    const dist = distanceTransform(outside).data;
+    let lIn = 0, sIn = 0, nIn = 0, lOut = 0, sOut = 0, nOut = 0;
+    for (let y = 0; y < wh; y++) {
+      for (let x = 0; x < ww; x++) {
+        const gi = (y + wy0) * W + x + wx0;
+        if (!mask.data[gi]) continue;
+        const d = dist[y * ww + x];
+        const inner = d >= 0.2 * R && d <= 0.7 * R, outer = d >= 1.3 * R && d <= 2 * R;
+        if (!inner && !outer) continue;
+        const p = gi * 4, r = img.data[p], gg = img.data[p + 1], b = img.data[p + 2];
+        const lum = 0.299 * r + 0.587 * gg + 0.114 * b;
+        const sat = saturationValue(r, gg, b)[0];
+        if (inner) { lIn += lum; sIn += sat; nIn++; } else { lOut += lum; sOut += sat; nOut++; }
+      }
+    }
+    if (nIn < 8 || nOut < 8) continue;
+    const halo = lIn / nIn - lOut / nOut;
+    if (halo < 15 || sIn / nIn > sOut / nOut - 0.02) continue;
     total += s.area;
     x0 = Math.min(x0, s.bbox.x);
     y0 = Math.min(y0, s.bbox.y);
@@ -74,6 +120,18 @@ function measureGlare(img: RGBAImage, mask: Mask): GlareResult {
   }
   if (total === 0) return { fraction: 0 };
   return { fraction: total / inside, area: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 } };
+}
+
+/** Fraction of masked pixels whose luminance is blown out (≥ 250). */
+function blownFraction(img: RGBAImage, mask: Mask): number {
+  let n = 0, blown = 0;
+  const d = img.data;
+  for (let i = 0, p = 0; i < mask.data.length; i++, p += 4) {
+    if (!mask.data[i]) continue;
+    n++;
+    if (0.299 * d[p] + 0.587 * d[p + 1] + 0.114 * d[p + 2] >= 250) blown++;
+  }
+  return n ? blown / n : 0;
 }
 
 /** Median blur metric over up to `n` tiles inside the quad (unit-square positions). */
@@ -94,11 +152,11 @@ function measureBlur(img: RGBAImage, quad: Quad, tile: number, downscale: number
   return vals[Math.floor(vals.length / 2)];
 }
 
-function exposureIssues(mean: number, p95: number, clippedHigh: number, what: string): QualityIssue[] {
+function exposureIssues(mean: number, p95: number, blown: number, what: string): QualityIssue[] {
   const out: QualityIssue[] = [];
   if (mean < BOX_QUALITY.darkMean || p95 < BOX_QUALITY.darkP95) {
     out.push({ code: 'too_dark', severity: 'warning', message: `The ${what} is too dark.`, hint: 'Use more light or move closer to a window; avoid shadows on the box.' });
-  } else if (clippedHigh > BOX_QUALITY.brightClipped || mean > BOX_QUALITY.brightMean) {
+  } else if (blown > BOX_QUALITY.brightBlown || mean > BOX_QUALITY.brightMean) {
     out.push({ code: 'too_bright', severity: 'warning', message: `The ${what} is overexposed.`, hint: 'Avoid direct light on the box or tap a bright area to lower the exposure.' });
   }
   return out;
@@ -115,6 +173,10 @@ export function assessBoxPhoto(photo: RGBAImage, work: WorkImage, quad: Quad, co
   metrics.brightness = ex.mean;
   metrics.clippedHigh = ex.clippedHigh;
   metrics.clippedLow = ex.clippedLow;
+  metrics.p05 = ex.p05;
+  metrics.p95 = ex.p95;
+  const blown = blownFraction(work.rgba, mask);
+  metrics.blown = blown;
   const size = suggestRectifiedSize(quad, undefined, Infinity);
   const longSide = Math.max(size.width, size.height);
   metrics.pictureWidth = size.width;
@@ -147,13 +209,13 @@ export function assessBoxPhoto(photo: RGBAImage, work: WorkImage, quad: Quad, co
     const area = a ? photoRect(work, a) : undefined;
     issues.push({
       code: 'glare',
-      severity: glare.fraction > 0.03 ? 'error' : 'warning',
+      severity: glare.fraction > 0.05 ? 'error' : 'warning',
       message: 'Reflections (glare) hide part of the picture.',
       hint: 'Tilt the box slightly or move away from overhead lights so the reflection disappears.',
       area,
     });
   }
-  issues.push(...exposureIssues(ex.mean, ex.p95, ex.clippedHigh, 'picture'));
+  issues.push(...exposureIssues(ex.mean, ex.p95, blown, 'picture'));
   if (ratio < BOX_QUALITY.perspectiveRatio || angleDev > BOX_QUALITY.perspectiveAngle) {
     issues.push({ code: 'perspective', severity: 'warning', message: 'The box is photographed at a steep angle.', hint: 'Shoot from straight above so the box looks rectangular.' });
   }
@@ -210,6 +272,8 @@ export function assessReference(reference: RGBAImage, grid: GridSpec): QualityRe
   const ex = exposureStats(small, all);
   metrics.brightness = ex.mean;
   metrics.clippedHigh = ex.clippedHigh;
+  const blown = blownFraction(small, all);
+  metrics.blown = blown;
   const glare = measureGlare(small, all);
   metrics.glareFraction = glare.fraction;
   if (glare.fraction > BOX_QUALITY.glareWarn) {
@@ -222,6 +286,6 @@ export function assessReference(reference: RGBAImage, grid: GridSpec): QualityRe
       area: a ? { x: Math.round(a.x / f), y: Math.round(a.y / f), width: Math.round(a.width / f), height: Math.round(a.height / f) } : undefined,
     });
   }
-  issues.push(...exposureIssues(ex.mean, ex.p95, ex.clippedHigh, 'reference picture'));
+  issues.push(...exposureIssues(ex.mean, ex.p95, blown, 'reference picture'));
   return { score: reportScore(issues), issues, metrics };
 }

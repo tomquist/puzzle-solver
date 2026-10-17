@@ -103,8 +103,19 @@ export function scaleExposure(img: RGBAImage, g: number): RGBAImage {
   return out;
 }
 
-/** Render a scene with its degradations; quads are adjusted for cropping. */
+const sceneCache = new Map<string, Scene>();
+
+/** Render a scene with its degradations (cached per spec); quads are adjusted for cropping. */
 export function renderScene(spec: SceneSpec): Scene {
+  const key = JSON.stringify(spec);
+  const hit = sceneCache.get(key);
+  if (hit) return hit;
+  const sc = renderSceneUncached(spec);
+  sceneCache.set(key, sc);
+  return sc;
+}
+
+function renderSceneUncached(spec: SceneSpec): Scene {
   const reference = painting(spec.painting, spec.refSide ?? 900);
   const r = renderBoxPhoto(reference, spec.opts);
   let photo = r.photo;
@@ -234,4 +245,50 @@ export function sweepScenes(): SceneSpec[] {
     }));
   }
   return list;
+}
+
+export interface SweepRow {
+  name: string;
+  /** Max corner error of the best quad, % of the picture diagonal. */
+  error: number;
+  /** Best lid candidate error (% of the lid diagonal); NaN without a frame. */
+  lidError: number;
+  /** Relative error of the estimated aspect ratio of the detected quad. */
+  aspectError: number;
+  confidence: number;
+  labels: string;
+  ms: number;
+  issues: string;
+}
+
+/** Run detectBox on scenes, write overlays for failures (or all with DEBUG_IMAGES) and print a table. */
+export function runSweep(
+  title: string,
+  specs: SceneSpec[],
+  detect: (photo: RGBAImage) => BoxDetection,
+  aspectOf: (q: Quad) => number,
+  debugImages: boolean,
+): SweepRow[] {
+  const rows: SweepRow[] = [];
+  for (const spec of specs) {
+    const sc = renderScene(spec);
+    const t = performance.now();
+    const det = detect(sc.photo);
+    const ms = performance.now() - t;
+    const error = cornerErrorPct(det.quad, sc.pictureQuad);
+    const hasFrame = (spec.opts.frameWidth ?? 0.06) > 0;
+    const lidError = hasFrame ? Math.min(...det.candidates.map((c) => cornerErrorPct(c.quad, sc.lidQuad))) : NaN;
+    const trueAspect = sc.reference.width / sc.reference.height;
+    const aspectError = Math.abs(aspectOf(det.quad) / trueAspect - 1);
+    rows.push({
+      name: spec.name, error, lidError, aspectError, confidence: det.confidence,
+      labels: det.candidates.map((c) => c.label).join(','), ms, issues: det.quality.issues.map((i) => i.code).join(','),
+    });
+    if (debugImages || error > 1.5) saveOverlay(`.debug/box/sweep-${spec.name}.png`, sc, det);
+  }
+  const lines = rows.map((r) =>
+    `${r.name.padEnd(24)} ${r.error.toFixed(2).padStart(6)} %${r.error > 1.5 ? ' X' : '  '} ${Number.isNaN(r.lidError) ? '     -  ' : `${r.lidError.toFixed(2).padStart(6)} %`} ` +
+    `${(100 * r.aspectError).toFixed(1).padStart(5)} % ${r.confidence.toFixed(2)} ${r.ms.toFixed(0).padStart(5)} ms  ${r.labels}  ${r.issues}`);
+  console.log(`\n${title}\nscene                    corner err  lid err  aspect conf  time   candidates  issues\n${lines.join('\n')}`);
+  return rows;
 }

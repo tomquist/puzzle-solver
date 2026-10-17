@@ -55,6 +55,19 @@ export function cornerError(shape: PieceShape, truth: PieceShape): { error: numb
   return { error: best, shift };
 }
 
+/**
+ * Angle error (deg, modulo 90°) between the detected side 0 and the corresponding truth side
+ * (`shift` from {@link cornerError}). Comparing `angleDeg` values directly is wrong when the two
+ * shapes start at different corners, since sides of an irregular cut differ by several degrees.
+ */
+export function sideAngleError(shape: PieceShape, truth: PieceShape, shift: number): number {
+  const a = shape.corners[0], b = shape.corners[1];
+  const p = truth.corners[shift % 4], q = truth.corners[(shift + 1) % 4];
+  const d1 = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
+  const d2 = (Math.atan2(q.y - p.y, q.x - p.x) * 180) / Math.PI;
+  return quarterAngleError(d1, d2);
+}
+
 /** Smallest difference of two angles modulo 90° (degrees). */
 export function quarterAngleError(a: number, b: number): number {
   const d = Math.abs((((a - b) % 90) + 90) % 90);
@@ -113,7 +126,7 @@ export function evaluateScene(seg: Segmentation, truth: PieceTruth[], cut: Jigsa
           for (let j = 0; j < 4; j++) if (r.shape.sides[j].kind === ts.sides[(j + ce.shift) % 4].kind) ok++;
           ev.sidesCorrect = ok;
           ev.pieceKindOk = r.shape.kind === ts.kind;
-          ev.angleError = quarterAngleError(r.shape.angleDeg, ts.angleDeg);
+          ev.angleError = sideAngleError(r.shape, ts, ce.shift);
           ev.bodySizeErrorRel = Math.abs(r.shape.bodySize - ts.bodySize) / ts.bodySize;
         }
       }
@@ -182,7 +195,7 @@ export function exposePhoto(photo: RGBAImage, gain: number, offset = 0): RGBAIma
   return out;
 }
 
-/** Soft white specular blobs on the given items (one per item, radius as a fraction of the body). */
+/** Soft saturated-white specular blobs on the given items (one per item, radius as a fraction of the body). */
 export function addGlare(photo: RGBAImage, items: PieceTruth[], radiusFrac = 0.22, seed = 1): RGBAImage {
   const out = cloneRGBA(photo);
   const rng = new Rng(seed);
@@ -201,7 +214,7 @@ export function addGlare(photo: RGBAImage, items: PieceTruth[], radiusFrac = 0.2
         const a = d < 0.6 ? 1 : d < 1.2 ? (1.2 - d) / 0.6 : 0;
         if (a <= 0) continue;
         const o = (y * out.width + x) * 4;
-        for (let ch = 0; ch < 3; ch++) out.data[o + ch] = out.data[o + ch] * (1 - a) + 252 * a;
+        for (let ch = 0; ch < 3; ch++) out.data[o + ch] = out.data[o + ch] * (1 - a) + 255 * a;
       }
     }
   }
@@ -214,16 +227,20 @@ export function cropPhoto(photo: RGBAImage, rect: Rect): RGBAImage {
 }
 
 /**
- * Simulate a tilted camera: the top edge is shrunk to `topScale` of the bottom edge (keystone).
- * Returns the warped photo and the homography (photo → warped).
+ * Simulate a tilted camera: the top edge is shrunk to `topScale` of the bottom edge (keystone),
+ * then the result is cropped to the fully covered rectangle (no fill colour). Returns the photo and
+ * the homography (input photo → output photo).
  */
-export function perspectivePhoto(photo: RGBAImage, topScale: number, fill: [number, number, number, number]) {
+export function perspectivePhoto(photo: RGBAImage, topScale: number) {
   const { width: w, height: h } = photo;
   const inset = ((1 - topScale) * w) / 2;
   const src: Point[] = [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
   const dst: Point[] = [{ x: inset, y: 0 }, { x: w - inset, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
   const H = findHomography(src, dst)!;
-  return { photo: warpRGBA(photo, H, w, h, { fill }), H };
+  const warped = warpRGBA(photo, H, w, h, { supersample: 2 });
+  const x0 = Math.ceil(inset) + 1;
+  const out = cropRGBA(warped, { x: x0, y: 0, width: w - 2 * x0, height: h });
+  return { photo: out, H: [H[0] - x0 * H[6], H[1] - x0 * H[7], H[2] - x0 * H[8], H[3], H[4], H[5], H[6], H[7], H[8]] };
 }
 
 /**

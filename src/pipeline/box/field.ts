@@ -6,6 +6,7 @@ import { rgbaToGray } from '../../cv/color';
 import { sobel } from '../../cv/filter';
 import type { Point } from '../../cv/geometry';
 import { createGray, createRGBA, type GrayImage, type RGBAImage } from '../../cv/image';
+import { resizeRGBA } from '../../cv/resize';
 
 export interface WorkImage {
   /** Downscaled photo. */
@@ -75,14 +76,27 @@ function blockDownscale(img: RGBAImage, k: number): RGBAImage {
 }
 
 /**
- * Downscale by an integer block factor so the longer side is roughly `target` px (between about
- * 0.67× and 1.5× of it; never upscales). Integer factors keep this cheap even for 12 MP photos.
+ * Downscale so the longer side is about `target` px (never upscales): an integer block average
+ * (cheap even for 12 MP photos), followed by a general resize only when still clearly too large.
  */
 export function makeWorkImage(photo: RGBAImage, target: number): WorkImage {
   const long = Math.max(photo.width, photo.height);
-  const k = Math.max(1, Math.round(long / target));
-  const img = k >= 2 ? blockDownscale(photo, k) : photo;
-  return { rgba: img, gray: rgbaToGray(img), sx: 1 / k, sy: 1 / k };
+  let img = photo;
+  let sx = 1, sy = 1;
+  const k = Math.floor(long / target);
+  if (k >= 2) {
+    img = blockDownscale(photo, k);
+    sx = sy = 1 / k;
+  }
+  const l2 = Math.max(img.width, img.height);
+  if (l2 > target * 1.15) {
+    const f = target / l2;
+    const w = Math.max(1, Math.round(img.width * f)), h = Math.max(1, Math.round(img.height * f));
+    sx *= w / img.width;
+    sy *= h / img.height;
+    img = resizeRGBA(img, w, h);
+  }
+  return { rgba: img, gray: rgbaToGray(img), sx, sy };
 }
 
 /** Working (pixel-centre) coordinates → photo coordinates. */

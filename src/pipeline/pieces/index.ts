@@ -5,5 +5,5 @@
 export { segmentPieces } from './segment';
 export { analyzePieceShape, bodyOrientation, dominantOrientation, orientationHistogram, sideProfile, type ShapeOptions } from './shape';
 export { assessPhoto, assessFrame, outlineEdgeWidths, QUALITY_THRESHOLDS, type EdgeWidthStats } from './quality';
-export { backgroundAt, fitBackground, foregroundScore } from './background';
+export { backgroundAt, fitBackground, foregroundScore, lightingRatio } from './background';
 export type { BackgroundModel, SegmentOptions, Segmentation, SegmentedRegion } from './types';

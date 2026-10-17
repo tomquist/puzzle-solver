@@ -70,7 +70,7 @@ export function quadGeometry(q: Quad, minDim: number): number {
  * Evaluate the quad formed by four pool lines given in cyclic side order. Returns null for
  * non-convex / out-of-image / implausible configurations.
  */
-export function evaluateQuad(ctx: EvalContext, sideLines: number[], cornersIn: Point[]): QuadCandidate | null {
+export function evaluateQuad(ctx: EvalContext, sideLines: number[], cornersIn: Point[], maxBorderSides = 2): QuadCandidate | null {
   const { width: W, height: H, lines } = ctx;
   // Orientation: make clockwise (positive signed area in y-down coordinates).
   let area2 = 0;
@@ -111,14 +111,14 @@ export function evaluateQuad(ctx: EvalContext, sideLines: number[], cornersIn: P
     sides.push(e.s);
     ends.push(e.ea, e.eb);
   }
-  if (borderSides > 2) return null;
+  if (borderSides > maxBorderSides) return null;
   // Corner k joins the end of side k-1 and the start of side k.
   const cornerSup = [0, 1, 2, 3].map((k) => Math.min(ends[2 * ((k + 3) % 4) + 1], ends[2 * k]));
   const mean = (sides[0] + sides[1] + sides[2] + sides[3]) / 4;
   const min = Math.min(...sides);
   const E = (cornerSup[0] + cornerSup[1] + cornerSup[2] + cornerSup[3]) / 4;
   const support = (0.5 * mean + 0.5 * min) * (0.55 + 0.45 * E);
-  const score = support * geom * Math.pow(areaFrac, 0.25) * Math.pow(0.8, borderSides);
+  const score = support * geom * Math.pow(areaFrac, 0.25) * Math.pow(0.92, borderSides);
   return { quad, lines: lineIdx, sides, corners: cornerSup, support, geom, areaFrac, borderSides, score };
 }
 

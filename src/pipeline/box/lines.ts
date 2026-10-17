@@ -73,14 +73,45 @@ export function scoreLine(f: GradientField, line: Line, source: LineSource, r = 
   return { ...l, n, t0, count, prefix, source };
 }
 
-/** Lines along the four photo borders with a constant (prior) support value. */
-export function borderLines(w: number, h: number, support: number): ScoredLine[] {
+/**
+ * Lines along the four photo borders. There is no edge to see where a picture is cut off by the
+ * photo border, so their support is indirect: textured content right at the border (the picture
+ * continues beyond it) gives up to `maxSupport`, a smooth strip (table) gives ~0.
+ */
+export function borderLines(f: GradientField, maxSupport: number): ScoredLine[] {
+  const { width: w, height: h, mag, lo } = f;
   const make = (p: Point, d: Point, len: number, border: number): ScoredLine => {
     const count = Math.floor(len) + 1;
     const prefix = new Float32Array(count + 1);
-    for (let k = 0; k < count; k++) prefix[k + 1] = prefix[k] + support;
+    // Texture fraction in a window 1..5 px deep, ±3 px along the border.
+    const inward = border === 0 ? { x: 0, y: 1 } : border === 1 ? { x: -1, y: 0 } : border === 2 ? { x: 0, y: -1 } : { x: 1, y: 0 };
+    const base = { x: p.x + 0.5 * inward.x + 0.5 * Math.abs(d.x) * 0, y: p.y + 0.5 * inward.y };
+    const tex = new Float32Array(count);
+    for (let k = 0; k < count; k++) {
+      let n = 0, hit = 0;
+      for (let a = -3; a <= 3; a++) {
+        for (let dep = 1; dep <= 5; dep++) {
+          const x = Math.round(base.x + (k + a) * d.x + dep * inward.x), y = Math.round(base.y + (k + a) * d.y + dep * inward.y);
+          if (x < 0 || y < 0 || x >= w || y >= h) continue;
+          n++;
+          if (mag[y * w + x] >= lo) hit++;
+        }
+      }
+      tex[k] = n ? hit / n : 0;
+    }
+    for (let k = 0; k < count; k++) {
+      const v = maxSupport * Math.max(0, Math.min(1, (tex[k] - 0.08) / 0.3));
+      prefix[k + 1] = prefix[k] + v;
+    }
     const l = normalizeLine(p, d, (w - 1) / 2, (h - 1) / 2);
     const range = clipLine(l, w, h) ?? [0, len];
+    // normalizeLine may flip the direction; keep the profile aligned with increasing t.
+    const flipped = l.d.x * d.x + l.d.y * d.y < 0;
+    if (flipped) {
+      const rev = new Float32Array(count + 1);
+      for (let k = 0; k < count; k++) rev[k + 1] = rev[k] + (prefix[count - k] - prefix[count - k - 1]);
+      return { ...l, n: { x: -l.d.y, y: l.d.x }, t0: range[0], count, prefix: rev, source: 'border', border };
+    }
     return { ...l, n: { x: -l.d.y, y: l.d.x }, t0: range[0], count, prefix, source: 'border', border };
   };
   return [

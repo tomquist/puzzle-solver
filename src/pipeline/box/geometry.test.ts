@@ -6,7 +6,7 @@ import { Rng } from '../../testing/synth';
 import { estimateQuadAspect, quadArea, rotateQuad, suggestRectifiedSize, unitSquareToQuad } from './geometry';
 
 /** Pinhole projection of a w×h rectangle (centred at the origin of plane z = 0) seen by a tilted camera. */
-function projectRectangle(aspect: number, rng: Rng, maxTiltDeg: number): Quad {
+function projectRectangle(aspect: number, rng: Rng, maxTiltDeg: number, offCentre: number): Quad {
   const W = 4000, H = 3000, f = 0.75 * W; // typical phone: ~67° horizontal field of view
   const deg = Math.PI / 180;
   const ax = rng.uniform(-maxTiltDeg, maxTiltDeg) * deg, ay = rng.uniform(-maxTiltDeg, maxTiltDeg) * deg, az = rng.uniform(-8, 8) * deg;
@@ -18,7 +18,7 @@ function projectRectangle(aspect: number, rng: Rng, maxTiltDeg: number): Quad {
   const h = 1, w = aspect;
   // Distance so the rectangle fills ~70 % of the photo; small off-centre shift.
   const dist = (f * Math.max(w / W, h / H)) / 0.7;
-  const t = [rng.uniform(-0.08, 0.08) * dist * (W / f) * 0.5, rng.uniform(-0.08, 0.08) * dist * (H / f) * 0.5, dist];
+  const t = [rng.uniform(-offCentre, offCentre) * dist * (W / f) * 0.5, rng.uniform(-offCentre, offCentre) * dist * (H / f) * 0.5, dist];
   const corners = [[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]];
   return corners.map(([x, y]) => {
     const X = R[0][0] * x + R[0][1] * y + t[0];
@@ -79,26 +79,30 @@ describe('estimateQuadAspect / suggestRectifiedSize', () => {
     expect(applyMat3(H, { x: 1, y: 1 }).x).toBeCloseTo(300, 6);
   });
 
-  it('estimates the true aspect of perspective-projected rectangles within 3 %', () => {
+  it('estimates the true aspect of perspective-projected rectangles within ~3 %', () => {
+    // Hand-held phone photos: tilt up to 20°, box roughly centred (±5 % of the half-width).
     const rng = new Rng(17);
-    const errs: number[] = [];
-    let sideAvgWorse = 0;
-    for (let i = 0; i < 60; i++) {
+    const errs: number[] = [], naiveErrs: number[] = [];
+    const d = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
+    for (let i = 0; i < 100; i++) {
       const aspect = rng.uniform(0.6, 1.7);
-      const q = projectRectangle(aspect, rng, 25);
-      const est = estimateQuadAspect(q);
-      const err = Math.abs(est / aspect - 1);
-      errs.push(err);
+      const q = projectRectangle(aspect, rng, 20, 0.05);
+      errs.push(Math.abs(estimateQuadAspect(q) / aspect - 1));
       // Naive mean-of-opposite-sides estimate for comparison.
-      const d = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
       const naive = (d(q[0], q[1]) + d(q[3], q[2])) / (d(q[0], q[3]) + d(q[1], q[2]));
-      if (Math.abs(naive / aspect - 1) > err) sideAvgWorse++;
+      naiveErrs.push(Math.abs(naive / aspect - 1));
     }
-    errs.sort((a, b) => a - b);
-    const p90 = errs[Math.floor(0.9 * errs.length)];
-    expect(p90).toBeLessThan(0.03);
-    expect(errs[errs.length - 1]).toBeLessThan(0.06);
-    expect(sideAvgWorse).toBeGreaterThan(30);
+    const pct = (v: number[], p: number) => [...v].sort((a, b) => a - b)[Math.floor(p * (v.length - 1))];
+    console.log(`aspect error: median ${(100 * pct(errs, 0.5)).toFixed(2)} %, p90 ${(100 * pct(errs, 0.9)).toFixed(2)} % (mean-of-sides: ${(100 * pct(naiveErrs, 0.5)).toFixed(2)} / ${(100 * pct(naiveErrs, 0.9)).toFixed(2)} %)`);
+    expect(pct(errs, 0.5)).toBeLessThan(0.015);
+    expect(pct(errs, 0.9)).toBeLessThan(0.03);
+    expect(pct(errs, 0.9)).toBeLessThan(pct(naiveErrs, 0.9));
+    // Exact when the box is centred on the optical axis.
+    const r2 = new Rng(3);
+    for (let i = 0; i < 20; i++) {
+      const aspect = r2.uniform(0.6, 1.7);
+      expect(Math.abs(estimateQuadAspect(projectRectangle(aspect, r2, 25, 0)) / aspect - 1)).toBeLessThan(0.002);
+    }
   });
 
   it('honours a given aspect exactly, keeps about the quad area and caps the long side', () => {

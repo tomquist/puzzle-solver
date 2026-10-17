@@ -86,10 +86,11 @@ const dot3 = (a: V3, b: V3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 /**
  * Estimate the true width/height ratio of the rectangle seen as `quad` under perspective
  * (Zhang & He, "Whiteboard scanning and image enhancement", 2007). The principal point is assumed
- * at the projected rectangle centre (intersection of the diagonals); the focal length is recovered
- * from the two vanishing points when they are consistent, otherwise a typical phone focal length
- * (≈ the quad size) is assumed. For an affine (parallelogram) quad this reduces to the ratio of the
- * mean opposite side lengths.
+ * at the projected rectangle centre (intersection of the diagonals) because the photo size is not
+ * known here; the focal length is recovered from the two vanishing points when plausible, otherwise
+ * a typical phone focal length (≈ 1.1 × the quad size) is assumed. Exact for a centred rectangle;
+ * a box photographed off-centre adds a small error. For a parallelogram this reduces to the ratio
+ * of the mean opposite side lengths.
  */
 export function estimateQuadAspect(quad: Quad): number {
   const [tl, tr, br, bl] = quad;
@@ -111,13 +112,15 @@ export function estimateQuadAspect(quad: Quad): number {
   const k3 = dot3(c14, m2) / den3;
   const n2: V3 = [k2 * m2[0] - m1[0], k2 * m2[1] - m1[1], k2 * m2[2] - m1[2]];
   const n3: V3 = [k3 * m3[0] - m1[0], k3 * m3[1] - m1[1], k3 * m3[2] - m1[2]];
-  // Focal length (in units of the mean side length) from the orthogonality of the vanishing directions.
-  const DEFAULT_F2 = 1.1 * 1.1, MIN_F2 = 0.5 * 0.5, MAX_F2 = 6 * 6;
+  // Focal length (in units of the mean side length) from the orthogonality of the vanishing
+  // directions; outside the plausible range of phone cameras (where the estimate is dominated by
+  // the unknown principal point) a typical value is used instead.
+  const DEFAULT_F2 = 1.1 * 1.1, MIN_F2 = 0.8 * 0.8, MAX_F2 = 3 * 3;
   let f2 = DEFAULT_F2;
   const zz = n2[2] * n3[2];
   if (Math.abs(zz) > 1e-9) {
     const est = -(n2[0] * n3[0] + n2[1] * n3[1]) / zz;
-    if (Number.isFinite(est) && est > 0) f2 = Math.min(MAX_F2, Math.max(MIN_F2, est));
+    if (Number.isFinite(est) && est >= MIN_F2 && est <= MAX_F2) f2 = est;
   }
   const num = (n2[0] * n2[0] + n2[1] * n2[1]) / f2 + n2[2] * n2[2];
   const den = (n3[0] * n3[0] + n3[1] * n3[1]) / f2 + n3[2] * n3[2];
