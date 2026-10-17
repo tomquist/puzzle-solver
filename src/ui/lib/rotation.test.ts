@@ -51,11 +51,14 @@ describe('turn instructions', () => {
     expect(nearestQuarterTurn(185)).toBe(180);
   });
   it('describes the turn with exact degrees', () => {
-    expect(turnInstruction(0)).toMatchObject({ quarter: 0, short: 'Keep as it is', exact: '' });
+    expect(turnInstruction(0)).toMatchObject({ quarter: 0, short: 'Already upright', exact: '' });
     expect(turnInstruction(87)).toMatchObject({ quarter: 90, short: 'Turn ↻ 90°', exact: 'exactly 87° clockwise' });
     expect(turnInstruction(275)).toMatchObject({ quarter: 270, short: 'Turn ↺ 90°', exact: 'exactly 85° counter-clockwise', degrees: -85 });
     expect(turnInstruction(180)).toMatchObject({ quarter: 180, short: 'Turn ↻ 180°', exact: 'exactly 180°' });
-    expect(turnInstruction(12).short).toBe('Keep as it is');
+    expect(turnInstruction(12).short).toBe('Already upright');
+    expect(turnInstruction(36).short).toBe('Turn ↻ about 35°');
+    expect(turnInstruction(300).short).toBe('Turn ↺ about 60°');
+    expect(turnInstruction(200).short).toBe('Turn ↻ 180°');
     expect(turnInstruction(12).exact).toBe('exactly 12° clockwise');
   });
   it('makes compact badges', () => {

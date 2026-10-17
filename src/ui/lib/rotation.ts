@@ -37,7 +37,10 @@ export function nearestQuarterTurn(rotationDeg: number): QuarterTurn {
 
 export interface TurnInstruction {
   quarter: QuarterTurn;
-  /** Short instruction for the nearest quarter turn, e.g. "Turn ↻ 90°", "Keep as it is". */
+  /**
+   * Short instruction, e.g. "Turn ↻ 90°", "Already upright", or "Turn ↻ about 35°" when the piece
+   * lies far (> 20°) from any quarter turn.
+   */
   short: string;
   /** Exact rotation, e.g. "exactly 84° clockwise" ("" when < 1°). */
   exact: string;
@@ -49,12 +52,15 @@ export interface TurnInstruction {
 export function turnInstruction(rotationDeg: number): TurnInstruction {
   const degrees = signedDeg(rotationDeg);
   const quarter = nearestQuarterTurn(rotationDeg);
+  const quarterSigned = quarter === 270 ? -90 : quarter === 180 ? (degrees < 0 ? -180 : 180) : quarter;
+  const residual = Math.abs(degrees - quarterSigned);
+  const abs = Math.round(Math.abs(degrees));
   const short =
-    quarter === 0 ? 'Keep as it is'
+    residual > 20 ? `Turn ${degrees > 0 ? '↻' : '↺'} about ${Math.round(Math.abs(degrees) / 5) * 5}°`
+    : quarter === 0 ? 'Already upright'
     : quarter === 90 ? 'Turn ↻ 90°'
     : quarter === 180 ? 'Turn ↻ 180°'
     : 'Turn ↺ 90°';
-  const abs = Math.round(Math.abs(degrees));
   let exact = '';
   if (abs >= 1) {
     exact = abs === 180 ? 'exactly 180°' : `exactly ${abs}° ${degrees > 0 ? 'clockwise' : 'counter-clockwise'}`;
