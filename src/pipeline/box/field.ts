@@ -5,8 +5,7 @@
 import { rgbaToGray } from '../../cv/color';
 import { sobel } from '../../cv/filter';
 import type { Point } from '../../cv/geometry';
-import { createRGBA, type GrayImage, type RGBAImage } from '../../cv/image';
-import { resizeRGBA } from '../../cv/resize';
+import { createGray, createRGBA, type GrayImage, type RGBAImage } from '../../cv/image';
 
 export interface WorkImage {
   /** Downscaled photo. */
@@ -75,25 +74,15 @@ function blockDownscale(img: RGBAImage, k: number): RGBAImage {
   return out;
 }
 
-/** Downscale so the longer side is about `target` px (never upscales). */
+/**
+ * Downscale by an integer block factor so the longer side is roughly `target` px (between about
+ * 0.67× and 1.5× of it; never upscales). Integer factors keep this cheap even for 12 MP photos.
+ */
 export function makeWorkImage(photo: RGBAImage, target: number): WorkImage {
   const long = Math.max(photo.width, photo.height);
-  let img = photo;
-  let sx = 1, sy = 1;
-  const k = Math.floor(long / target);
-  if (k >= 2) {
-    img = blockDownscale(photo, k);
-    sx = sy = 1 / k;
-  }
-  const l2 = Math.max(img.width, img.height);
-  if (l2 > target * 1.15) {
-    const f = target / l2;
-    const w = Math.max(1, Math.round(img.width * f)), h = Math.max(1, Math.round(img.height * f));
-    sx *= w / img.width;
-    sy *= h / img.height;
-    img = resizeRGBA(img, w, h);
-  }
-  return { rgba: img, gray: rgbaToGray(img), sx, sy };
+  const k = Math.max(1, Math.round(long / target));
+  const img = k >= 2 ? blockDownscale(photo, k) : photo;
+  return { rgba: img, gray: rgbaToGray(img), sx: 1 / k, sy: 1 / k };
 }
 
 /** Working (pixel-centre) coordinates → photo coordinates. */
@@ -120,18 +109,36 @@ export interface GradientField {
 /** cos(25°): gradient direction must lie within 25° of the tested normal. */
 const COS_TOL = 0.906;
 
-/** Sobel gradient field of the working image with noise-adaptive support thresholds. */
-export function makeGradientField(gray: GrayImage): GradientField {
-  const { gx, gy, magnitude } = sobel(gray);
-  const mag = magnitude.data;
+/**
+ * Colour gradient field of the working image: per pixel the Sobel response of the R, G or B
+ * channel with the largest magnitude (so iso-luminant edges, e.g. a blue lid on brown wood, are
+ * kept), with noise-adaptive support thresholds.
+ */
+export function makeGradientField(img: RGBAImage): GradientField {
+  const { width: w, height: h, data } = img;
+  const n = w * h;
+  const gx = new Float32Array(n), gy = new Float32Array(n), mag = new Float32Array(n);
+  const ch = createGray(w, h);
+  for (let c = 0; c < 3; c++) {
+    for (let i = 0, p = c; i < n; i++, p += 4) ch.data[i] = data[p];
+    const s = sobel(ch);
+    const sx = s.gx.data, sy = s.gy.data, sm = s.magnitude.data;
+    for (let i = 0; i < n; i++) {
+      if (sm[i] > mag[i]) {
+        mag[i] = sm[i];
+        gx[i] = sx[i];
+        gy[i] = sy[i];
+      }
+    }
+  }
   // Robust noise level: median gradient magnitude over a sparse sample.
   const sample: number[] = [];
-  const step = Math.max(1, Math.floor(mag.length / 20000));
-  for (let i = 0; i < mag.length; i += step) sample.push(mag[i]);
+  const step = Math.max(1, Math.floor(n / 20000));
+  for (let i = 0; i < n; i += step) sample.push(mag[i]);
   sample.sort((a, b) => a - b);
   const med = sample[Math.floor(sample.length / 2)] ?? 0;
-  const lo = Math.max(10, Math.min(40, 1.5 * med));
-  return { width: gray.width, height: gray.height, gx: gx.data, gy: gy.data, mag, lo, hi: lo * 3 };
+  const lo = Math.max(12, Math.min(45, 1.5 * med));
+  return { width: w, height: h, gx, gy, mag, lo, hi: lo * 3 };
 }
 
 /**

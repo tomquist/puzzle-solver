@@ -17,7 +17,7 @@ import type { Quad } from '../../cv/geometry';
 import type { RGBAImage } from '../../cv/image';
 import type { BoxDetection } from '../../model/types';
 import { makeGradientField, makeWorkImage, toPhoto, type GradientField, type WorkImage } from './field';
-import { directedLines, frameEvidence, nestedBands, type FrameEvidence } from './frame';
+import { directedLines, frameEvidence, nestedBands, snapSideLines, type FrameEvidence } from './frame';
 import { maxCornerDistance } from './geometry';
 import { borderLines, houghCandidates, refitToEdges, sameLine, scoreLine, totalSupport, type Line, type LineSource, type ScoredLine } from './lines';
 import { assessBoxPhoto } from './quality';
@@ -118,24 +118,29 @@ function analyseStructure(ranked: QuadCandidate[], work: WorkImage, f: GradientF
   let evidence: FrameEvidence | undefined;
   for (let iter = 0; iter < 3; iter++) {
     let best: { c: QuadCandidate; ev: FrameEvidence; v: number } | null = null;
+    let bestWeak: { c: QuadCandidate; v: number } | null = null;
     for (const c of ranked) {
       if (c === cur || c.support < Math.max(0.4, 0.6 * cur.support)) continue;
       const nb = nestedBands(cur.quad, c.quad);
       if (!nb || !isBand(nb.bands)) continue;
       const ev = frameEvidence(work.rgba, f, cur.quad, nb.bands);
-      const v = ev.evidence * c.support;
+      const need = ev.bandSides >= 3 ? 0.35 : 0.55;
+      if (ev.evidence < need) {
+        const v = c.support * c.geom;
+        if (!bestWeak || v > bestWeak.v) bestWeak = { c, v };
+        continue;
+      }
+      // Prefer the most complete frame (more sides with a band), then evidence and edge support.
+      const v = ev.evidence * c.support * (1 + 0.2 * ev.bandSides);
       if (!best || v > best.v) best = { c, ev, v };
     }
-    if (!best) break;
-    const need = best.ev.bandSides >= 3 ? 0.35 : 0.55;
-    if (best.ev.evidence >= need) {
-      lid ??= cur;
-      cur = best.c;
-      evidence = best.ev;
-    } else {
-      frameInner = best.c;
+    if (!best) {
+      frameInner = bestWeak?.c;
       break;
     }
+    lid ??= cur;
+    cur = best.c;
+    evidence = best.ev;
   }
   return { picture: cur, lid, frameInner, evidence };
 }
@@ -155,7 +160,7 @@ export function detectBoxDebug(photo: RGBAImage, opts: DetectBoxOptions = {}): {
   };
   const work = makeWorkImage(photo, opts.workSide ?? 800);
   const W = work.rgba.width, H = work.rgba.height;
-  const field = makeGradientField(work.gray);
+  const field = makeGradientField(work.rgba);
   lap('prepare');
   const { edges, lines: hough } = houghCandidates(work.gray, field);
   lap('hough');
@@ -174,7 +179,7 @@ export function detectBoxDebug(photo: RGBAImage, opts: DetectBoxOptions = {}): {
   if (ranked.length) {
     const seeds = ranked.slice(0, 3).filter((c, i, a) => a.findIndex((o) => maxCornerDistance(o.quad, c.quad) < 0.05 * Math.hypot(W, H)) === i);
     const extra: Line[] = [];
-    for (const s of seeds) extra.push(...directedLines(field, s.quad));
+    for (const s of seeds) extra.push(...snapSideLines(field, s.quad), ...directedLines(field, s.quad));
     const border = pool.lines.filter((l) => l.border !== undefined);
     pool.lines.splice(0, pool.lines.length, ...pool.lines.filter((l) => l.border === undefined));
     for (const l of extra) pool.add(l, 'directed', false);

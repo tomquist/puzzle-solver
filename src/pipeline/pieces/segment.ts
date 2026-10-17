@@ -17,7 +17,7 @@ import { otsuThreshold, threshold } from '../../cv/threshold';
 import type { DetectedRegion, PieceShape, QualityIssue, RegionKind } from '../../model/types';
 import { fitBackground, foregroundScore } from './background';
 import { assessPhoto, assessRegions } from './quality';
-import { analyzePieceShape, orientationHistogram } from './shape';
+import { analyzePieceShape, bodyOrientation, orientationHistogram } from './shape';
 import type { BackgroundModel, SegmentOptions, Segmentation, SegmentedRegion } from './types';
 import { median, offsetPoints } from './util';
 
@@ -27,8 +27,11 @@ const REFERENCE_CONFIDENCE = 0.45;
 const MIN_SHAPE_CONFIDENCE = 0.3;
 /** Shapes below this confidence raise 'shape_uncertain'. */
 const UNCERTAIN_CONFIDENCE = 0.5;
-/** Outline alignment (fraction of straight outline length on one grid) below which a patch looks like touching pieces. */
-const PATCH_ALIGNMENT = 0.5;
+/**
+ * Opening radius (fraction of the body size) that separates touching pieces: contacts narrower
+ * than ~0.4 body sizes break, while pieces of an assembled patch share whole sides and stay joined.
+ */
+const NECK_RADIUS = 0.2;
 
 /** A region candidate: local mask (tight bbox) plus derived geometry. */
 interface Candidate {
@@ -40,7 +43,6 @@ interface Candidate {
   contour: Point[];
   shape: PieceShape | null;
   orientation: number;
-  alignment: number;
   /** Candidates split from the same touching cluster share a group number. */
   group?: number;
 }
@@ -49,8 +51,7 @@ function makeCandidate(mask: Mask, bbox: Rect, photoW: number, photoH: number, a
   const contour = offsetPoints(traceOuterContour(mask), bbox.x, bbox.y);
   const touchesBorder = bbox.x <= 0 || bbox.y <= 0 || bbox.x + bbox.width >= photoW || bbox.y + bbox.height >= photoH;
   const shape = touchesBorder ? null : analyzePieceShape(contour);
-  const o = orientationHistogram(contour);
-  return { mask, bbox, area: area ?? maskArea(mask), touchesBorder, contour, shape, orientation: o.angle, alignment: o.alignment };
+  return { mask, bbox, area: area ?? maskArea(mask), touchesBorder, contour, shape, orientation: orientationHistogram(contour).angle };
 }
 
 /** Foreground mask by hysteresis: pixels above `low` 8-connected to a pixel above `high`. */
@@ -212,7 +213,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     for (const c of cands) {
       const confidentSingle = c.shape !== null && c.shape.confidence >= 0.7;
       if (c.area > 1.4 * refArea && !confidentSingle) {
-        const parts = splitAtNecks(c, Math.max(2, 0.13 * refBody), 0.3 * refArea);
+        const parts = splitAtNecks(c, Math.max(2, NECK_RADIUS * refBody), 0.3 * refArea);
         if (parts && parts.every((p) => maskArea(p.mask) >= fragRatio * refArea)) {
           group++;
           for (const p of parts) out.push({ ...makeCandidate(p.mask, p.bbox, W, H), group });
@@ -234,7 +235,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     if (ratio < fragRatio) kind = 'unknown';
     else if (ratio > patchRatio && !confidentSingle) kind = 'patch';
     const shape = kind === 'piece' && c.shape && c.shape.confidence >= MIN_SHAPE_CONFIDENCE ? c.shape : undefined;
-    const orientationDeg = shape ? shape.angleDeg : c.orientation;
+    const orientationDeg = shape ? bodyOrientation(shape) : c.orientation;
     const contour = simplifyPolygon(smoothContour(c.contour, 0.7), 0.5);
     const region: DetectedRegion = {
       id: i + 1,
@@ -266,8 +267,6 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     }
     if (c.group !== undefined) {
       issues.push({ code: 'touching_pieces', severity: 'warning', message: 'Touching pieces were separated automatically.', hint: 'Leave a small gap between pieces.', regionIds: groups.get(c.group), area: r.bbox });
-    } else if (r.kind === 'patch' && c.alignment < PATCH_ALIGNMENT) {
-      issues.push({ code: 'touching_pieces', severity: 'warning', message: 'Several pieces seem to touch.', hint: 'Leave a small gap between loose pieces.', regionIds: [r.id], area: r.bbox });
     }
     if (r.kind === 'piece' && !c.touchesBorder && (!c.shape || c.shape.confidence < UNCERTAIN_CONFIDENCE)) {
       issues.push({ code: 'shape_uncertain', severity: 'info', message: 'Piece outline is unclear.', hint: 'Use a plain background and spread the pieces out.', regionIds: [r.id], area: r.bbox });

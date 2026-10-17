@@ -12,7 +12,7 @@ export const CHANNEL_WEIGHTS: [number, number, number] = [1, 1.6, 1.6];
 export const COARSE_BLUR = 0;
 
 /** Target pixels-per-cell of the pyramid levels (capped at the native resolution). */
-const LEVEL_PPC = process.env.PPC ? JSON.parse(process.env.PPC) as number[] : [8, 16, 32];
+const LEVEL_PPC = process.env.PPC ? JSON.parse(process.env.PPC) as number[] : [4, 8, 16, 32];
 
 function padLevel(img: FloatImage, pad: number): { data: Float32Array; sq: Float32Array; stride: number; rows: number } {
   const { width: w, height: h } = img;
@@ -93,12 +93,12 @@ export function buildReferenceIndex(reference: RGBAImage, grid: GridSpec, cut: C
     // The coarsest level is searched with stride 2, so it is band-limited (wider correlation peaks);
     // the template gets the same extra blur. A slight blur on every level makes the reference as soft
     // as the resampled piece templates.
-    const blur = li === 0 && ppcs.length > 1 ? COARSE_BLUR : 0;
+    const blur = li === 0 && ppcs.length > 1 && COARSE_BLUR > 0 ? COARSE_BLUR : 0;
     img = gaussianBlurFloat(img, Math.hypot(0.5, blur));
     const pad = Math.ceil(1.1 * ppc) + 3;
     const p = padLevel(img, pad);
     const level: RefLevel = { ppc, scaleX: img.width / W, scaleY: img.height / H, width: img.width, height: img.height, blur, pad, ...p, center: [0, 0, 0] };
-    if (li === 0) addPrefix(level);
+    if (ppc < 12) addPrefix(level);
     return level;
   });
   return { width: W, height: H, grid: { rows: grid.rows, cols: grid.cols }, cut, cellW, cellH, channelWeights: [wl, wa, wb], levels };

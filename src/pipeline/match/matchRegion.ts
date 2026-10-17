@@ -152,20 +152,76 @@ function topLeftFor(level: RefLevel, t: Template, ref: Point): { X: number; Y: n
   };
 }
 
-/** Dense coarse search (stride 1) of one hypothesis; collects local maxima (priors applied to them). */
-function coarseSearch(index: ReferenceIndex, level: RefLevel, hyp: Hypothesis, t: Template, sp: ScoreParams, out: Candidate[]): void {
+/** Fraction of prefilter positions whose neighbourhoods are evaluated on the coarse level. */
+const PREFILTER_KEEP = +(process.env.PREKEEP ?? 0.1);
+const PRE_WIN = +(process.env.PREWIN ?? 1);
+
+/** Range of top-left positions whose pivot lies inside the picture (± a small margin). */
+function searchBounds(level: RefLevel, t: Template): { x0: number; x1: number; y0: number; y1: number } | null {
   const mx = 0.15 * level.ppc;
-  const xMin = Math.max(0, Math.ceil(level.pad - mx - t.cx));
-  const xMax = Math.min(level.stride - t.w, Math.floor(level.pad + level.width - 1 + mx - t.cx));
-  const yMin = Math.max(0, Math.ceil(level.pad - mx - t.cy));
-  const yMax = Math.min(level.rows - t.h, Math.floor(level.pad + level.height - 1 + mx - t.cy));
-  if (xMax < xMin || yMax < yMin) return;
-  const nx = xMax - xMin + 1, ny = yMax - yMin + 1;
+  const x0 = Math.max(0, Math.ceil(level.pad - mx - t.cx));
+  const x1 = Math.min(level.stride - t.w, Math.floor(level.pad + level.width - 1 + mx - t.cx));
+  const y0 = Math.max(0, Math.ceil(level.pad - mx - t.cy));
+  const y1 = Math.min(level.rows - t.h, Math.floor(level.pad + level.height - 1 + mx - t.cy));
+  return x1 < x0 || y1 < y0 ? null : { x0, x1, y0, y1 };
+}
+
+/**
+ * Dense coarse search (stride 1) of one hypothesis on level `ci`; collects local maxima (priors
+ * applied to them). When a prefilter level exists (index 0, below `ci`), only the neighbourhoods of
+ * its best positions are evaluated on the coarse level.
+ */
+function coarseSearch(index: ReferenceIndex, ci: number, hyp: Hypothesis, cache: TemplateCache, sp: ScoreParams, out: Candidate[]): void {
+  const level = index.levels[ci];
+  const t = cache.get(level, ci, hyp.map);
+  if (!t) return;
+  const b = searchBounds(level, t);
+  if (!b) return;
+  const nx = b.x1 - b.x0 + 1, ny = b.y1 - b.y0 + 1;
   const map = new Float32Array(nx * ny);
-  scoreMap(level, t, xMin, xMax, yMin, yMax, sp, map);
+  const pl = ci > 0 ? index.levels[0] : null;
+  const t0 = pl ? cache.get(pl, 0, hyp.map) : null;
+  const b0 = pl && t0 ? searchBounds(pl, t0) : null;
+  if (pl && t0 && b0) {
+    const nx0 = b0.x1 - b0.x0 + 1, ny0 = b0.y1 - b0.y0 + 1;
+    const pre = new Float32Array(nx0 * ny0);
+    scoreMap(pl, t0, b0.x0, b0.x1, b0.y0, b0.y1, sp, pre);
+    const sorted = Float32Array.from(pre).sort();
+    const thr = sorted[Math.max(0, Math.floor(sorted.length * (1 - PREFILTER_KEEP)) - 1)];
+    const sel = new Uint8Array(nx * ny);
+    const ax = level.scaleX / pl.scaleX, ay = level.scaleY / pl.scaleY;
+    for (let j = 0; j < ny0; j++) {
+      for (let i = 0; i < nx0; i++) {
+        if (pre[j * nx0 + i] < thr) continue;
+        // prefilter top-left -> pivot (level px) -> coarse top-left
+        const px = (b0.x0 + i + t0.cx - pl.pad + 0.5) * ax - 0.5 + level.pad - t.cx - b.x0;
+        const py = (b0.y0 + j + t0.cy - pl.pad + 0.5) * ay - 0.5 + level.pad - t.cy - b.y0;
+        const cx = Math.round(px), cy = Math.round(py);
+        for (let y = Math.max(0, cy - PRE_WIN); y <= Math.min(ny - 1, cy + PRE_WIN); y++) {
+          for (let x = Math.max(0, cx - PRE_WIN); x <= Math.min(nx - 1, cx + PRE_WIN); x++) sel[y * nx + x] = 1;
+        }
+      }
+    }
+    map.fill(-Infinity);
+    for (let y = 0; y < ny; y++) {
+      for (let x = 0; x < nx; ) {
+        if (!sel[y * nx + x]) {
+          x++;
+          continue;
+        }
+        let e = x;
+        while (e + 1 < nx && sel[y * nx + e + 1]) e++;
+        scoreMap(level, t, b.x0 + x, b.x0 + e, b.y0 + y, b.y0 + y, sp, map.subarray(y * nx + x, y * nx + e + 1));
+        x = e + 1;
+      }
+    }
+  } else {
+    scoreMap(level, t, b.x0, b.x1, b.y0, b.y1, sp, map);
+  }
   for (let j = 0; j < ny; j++) {
     for (let i = 0; i < nx; i++) {
       const v = map[j * nx + i];
+      if (v === -Infinity) continue;
       let isMax = true;
       for (let dj = -1; dj <= 1 && isMax; dj++) {
         for (let di = -1; di <= 1; di++) {
@@ -180,8 +236,8 @@ function coarseSearch(index: ReferenceIndex, level: RefLevel, hyp: Hypothesis, t
         }
       }
       if (!isMax) continue;
-      const ref = pivotRef(level, t, xMin + i, yMin + j);
-      out.push({ hyp, map: hyp.map, ref, raw: v, score: v - gridPrior(index, hyp, ref), level: 0 });
+      const ref = pivotRef(level, t, b.x0 + i, b.y0 + j);
+      out.push({ hyp, map: hyp.map, ref, raw: v, score: v - gridPrior(index, hyp, ref), level: ci });
     }
   }
 }
@@ -214,7 +270,7 @@ class TemplateCache {
     const key = `${li}|${m.pivot.x.toFixed(3)}|${m.pivot.y.toFixed(3)}|${m.phi.toFixed(5)}|${m.s.toFixed(6)}`;
     let t = this.cache.get(key);
     if (t === undefined) {
-      t = buildTemplate(this.src, m, level);
+      t = buildTemplate(this.src, m, level, 0.6, level.ppc < 6 ? 5 : 12);
       this.cache.set(key, t);
     }
     return t;
@@ -301,21 +357,17 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   const L = index.levels.length;
   const cell = Math.sqrt(index.cellW * index.cellH);
 
-  // 1. Coarse dense search.
+  // 1. Coarse dense search (on the first level with >= 6 px per cell, prefiltered by level 0).
+  const ci = Math.max(0, index.levels.findIndex((l) => l.prefix && l.ppc >= 6));
   const coarse: Candidate[] = [];
-  const level0 = index.levels[0];
-  for (const h of hyps) {
-    const t = cache.get(level0, 0, h.map);
-    if (!t) continue;
-    coarseSearch(index, level0, h, t, sp, coarse);
-  }
+  for (const h of hyps) coarseSearch(index, ci, h, cache, sp, coarse);
   if (coarse.length === 0) return empty;
   const nKeep = isPatch ? 24 : 30;
   let cands = suppress(coarse, 0.6 * cell, nKeep);
 
   // 2. Position refinement through the finer levels.
-  for (let li = 1; li < L; li++) {
-    const r = Math.ceil((index.levels[li].ppc / index.levels[li - 1].ppc) * (li === 1 ? 1.5 : 1)) + 1;
+  for (let li = ci + 1; li < L; li++) {
+    const r = Math.ceil((index.levels[li].ppc / index.levels[li - 1].ppc) * (li === ci + 1 ? 1.5 : 1)) + 1;
     const next: Candidate[] = [];
     for (const c of cands) {
       const rc = refinePosition(index, li, c, cache, r, sp);

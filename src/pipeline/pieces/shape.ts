@@ -17,6 +17,10 @@ export interface ShapeOptions {
 }
 
 const DEG = 180 / Math.PI;
+/** Half-width (deg) of the window around the histogram peak used to refine the dominant orientation. */
+const ALIGN_WINDOW = 20;
+/** Half-width (deg) within which outline length counts as aligned with the dominant orientation. */
+const ALIGNED_TOL = 7;
 
 /** Reduce an angle in degrees to (−45, 45]. */
 export function reduceQuarter(deg: number): number {
@@ -328,13 +332,15 @@ export function analyzePieceShape(contour: Point[], opts: ShapeOptions = {}): Pi
     x: (corners[0].x + corners[1].x + corners[2].x + corners[3].x) / 4,
     y: (corners[0].y + corners[1].y + corners[2].y + corners[3].y) / 4,
   };
-  // Confidence: rectangle quality, side clarity and uniqueness of the corner choice.
-  const rectConf = Math.exp(-best.total / 0.6);
-  const sideConf = sideEvals.reduce((s, e) => s * (0.55 + 0.45 * e.clarity), 1);
-  const margin = Number.isFinite(second) ? Math.min(1, (second - best.total) / 0.25) : 1;
-  let confidence = rectConf * sideConf * (0.6 + 0.4 * margin);
+  // Confidence: rectangle quality (logistic in the cost; typical good bodies cost 0.3–0.8), side
+  // clarity and uniqueness of the corner choice (cost margin to a clearly different quad).
+  const rectConf = 1 / (1 + Math.exp((best.total - 1.0) / 0.15));
+  const sideConf = sideEvals.reduce((s, e) => s * (0.6 + 0.4 * e.clarity), 1);
+  const margin = Number.isFinite(second) ? Math.max(0, Math.min(1, (second - best.total) / 0.4)) : 1;
+  let confidence = rectConf * sideConf * (0.5 + 0.5 * margin);
   if (kind === 'unknown') confidence *= 0.5;
   confidence = Math.max(0, Math.min(1, confidence));
+  if ((globalThis as unknown as { __shapeDebug?: boolean }).__shapeDebug) console.log('DBG cost', best.q.cost.toFixed(3), 'total', best.total.toFixed(3), 'second', second.toFixed(3), 'rect', rectConf.toFixed(2), 'side', sideConf.toFixed(2), 'clar', sideEvals.map((e) => e.clarity.toFixed(2)).join('/'), 'margin', margin.toFixed(2), 'L', Lest.toFixed(0));
   return { corners, sides, angleDeg, bodySize, center, kind, confidence };
 }
 
@@ -374,6 +380,23 @@ function refineCorners(c: Point[], idx: readonly number[], Lest: number, ds: num
     outIdx.push(bi);
   }
   return { corners, idx: outIdx };
+}
+
+/**
+ * Grid orientation of a piece body in degrees, (−45, 45]: circular mean (period 90°) of the
+ * directions of its four corner-to-corner sides. Less sensitive to an irregular cut than
+ * `angleDeg`, which follows side 0 only.
+ */
+export function bodyOrientation(shape: PieceShape): number {
+  let cx = 0, cy = 0;
+  for (let j = 0; j < 4; j++) {
+    const a = shape.corners[j], b = shape.corners[(j + 1) % 4];
+    const r = 4 * Math.atan2(b.y - a.y, b.x - a.x);
+    const w = Math.hypot(b.x - a.x, b.y - a.y);
+    cx += w * Math.cos(r);
+    cy += w * Math.sin(r);
+  }
+  return reduceQuarter((Math.atan2(cy, cx) * DEG) / 4);
 }
 
 /**
@@ -425,20 +448,26 @@ export function orientationHistogram(contour: Point[]): { angle: number; alignme
   let peak = 0;
   for (let i = 1; i < BINS; i++) if (sm[i] > sm[peak]) peak = i;
   const peakDeg = (peak + 0.5) / 2;
-  // Refine with a weighted circular mean (period 90°) near the peak.
-  let cx = 0, cy = 0, total = 0, aligned = 0;
-  for (let i = 0; i < N; i++) {
-    let d = ang[i] - peakDeg;
-    if (d > 45) d -= 90;
-    if (d <= -45) d += 90;
-    total += wt[i];
-    if (Math.abs(d) <= 7) {
-      aligned += wt[i];
-      const r = (ang[i] * 4 * Math.PI) / 180;
-      cx += wt[i] * Math.cos(r);
-      cy += wt[i] * Math.sin(r);
+  // Refine with a weighted circular mean (period 90°) near the peak, re-centred once.
+  let mean = peakDeg;
+  let total = 0, aligned = 0;
+  for (let iter = 0; iter < 2; iter++) {
+    let cx = 0, cy = 0;
+    total = 0;
+    aligned = 0;
+    for (let i = 0; i < N; i++) {
+      let d = ang[i] - mean;
+      d -= 90 * Math.round(d / 90);
+      total += wt[i];
+      if (Math.abs(d) <= ALIGNED_TOL) aligned += wt[i];
+      if (Math.abs(d) <= ALIGN_WINDOW) {
+        const r = (ang[i] * 4 * Math.PI) / 180;
+        cx += wt[i] * Math.cos(r);
+        cy += wt[i] * Math.sin(r);
+      }
     }
+    if (cx === 0 && cy === 0) break;
+    mean = (Math.atan2(cy, cx) * DEG) / 4;
   }
-  const mean = total > 0 && (cx !== 0 || cy !== 0) ? (Math.atan2(cy, cx) * DEG) / 4 : peakDeg;
   return { angle: reduceQuarter(mean), alignment: total > 0 ? aligned / total : 0 };
 }

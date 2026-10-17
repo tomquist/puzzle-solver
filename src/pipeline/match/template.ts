@@ -154,6 +154,8 @@ export interface Template {
   energy: number;
   /** Mean of the per-pixel squared deviations (variance per pixel, all channels). */
   variance: number;
+  /** Lazily computed pixel runs for prefix-sum scoring. */
+  runs?: { ro: Int32Array; rl: Int32Array };
 }
 
 /**
@@ -341,16 +343,9 @@ export function scoreAt(level: RefLevel, t: Template, X: number, Y: number, p: S
   return ncc - (p.beta * Math.min(dm, p.cap)) / p.cap;
 }
 
-/**
- * Dense score map over top-left positions [x0, x1] × [y0, y1] (stride 1) using the level's prefix
- * sums for the masked reference statistics (cost ≈ 3 MACs per template pixel per position).
- * `out` receives (y1 - y0 + 1) × (x1 - x0 + 1) scores, row-major.
- */
-export function scoreMap(level: RefLevel, t: Template, x0: number, x1: number, y0: number, y1: number, p: ScoreParams, out: Float32Array): void {
-  const P = level.prefix;
-  if (!P) throw new Error('scoreMap: level has no prefix sums');
-  const D = level.data, off = t.off, V = t.val, n = t.n, stride = level.stride, W1 = stride + 1;
-  // Runs of consecutive valid pixels: prefix offset (relative to the position) and length.
+/** Runs of consecutive valid template pixels: prefix offsets (relative to a position) and lengths, ×4 channels. */
+function templateRuns(t: Template, stride: number): { ro: Int32Array; rl: Int32Array } {
+  const off = t.off, n = t.n, W1 = stride + 1;
   const runOff: number[] = [], runLen: number[] = [];
   for (let q = 0; q < n; ) {
     let e = q + 1;
@@ -360,8 +355,21 @@ export function scoreMap(level: RefLevel, t: Template, x0: number, x1: number, y
     runLen.push((e - q) * 4);
     q = e;
   }
-  const R = runOff.length;
-  const ro = Int32Array.from(runOff), rl = Int32Array.from(runLen);
+  return { ro: Int32Array.from(runOff), rl: Int32Array.from(runLen) };
+}
+
+/**
+ * Dense score map over top-left positions [x0, x1] × [y0, y1] (stride 1) using the level's prefix
+ * sums for the masked reference statistics (cost ≈ 3 MACs per template pixel per position).
+ * `out` receives (y1 - y0 + 1) × (x1 - x0 + 1) scores, row-major.
+ */
+export function scoreMap(level: RefLevel, t: Template, x0: number, x1: number, y0: number, y1: number, p: ScoreParams, out: Float32Array): void {
+  const P = level.prefix;
+  if (!P) throw new Error('scoreMap: level has no prefix sums');
+  const D = level.data, off = t.off, V = t.val, n = t.n, stride = level.stride, W1 = stride + 1;
+  if (!t.runs) t.runs = templateRuns(t, stride);
+  const { ro, rl } = t.runs;
+  const R = ro.length;
   const invN = 1 / n, fl = p.eps * n, cap = p.cap, beta = p.beta;
   const tm0 = t.mean[0] - level.center[0], tm1 = t.mean[1] - level.center[1], tm2 = t.mean[2] - level.center[2];
   const te = t.energy + fl;

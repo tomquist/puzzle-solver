@@ -123,7 +123,7 @@ export function evaluateQuad(ctx: EvalContext, sideLines: number[], cornersIn: P
 }
 
 /** Enumerate quads from all compatible pairs of line pairs; best first after duplicate suppression. */
-export function enumerateQuads(ctx: EvalContext, maxResults = 40): QuadCandidate[] {
+export function enumerateQuads(ctx: EvalContext, maxResults = 60): QuadCandidate[] {
   const { width: W, height: H, lines } = ctx;
   const L = lines.length;
   const minDim = Math.min(W, H);
@@ -172,7 +172,7 @@ export function enumerateQuads(ctx: EvalContext, maxResults = 40): QuadCandidate
     }
   }
   out.sort((a, b) => b.score - a.score);
-  return suppressDuplicates(out, 0.012 * Math.hypot(W, H), maxResults);
+  return suppressDuplicates(out, Math.max(3, 0.005 * Math.hypot(W, H)), maxResults);
 }
 
 /** Greedy non-maximum suppression on corner distance. */

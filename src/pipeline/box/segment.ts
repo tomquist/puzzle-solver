@@ -4,7 +4,7 @@
  * convex quad (hull → Douglas–Peucker → per-side line fit).
  */
 import { rgbaToLab } from '../../cv/color';
-import { orderQuad, type Point, type Quad } from '../../cv/geometry';
+import { orderQuad, solveLinear, type Point, type Quad } from '../../cv/geometry';
 import { createGray, createMask, type Mask, type RGBAImage } from '../../cv/image';
 import { fitLine, lineIntersection } from '../../cv/lines';
 import { close, dilate, fillHoles, open } from '../../cv/morphology';
@@ -68,6 +68,27 @@ export function outlineToQuad(outline: Point[]): Quad | null {
   return isConvexClockwise(q) ? q : q0;
 }
 
+/** Least-squares plane v ≈ a + b·x + c·y; robust enough for border samples (one reweighting pass). */
+function fitPlane(xs: number[], ys: number[], vs: number[]): [number, number, number] {
+  const solve = (wts: number[]): [number, number, number] => {
+    const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], b = [0, 0, 0];
+    for (let k = 0; k < vs.length; k++) {
+      const r = [1, xs[k], ys[k]], wk = wts[k];
+      for (let i = 0; i < 3; i++) {
+        b[i] += wk * r[i] * vs[k];
+        for (let j = 0; j < 3; j++) A[i][j] += wk * r[i] * r[j];
+      }
+    }
+    return (solveLinear(A, b) as [number, number, number] | null) ?? [vs.reduce((a, v) => a + v, 0) / Math.max(1, vs.length), 0, 0];
+  };
+  let p = solve(vs.map(() => 1));
+  const res = vs.map((v, k) => Math.abs(v - (p[0] + p[1] * xs[k] + p[2] * ys[k])));
+  const sorted = [...res].sort((a, b) => a - b);
+  const mad = Math.max(1, sorted[Math.floor(sorted.length / 2)] ?? 1);
+  p = solve(res.map((r) => (r < 3 * mad ? 1 : 0)));
+  return p;
+}
+
 export interface SegmentResult {
   /** Quad of the largest non-table region (working coordinates), if any. */
   quad: Quad | null;
@@ -91,8 +112,8 @@ export function segmentBox(work: RGBAImage, maxSide = 320): SegmentResult {
   const lab = rgbaToLab(small).data;
   const N = w * h;
   const bw = Math.max(2, Math.round(0.025 * Math.min(w, h)));
-  // Border samples.
-  const ls: number[] = [], as: number[] = [], bs: number[] = [];
+  // Border samples (Lab + position). Lightness gets a linear illumination model a + b·x + c·y.
+  const ls: number[] = [], as: number[] = [], bs: number[] = [], xs: number[] = [], ys: number[] = [];
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       if (x >= bw && y >= bw && x < w - bw && y < h - bw) continue;
@@ -100,21 +121,31 @@ export function segmentBox(work: RGBAImage, maxSide = 320): SegmentResult {
       ls.push(lab[i]);
       as.push(lab[i + 1]);
       bs.push(lab[i + 2]);
+      xs.push(x / w - 0.5);
+      ys.push(y / h - 0.5);
     }
   }
   const median = (v: number[]) => {
     const s = [...v].sort((p, q) => p - q);
     return s[Math.floor(s.length / 2)] ?? 0;
   };
-  const mL = median(ls), mA = median(as), mB = median(bs);
-  const dists = ls.map((l, k) => Math.hypot(l - mL, as[k] - mA, bs[k] - mB));
-  const spread = Math.max(2.5, 1.4826 * median(dists));
+  const mA = median(as), mB = median(bs);
+  const illum = fitPlane(xs, ys, ls);
+  const lAt = (x: number, y: number) => illum[0] + illum[1] * (x / w - 0.5) + illum[2] * (y / h - 0.5);
+  const dists = ls.map((l, k) => Math.hypot(l - lAt((xs[k] + 0.5) * w, (ys[k] + 0.5) * h), as[k] - mA, bs[k] - mB));
+  const spread = Math.max(2, 1.4826 * median(dists));
   const dist = createGray(w, h);
-  for (let i = 0; i < N; i++) {
-    dist.data[i] = Math.min(50, Math.hypot(lab[i * 3] - mL, lab[i * 3 + 1] - mA, lab[i * 3 + 2] - mB) / spread);
+  for (let y = 0, i = 0; y < h; y++) {
+    const l0 = lAt(0, y), dl = illum[1] / w;
+    for (let x = 0; x < w; x++, i++) {
+      dist.data[i] = Math.min(50, Math.hypot(lab[i * 3] - (l0 + dl * x), lab[i * 3 + 1] - mA, lab[i * 3 + 2] - mB) / spread);
+    }
   }
-  const { threshold, separability } = otsuThreshold(dist);
-  const t = Math.max(3, Math.min(10, threshold));
+  const { separability } = otsuThreshold(dist);
+  // Threshold from the table's own distance distribution (robust to a lid touching the border).
+  const sortedD = dists.map((d) => d / spread).sort((p, q) => p - q);
+  const q90 = sortedD[Math.floor(0.9 * (sortedD.length - 1))] ?? 2;
+  const t = Math.max(2.5, Math.min(6, 1.6 * q90));
   let fg = createMask(w, h);
   for (let i = 0; i < N; i++) fg.data[i] = dist.data[i] > t ? 1 : 0;
   fg = fillHoles(close(open(fg, 1), 2));

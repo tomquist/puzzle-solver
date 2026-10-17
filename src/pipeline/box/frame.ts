@@ -10,7 +10,7 @@
  */
 import { applyMat3, mat3Invert, type Mat3, type Point, type Quad } from '../../cv/geometry';
 import type { RGBAImage } from '../../cv/image';
-import { supportAt, type GradientField } from './field';
+import { supportAt, supportNear, type GradientField } from './field';
 import type { Line } from './lines';
 import { quadSides, unitSquareToQuad } from './geometry';
 
@@ -84,6 +84,98 @@ export function directedLines(f: GradientField, quad: Quad, inward = 0.3, outwar
   return out;
 }
 
+/** Unit-square endpoints of a line near side s whose ends are offset inwards by δa and δb. */
+function sideLineEnds(s: number, da: number, db: number): [Point, Point] {
+  switch (s) {
+    case 0: return [{ x: 0, y: da }, { x: 1, y: db }];
+    case 1: return [{ x: 1 - da, y: 0 }, { x: 1 - db, y: 1 }];
+    case 2: return [{ x: 0, y: 1 - da }, { x: 1, y: 1 - db }];
+    default: return [{ x: da, y: 0 }, { x: db, y: 1 }];
+  }
+}
+
+/** Mean support along the image of unit segment p→q restricted to [a, b] of its length. */
+function snapSupport(f: GradientField, H: Mat3, p: Point, q: Point, samples: number, r: number): number {
+  const P = applyMat3(H, p), Q = applyMat3(H, q);
+  const len = Math.hypot(Q.x - P.x, Q.y - P.y);
+  if (len < 1) return 0;
+  const nx = -(Q.y - P.y) / len, ny = (Q.x - P.x) / len;
+  let s = 0;
+  for (let k = 0; k < samples; k++) {
+    const t = 0.08 + 0.84 * ((k + 0.5) / samples);
+    const m = applyMat3(H, { x: p.x + t * (q.x - p.x), y: p.y + t * (q.y - p.y) });
+    s += r > 0 ? supportNear(f, m.x, m.y, nx, ny, r) : supportAt(f, m.x, m.y, nx, ny);
+  }
+  return s / samples;
+}
+
+/**
+ * Snap each side of `quad` to nearby edges: a coarse-to-fine search over lines whose two ends move
+ * independently (±`range` of the quad size, in its rectified frame). Returns the best lines per
+ * side (several local maxima), extended over the whole image.
+ */
+export function snapSideLines(f: GradientField, quad: Quad, range = 0.1, perSide = 2): Line[] {
+  const H = unitSquareToQuad(quad);
+  if (!H) return [];
+  const sides = quadSides(quad);
+  const out: Line[] = [];
+  for (let s = 0; s < 4; s++) {
+    const perp = s % 2 === 0 ? (sides[1] + sides[3]) / 2 : (sides[0] + sides[2]) / 2;
+    const along = s % 2 === 0 ? (sides[0] + sides[2]) / 2 : (sides[1] + sides[3]) / 2;
+    if (perp < 10 || along < 10) continue;
+    const coarse = 4 / perp;
+    const n = Math.max(1, Math.ceil(range / coarse));
+    const dim = 2 * n + 1;
+    const grid = new Float32Array(dim * dim);
+    const samples = Math.max(16, Math.min(48, Math.round(along / 12)));
+    for (let i = 0; i < dim; i++) {
+      for (let j = 0; j < dim; j++) {
+        const [p, q] = sideLineEnds(s, (i - n) * coarse, (j - n) * coarse);
+        grid[i * dim + j] = snapSupport(f, H, p, q, samples, 2);
+      }
+    }
+    // Local maxima of the coarse grid.
+    const maxima: { i: number; j: number; v: number }[] = [];
+    for (let i = 0; i < dim; i++) {
+      for (let j = 0; j < dim; j++) {
+        const v = grid[i * dim + j];
+        if (v < 0.25) continue;
+        let isMax = true;
+        for (let di = -1; di <= 1 && isMax; di++) {
+          for (let dj = -1; dj <= 1; dj++) {
+            if (!di && !dj) continue;
+            const ii = i + di, jj = j + dj;
+            if (ii < 0 || jj < 0 || ii >= dim || jj >= dim) continue;
+            const u = grid[ii * dim + jj];
+            if (u > v || (u === v && (di < 0 || (di === 0 && dj < 0)))) { isMax = false; break; }
+          }
+        }
+        if (isMax) maxima.push({ i, j, v });
+      }
+    }
+    maxima.sort((a, b) => b.v - a.v);
+    const fine = 1 / perp;
+    const fineSamples = Math.max(24, Math.min(96, Math.round(along / 6)));
+    for (const m of maxima.slice(0, perSide)) {
+      let bestA = (m.i - n) * coarse, bestB = (m.j - n) * coarse, bestV = -1;
+      const a0 = bestA, b0 = bestB;
+      for (let di = -3; di <= 3; di++) {
+        for (let dj = -3; dj <= 3; dj++) {
+          const da = a0 + di * fine, db = b0 + dj * fine;
+          const [p, q] = sideLineEnds(s, da, db);
+          const v = snapSupport(f, H, p, q, fineSamples, 0);
+          if (v > bestV) { bestV = v; bestA = da; bestB = db; }
+        }
+      }
+      const [p, q] = sideLineEnds(s, bestA, bestB);
+      const P = applyMat3(H, p), Q = applyMat3(H, q);
+      const len = Math.hypot(Q.x - P.x, Q.y - P.y);
+      if (len > 1) out.push({ p: P, d: { x: (Q.x - P.x) / len, y: (Q.y - P.y) / len } });
+    }
+  }
+  return out;
+}
+
 export interface NestedBands {
   /** Band widths top, right, bottom, left as fractions of the outer quad (unit square). */
   bands: [number, number, number, number];
@@ -140,51 +232,57 @@ export function frameEvidence(img: RGBAImage, f: GradientField, outer: Quad, ban
   const none: FrameEvidence = { uniformity: 0, flatness: 0, innerSimilarity: 1, evidence: 0, bandSides: 0 };
   if (!H) return none;
   const sides = quadSides(outer);
-  const outside: number[][] = [];
-  const inside: number[][][] = [];
-  let flatCount = 0, bandSides = 0;
   const [bt, br, bb, bl] = bands;
-  const read = (u: number, v: number, into: number[][], countFlat: boolean) => {
+  interface SideSamples { out: number[][]; flat: number; ins: number[][] }
+  const per: SideSamples[] = [];
+  const read = (u: number, v: number, into: number[][]): number => {
     const p = applyMat3(H, { x: u, y: v });
     const x = Math.round(p.x), y = Math.round(p.y);
-    if (x < 0 || y < 0 || x >= img.width || y >= img.height) return;
+    if (x < 0 || y < 0 || x >= img.width || y >= img.height) return -1;
     const o = (y * img.width + x) * 4;
     into.push([img.data[o], img.data[o + 1], img.data[o + 2]]);
-    if (countFlat && f.mag[y * img.width + x] < 1.5 * f.lo) flatCount++;
+    return f.mag[y * img.width + x];
   };
   for (let s = 0; s < 4; s++) {
     const b = bands[s];
     const perp = s % 2 === 0 ? (sides[1] + sides[3]) / 2 : (sides[0] + sides[2]) / 2;
     const bandPx = b * perp;
     if (bandPx < 4) continue;
-    bandSides++;
     const a0 = s % 2 === 0 ? bl : bt, a1 = s % 2 === 0 ? 1 - br : 1 - bb;
     // Depths in pixels from the inner side: outside (towards the outer quad) and inside.
-    const outD = [2.5, Math.min(4.5, bandPx - 1.5)];
+    const outD = [2.5, Math.min(4, bandPx - 1.5)];
     const inD = [2.5, 4.5, 7];
-    const ins: number[][] = [];
+    const ss: SideSamples = { out: [], flat: 0, ins: [] };
     for (let k = 0; k < 48; k++) {
-      const a = a0 + ((k + 0.1 + 0.8 * (k % 2)) / 48) * (a1 - a0);
+      const a = a0 + ((k + 0.5) / 48) * (a1 - a0);
       for (const dp of outD) {
-        const d = b - dp / perp;
-        read(...uvAt(s, a, d), outside, true);
+        const m = read(...uvAt(s, a, b - dp / perp), ss.out);
+        if (m >= 0 && m < 2.5 * f.lo) ss.flat++;
       }
-      for (const dp of inD) read(...uvAt(s, a, b + dp / perp), ins, false);
+      for (const dp of inD) read(...uvAt(s, a, b + dp / perp), ss.ins);
     }
-    inside.push(ins);
+    if (ss.out.length >= 8) per.push(ss);
   }
-  if (outside.length < 20) return none;
+  if (!per.length) return none;
+  const all = per.flatMap((p) => p.out);
   const med = [0, 1, 2].map((c) => {
-    const v = outside.map((p) => p[c]).sort((x, y) => x - y);
+    const v = all.map((p) => p[c]).sort((x, y) => x - y);
     return v[Math.floor(v.length / 2)];
   });
   const close = (p: number[]) => Math.hypot(p[0] - med[0], p[1] - med[1], p[2] - med[2]) < 32;
-  const uniformity = outside.filter(close).length / outside.length;
-  const flatness = flatCount / outside.length;
-  let innerSimilarity = 0;
-  for (const ins of inside) if (ins.length) innerSimilarity = Math.max(innerSimilarity, ins.filter(close).length / ins.length);
-  const evidence = Math.max(0, Math.min(uniformity, flatness) * (1 - innerSimilarity));
-  return { uniformity, flatness, innerSimilarity, evidence, bandSides };
+  let uSum = 0, fSum = 0, minSide = 1, innerSimilarity = 0;
+  for (const p of per) {
+    const u = p.out.filter(close).length / p.out.length;
+    const fl = p.flat / p.out.length;
+    uSum += u;
+    fSum += fl;
+    minSide = Math.min(minSide, u, fl);
+    if (p.ins.length) innerSimilarity = Math.max(innerSimilarity, p.ins.filter(close).length / p.ins.length);
+  }
+  const uniformity = uSum / per.length, flatness = fSum / per.length;
+  // Every band side must look like frame; the picture just inside must differ on every side.
+  const evidence = minSide < 0.4 ? 0 : Math.min(uniformity, flatness) * (1 - innerSimilarity);
+  return { uniformity, flatness, innerSimilarity, evidence, bandSides: per.length };
 }
 
 /** Unit-square coordinates of position `a` along side s at inward depth d. */
