@@ -1,0 +1,38 @@
+{
+  "name": "puzzle-solver",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Browser-only jigsaw puzzle assistant: photograph the box, then photograph loose pieces and see where they go.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "bench": "vitest run --config vitest.bench.config.ts"
+  },
+  "dependencies": {
+    "comlink": "4.4.2",
+    "idb": "8.0.3",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/node": "22.18.10",
+    "@types/pngjs": "6.0.5",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@vitejs/plugin-react": "4.7.0",
+    "fake-indexeddb": "6.2.4",
+    "jpeg-js": "0.4.4",
+    "jsdom": "26.1.0",
+    "pngjs": "7.0.0",
+    "typescript": "5.9.3",
+    "vite": "6.4.1",
+    "vitest": "3.2.4"
+  }
+}

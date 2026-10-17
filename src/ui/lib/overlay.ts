@@ -1,0 +1,177 @@
+/** Geometry for SVG overlays on photos and the reference picture (pure). */
+import type { Point } from '../../cv/geometry';
+import type { Rect } from '../../cv/image';
+import type { CellRef, DetectedRegion, GridSpec } from '../../model/types';
+import { upVector } from './rotation';
+
+/** SVG path data for a closed polygon. */
+export function polygonPath(points: Point[]): string {
+  if (points.length === 0) return '';
+  const f = (v: number) => (Math.round(v * 10) / 10).toString();
+  let d = `M${f(points[0].x)} ${f(points[0].y)}`;
+  for (let i = 1; i < points.length; i++) d += `L${f(points[i].x)} ${f(points[i].y)}`;
+  return d + 'Z';
+}
+
+/** Area-weighted centroid of a polygon (falls back to the vertex mean for degenerate input). */
+export function polygonCentroid(points: Point[]): Point {
+  let a = 0, cx = 0, cy = 0;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const cross = points[j].x * points[i].y - points[i].x * points[j].y;
+    a += cross;
+    cx += (points[j].x + points[i].x) * cross;
+    cy += (points[j].y + points[i].y) * cross;
+  }
+  if (Math.abs(a) < 1e-9) {
+    const n = Math.max(1, points.length);
+    return { x: points.reduce((s, p) => s + p.x, 0) / n, y: points.reduce((s, p) => s + p.y, 0) / n };
+  }
+  return { x: cx / (3 * a), y: cy / (3 * a) };
+}
+
+/** Where to put a region's number / arrow: shape center, contour centroid, or bbox center. */
+export function regionCenter(region: DetectedRegion): Point {
+  if (region.shape) return region.shape.center;
+  if (region.contour.length >= 3) return polygonCentroid(region.contour);
+  return { x: region.bbox.x + region.bbox.width / 2, y: region.bbox.y + region.bbox.height / 2 };
+}
+
+/** Characteristic size of a region (body size for pieces, else sqrt of area). */
+export function regionSize(region: DetectedRegion): number {
+  if (region.shape) return region.shape.bodySize;
+  return Math.sqrt(Math.max(1, region.area));
+}
+
+export interface ArrowGeometry {
+  /** Shaft start and tip. */
+  from: Point;
+  to: Point;
+  /** Arrow head triangle (tip, left, right). */
+  head: [Point, Point, Point];
+}
+
+/**
+ * "Up" arrow for a region: pointing from `center` at upVector(rotationDeg), with its tip `length`
+ * away. `start` is where the shaft begins (default slightly behind the center), `head` the
+ * length of the arrow head (default 32 % of `length`).
+ */
+export function upArrow(center: Point, rotationDeg: number, length: number, opts: { start?: number; head?: number } = {}): ArrowGeometry {
+  const u = upVector(rotationDeg);
+  const start = opts.start ?? -length * 0.15;
+  const hl = Math.min(length - start, opts.head ?? length * 0.32);
+  const hw = hl * 0.7; // head half-width
+  const from = { x: center.x + u.x * start, y: center.y + u.y * start };
+  const to = { x: center.x + u.x * length, y: center.y + u.y * length };
+  const base = { x: to.x - u.x * hl, y: to.y - u.y * hl };
+  const n = { x: -u.y, y: u.x };
+  return {
+    from,
+    to: base,
+    head: [to, { x: base.x + n.x * hw, y: base.y + n.y * hw }, { x: base.x - n.x * hw, y: base.y - n.y * hw }],
+  };
+}
+
+export function cellSize(grid: GridSpec, width: number, height: number): { w: number; h: number } {
+  return { w: width / grid.cols, h: height / grid.rows };
+}
+
+/** Reference-pixel rectangle of a grid cell (ARCHITECTURE §3). */
+export function cellRect(cell: CellRef, grid: GridSpec, width: number, height: number): Rect {
+  const { w, h } = cellSize(grid, width, height);
+  return { x: cell.col * w, y: cell.row * h, width: w, height: h };
+}
+
+/** Grid cell containing reference point (x, y), clamped into the grid. */
+export function cellAt(x: number, y: number, grid: GridSpec, width: number, height: number): CellRef {
+  const col = Math.min(grid.cols - 1, Math.max(0, Math.floor((x / width) * grid.cols)));
+  const row = Math.min(grid.rows - 1, Math.max(0, Math.floor((y / height) * grid.rows)));
+  return { row, col };
+}
+
+/** Grid lines as an SVG path (interior lines only). */
+export function gridPath(grid: GridSpec, width: number, height: number): string {
+  let d = '';
+  for (let c = 1; c < grid.cols; c++) {
+    const x = Math.round(((c * width) / grid.cols) * 10) / 10;
+    d += `M${x} 0V${height}`;
+  }
+  for (let r = 1; r < grid.rows; r++) {
+    const y = Math.round(((r * height) / grid.rows) * 10) / 10;
+    d += `M0 ${y}H${width}`;
+  }
+  return d;
+}
+
+/**
+ * Square crop (center + side) around a reference location that spans `cellsAcross` cells, used for
+ * candidate previews (≈ 2.2 cells shows the piece plus its neighbourhood).
+ */
+export function cropAround(
+  x: number,
+  y: number,
+  grid: GridSpec,
+  width: number,
+  height: number,
+  cellsAcross = 2.2,
+): { cx: number; cy: number; side: number } {
+  const { w, h } = cellSize(grid, width, height);
+  return { cx: x, cy: y, side: Math.max(w, h) * cellsAcross };
+}
+
+/** Marker radius on the reference so numbers stay legible but don't hide neighbouring cells. */
+export function markerRadius(grid: GridSpec, width: number, height: number): number {
+  const { w, h } = cellSize(grid, width, height);
+  return Math.max(4, Math.min(w, h) * 0.42);
+}
+
+/** Bounding box (with padding fraction) of a region, clamped to the image. */
+export function paddedBox(rect: Rect, pad: number, width: number, height: number): Rect {
+  const px = rect.width * pad;
+  const py = rect.height * pad;
+  const x0 = Math.max(0, rect.x - px);
+  const y0 = Math.max(0, rect.y - py);
+  const x1 = Math.min(width, rect.x + rect.width + px);
+  const y1 = Math.min(height, rect.y + rect.height + py);
+  return { x: x0, y: y0, width: Math.max(1, x1 - x0), height: Math.max(1, y1 - y0) };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Zoom & pan
+// ---------------------------------------------------------------------------------------------
+
+export interface ViewTransform {
+  scale: number;
+  x: number;
+  y: number;
+}
+
+/** Transform that fits content (cw × ch) centered into a viewport (vw × vh). */
+export function fitTransform(cw: number, ch: number, vw: number, vh: number, margin = 0): ViewTransform {
+  if (cw <= 0 || ch <= 0 || vw <= 0 || vh <= 0) return { scale: 1, x: 0, y: 0 };
+  const scale = Math.min((vw - 2 * margin) / cw, (vh - 2 * margin) / ch);
+  return { scale, x: (vw - cw * scale) / 2, y: (vh - ch * scale) / 2 };
+}
+
+/** Zoom by `factor` keeping viewport point `at` fixed; scale clamped to [minScale, maxScale]. */
+export function zoomAt(t: ViewTransform, factor: number, at: Point, minScale: number, maxScale: number): ViewTransform {
+  const scale = Math.min(maxScale, Math.max(minScale, t.scale * factor));
+  const k = scale / t.scale;
+  return { scale, x: at.x - (at.x - t.x) * k, y: at.y - (at.y - t.y) * k };
+}
+
+/**
+ * Keep the content reachable: when it is smaller than the viewport it is centered on that axis,
+ * otherwise it may not be dragged past its edges.
+ */
+export function clampPan(t: ViewTransform, cw: number, ch: number, vw: number, vh: number): ViewTransform {
+  const w = cw * t.scale;
+  const h = ch * t.scale;
+  const x = w <= vw ? (vw - w) / 2 : Math.min(0, Math.max(vw - w, t.x));
+  const y = h <= vh ? (vh - h) / 2 : Math.min(0, Math.max(vh - h, t.y));
+  return { scale: t.scale, x, y };
+}
+
+/** Transform that centers content point p in the viewport at the given scale. */
+export function centerOn(p: Point, scale: number, vw: number, vh: number): ViewTransform {
+  return { scale, x: vw / 2 - p.x * scale, y: vh / 2 - p.y * scale };
+}

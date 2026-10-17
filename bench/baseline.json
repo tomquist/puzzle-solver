@@ -1,0 +1,146 @@
+{
+  "tolerance": 0.03,
+  "suites": {
+    "scan": {
+      "starry-320-dark": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 0
+      },
+      "wave-1000-dark": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 0
+      },
+      "starry-light-table": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 0
+      },
+      "wave-wood-table": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 0.958,
+        "kindAccuracy": 1,
+        "top1": 0.833,
+        "top3": 0.875,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 0.8,
+        "fitRecall": 1,
+        "warnings": 0
+      },
+      "starry-patches": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 0.5
+      },
+      "wave-edges": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 0
+      },
+      "starry-noisy-blurry": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 0.9,
+        "kindAccuracy": 1,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 1
+      },
+      "starry-via-box-photo": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 0
+      },
+      "wave-via-box-photo": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 0.9,
+        "top3": 0.9,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 0
+      }
+    },
+    "box": {
+      "framed-lid-wood": {
+        "successRate": 1,
+        "meanError": 0.001,
+        "falseWarnings": 0
+      },
+      "borderless-plain": {
+        "successRate": 1,
+        "meanError": 0.001,
+        "falseWarnings": 0
+      },
+      "strong-perspective": {
+        "successRate": 1,
+        "meanError": 0.001,
+        "falseWarnings": 0
+      },
+      "noisy-dim": {
+        "successRate": 1,
+        "meanError": 0.001,
+        "falseWarnings": 0
+      }
+    }
+  }
+}
