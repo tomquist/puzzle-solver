@@ -6,7 +6,7 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Browser, type Page } from '@playwright/test';
 import { PNG } from 'pngjs';
 import type { RGBAImage } from '../../src/cv/image';
 import { loadTestAsset } from '../../src/testing/nodeImageIO';
@@ -14,7 +14,7 @@ import { generateJigsaw, perturbReference, renderBoxPhoto, renderPiecesPhoto, Rn
 
 const ROWS = 16;
 const COLS = 20;
-const THROTTLE = 4;
+const THROTTLE = Number(process.env.CPU_THROTTLE ?? 4);
 
 function writePng(path: string, img: RGBAImage): void {
   const png = new PNG({ width: img.width, height: img.height });
@@ -36,20 +36,42 @@ function makeFixtures(dir: string): { boxPath: string; piecesPath: string } {
   return { boxPath, piecesPath };
 }
 
-interface Probe {
-  progress: { t: number; text: string }[];
-  maxGap: number;
-  tapLatency?: number;
+/**
+ * Try to throttle the pipeline's dedicated worker too: Emulation.setCPUThrottlingRate on the page
+ * only slows the main thread. (Chromium currently answers "Operation is only supported for pages,
+ * not workers", so the result is reported, not asserted.) The worker is found through a browser-level CDP session (Target.getTargets
+ * needs an explicit filter to list workers) and throttled via Target.sendMessageToTarget. Returns
+ * how many worker targets accepted the setting.
+ */
+async function throttleWorkers(browser: Browser, rate: number): Promise<number> {
+  const s = await browser.newBrowserCDPSession();
+  const { targetInfos } = (await s.send('Target.getTargets', { filter: [{}] } as never)) as unknown as {
+    targetInfos: { targetId: string; type: string; url: string }[];
+  };
+  let ok = 0;
+  for (const t of targetInfos.filter((x) => x.type === 'worker' && /pipeline/.test(x.url))) {
+    const { sessionId } = (await s.send('Target.attachToTarget', { targetId: t.targetId, flatten: false })) as { sessionId: string };
+    const reply = new Promise<boolean>((resolve) => {
+      const onMsg = (e: { sessionId: string; message: string }) => {
+        if (e.sessionId !== sessionId) return;
+        const m = JSON.parse(e.message) as { id?: number; error?: unknown };
+        if (m.id === 1) {
+          s.off('Target.receivedMessageFromTarget', onMsg);
+          if (m.error) console.log("worker throttle reply:", JSON.stringify(m.error));
+          resolve(!m.error);
+        }
+      };
+      s.on('Target.receivedMessageFromTarget', onMsg);
+      setTimeout(() => resolve(false), 5000);
+    });
+    await s.send('Target.sendMessageToTarget', { sessionId, message: JSON.stringify({ id: 1, method: 'Emulation.setCPUThrottlingRate', params: { rate } }) });
+    if (await reply) ok++;
+  }
+  return ok;
 }
 
-test('slow phone: progress updates, UI stays responsive, scan finishes', async ({ page }, info) => {
-  test.setTimeout(420_000);
-  const fx = makeFixtures(info.outputPath('fixtures'));
-  const errors: string[] = [];
-  page.on('pageerror', (e) => errors.push(e.message));
-
-  // --- set up the puzzle at normal speed (real worker)
-  await page.goto('/');
+async function setUpPuzzle(page: Page, fx: { boxPath: string }, url: string): Promise<void> {
+  await page.goto(url);
   await page.getByRole('link', { name: 'New puzzle' }).first().click();
   await page.getByTestId('photo-upload').setInputFiles(fx.boxPath);
   await expect(page.getByTestId('wizard-corners')).toBeVisible({ timeout: 120_000 });
@@ -64,17 +86,34 @@ test('slow phone: progress updates, UI stays responsive, scan finishes', async (
   await expect(page.getByTestId('tab-scan')).toBeVisible({ timeout: 60_000 });
   // Wait until the matcher is ready so we time the scan itself.
   await expect(page.getByText('Preparing the puzzle picture for matching…')).toBeHidden({ timeout: 120_000 });
+}
+
+interface Probe {
+  progress: { t: number; text: string }[];
+  maxGap: number;
+  taps: number[];
+}
+
+test('slow phone: progress updates, UI stays responsive, scan finishes', async ({ page, browser }, info) => {
+  test.setTimeout(420_000);
+  const fx = makeFixtures(info.outputPath('fixtures'));
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+
+  // --- set up the puzzle at normal speed (real worker)
+  await setUpPuzzle(page, fx, '/');
 
   // --- throttle and instrument
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: THROTTLE });
+  const throttledWorkers = await throttleWorkers(browser, THROTTLE);
   await page.evaluate(() => {
-    const probe: Probe = { progress: [], maxGap: 0 };
+    const probe: Probe = { progress: [], maxGap: 0, taps: [] };
     (window as unknown as { __probe: Probe }).__probe = probe;
     // Progress label changes.
     let last = '';
     new MutationObserver(() => {
-      const el = document.querySelector('[data-testid=analysing] .progress-head span');
+      const el = document.querySelector('[data-testid=analysing] .progress-head span, [data-testid=job-strip] .grow');
       const text = el?.textContent ?? '';
       if (text && text !== last) {
         last = text;
@@ -92,7 +131,8 @@ test('slow phone: progress updates, UI stays responsive, scan finishes', async (
     let down = 0;
     document.addEventListener('pointerdown', (e) => (down = e.timeStamp), true);
     window.addEventListener('hashchange', () => {
-      if (down) probe.tapLatency = performance.now() - down;
+      if (down) probe.taps.push(performance.now() - down);
+      down = 0;
     });
   });
 
@@ -101,10 +141,16 @@ test('slow phone: progress updates, UI stays responsive, scan finishes', async (
   await expect(page.getByTestId('analysing')).toBeVisible({ timeout: 30_000 });
   // Wait until the worker is busy matching, then tap another tab.
   await expect.poll(() => page.evaluate(() => (window as unknown as { __probe: Probe }).__probe.progress.length), { timeout: 120_000 }).toBeGreaterThanOrEqual(3);
+  // Switch to the Picture tab and back while the worker is busy.
   const tapStart = Date.now();
   await page.getByRole('link', { name: 'Picture' }).click();
   await expect(page.getByTestId('tab-picture')).toBeVisible();
   const tapToVisible = Date.now() - tapStart;
+  await expect(page.getByTestId('job-strip')).toBeVisible();
+  await page.screenshot({ path: '.debug/mobile/slow-phone-job-strip.png' });
+  const beforeBack = await page.evaluate(() => (window as unknown as { __probe: Probe }).__probe.progress.length);
+  await page.waitForTimeout(300);
+  await page.getByRole('link', { name: 'Scan' }).click();
 
   // The analysis continues in the worker and opens the result when done.
   await expect(page.getByTestId('scan-result')).toBeVisible({ timeout: 300_000 });
@@ -115,22 +161,47 @@ test('slow phone: progress updates, UI stays responsive, scan finishes', async (
   const distinct = new Set(probe.progress.map((p) => p.text));
   const report = {
     throttle: THROTTLE,
+    throttledWorkers,
     scanMs,
     progressUpdates: probe.progress.length,
     distinctMessages: [...distinct],
     progressSpanMs: probe.progress.length ? Math.round(probe.progress[probe.progress.length - 1].t - probe.progress[0].t) : 0,
-    tapLatencyMs: probe.tapLatency !== undefined ? Math.round(probe.tapLatency) : null,
+    tapLatenciesMs: probe.taps.slice(0, 2).map(Math.round),
+    progressUpdatesBeforeReturning: beforeBack,
     tapToVisibleMs: tapToVisible,
     maxMainThreadGapMs: Math.round(probe.maxGap),
   };
   console.log('slow phone:', JSON.stringify(report));
   mkdirSync('.debug/mobile', { recursive: true });
-  writeFileSync('.debug/mobile/slow-phone.json', JSON.stringify(report, null, 2));
+  writeFileSync(`.debug/mobile/slow-phone-x${THROTTLE}.json`, JSON.stringify(report, null, 2));
 
   expect(distinct.size).toBeGreaterThanOrEqual(3);
   expect(report.progressSpanMs).toBeGreaterThan(0);
-  expect(report.tapLatencyMs).not.toBeNull();
-  expect(report.tapLatencyMs!).toBeLessThan(300);
+  expect(report.tapLatenciesMs.length).toBe(2);
+  for (const ms of report.tapLatenciesMs) expect(ms).toBeLessThan(300);
   await expect(page.locator('[data-testid^="piece-item-"]').first()).toBeVisible();
   expect(errors).toEqual([]);
+});
+
+/**
+ * Chromium can't throttle Web Workers, so the test above only slows the main thread. To show the
+ * pipeline itself also finishes on a 4× slower CPU, run it on the (throttled) main thread with
+ * ?pipeline=local and record how long the scan takes. (UI responsiveness is not asserted here – the
+ * main thread is busy by design in this mode.)
+ */
+test('slow phone: the real pipeline finishes on a throttled CPU', async ({ page }, info) => {
+  test.setTimeout(600_000);
+  const fx = makeFixtures(info.outputPath('fixtures'));
+  await setUpPuzzle(page, fx, '/?pipeline=local');
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: THROTTLE });
+  const t0 = Date.now();
+  await page.getByTestId('photo-upload').setInputFiles(fx.piecesPath);
+  await expect(page.getByTestId('scan-result')).toBeVisible({ timeout: 480_000 });
+  const scanMs = Date.now() - t0;
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+  await expect(page.locator('[data-testid^="piece-item-"]')).toHaveCount(12);
+  console.log(`slow phone (pipeline on throttled main thread, ${THROTTLE}×): scan ${scanMs} ms`);
+  mkdirSync('.debug/mobile', { recursive: true });
+  writeFileSync(`.debug/mobile/slow-phone-local-x${THROTTLE}.json`, JSON.stringify({ throttle: THROTTLE, scanMs }, null, 2));
 });

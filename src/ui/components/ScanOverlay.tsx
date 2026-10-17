@@ -48,6 +48,7 @@ export function ScanOverlay({
           dimmed={dimOthers && !highlight.has(region.id)}
           minLabel={minLabel}
           minHit={22 / scale}
+          scale={scale}
           onSelect={onSelect}
         />
       ))}
@@ -77,6 +78,7 @@ function RegionMark({
   dimmed,
   minLabel,
   minHit,
+  scale,
   onSelect,
 }: {
   region: DetectedRegion;
@@ -90,6 +92,7 @@ function RegionMark({
   minLabel: number;
   /** Radius (photo px) of the invisible touch target around the number: ≥ 44 screen px across. */
   minHit: number;
+  scale: number;
   onSelect: (id: number) => void;
 }) {
   const match = matchFor(result, region.id);
@@ -101,7 +104,8 @@ function RegionMark({
   // The arrow sticks out of the number badge like a compass needle.
   const tip = Math.max(size * 0.62, labelR * 2.6);
   const arrow = placement ? upArrow(c, placement.rotationDeg, tip, { start: labelR * 0.6, head: Math.max(labelR * 0.95, size * 0.12) }) : undefined;
-  const badge = placement ? turnBadge(placement.rotationDeg) : '';
+  // Turn badges only once the piece is big enough on screen (the arrow alone says where "up" is).
+  const badge = placement && size * scale >= 56 ? turnBadge(placement.rotationDeg) : '';
   const u = placement ? upVector(placement.rotationDeg) : { x: 0, y: -1 };
   // Turn hint on the side opposite the arrow.
   const badgeH = Math.max(labelR * 1.15, minHit * 0.76); // text ≥ 12 screen px

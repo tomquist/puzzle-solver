@@ -12,6 +12,7 @@ import { EmptyState, ErrorState, Spinner } from '../components/Feedback';
 import { IconPuzzle } from '../components/Icons';
 import { TopBar } from '../components/TopBar';
 import { useBitmap, useObjectUrl, useStoredBlob } from '../hooks/useObjectUrl';
+import { useScanJob, type ScanJob } from '../hooks/useScanJob';
 import { emptyProgress } from '../lib/progress';
 import { href } from '../lib/routes';
 import { usePipeline } from './PipelineContext';
@@ -38,6 +39,10 @@ export interface PuzzleContextValue {
   /** Incremented whenever scans are added/removed. */
   scansVersion: number;
   scansChanged(): void;
+  /** The running (or failed) scan analysis – kept here so it survives switching tabs. */
+  scanJob: ScanJob | undefined;
+  startScan(photo: Blob): void;
+  cancelScan(): void;
 }
 
 const PuzzleContext = createContext<PuzzleContextValue | null>(null);
@@ -144,6 +149,14 @@ export function PuzzleProvider({ id, children }: { id: string; children: ReactNo
   );
 
   const scansChanged = useCallback(() => setScansVersion((v) => v + 1), []);
+  const scan = useScanJob({
+    repo,
+    pipeline,
+    puzzle,
+    progress: state.kind === 'ready' ? state.progress : undefined,
+    ensureMatcher,
+    scansChanged,
+  });
 
   const value = useMemo<PuzzleContextValue | null>(() => {
     if (state.kind !== 'ready') return null;
@@ -157,8 +170,11 @@ export function PuzzleProvider({ id, children }: { id: string; children: ReactNo
       ensureMatcher,
       scansVersion,
       scansChanged,
+      scanJob: scan.job,
+      startScan: scan.start,
+      cancelScan: scan.cancel,
     };
-  }, [state, savePuzzle, saveProgress, refUrl, refBitmap, refMissing, matcher, ensureMatcher, scansVersion, scansChanged]);
+  }, [state, savePuzzle, saveProgress, refUrl, refBitmap, refMissing, matcher, ensureMatcher, scansVersion, scansChanged, scan.job, scan.start, scan.cancel]);
 
   if (state.kind === 'loading') {
     return (

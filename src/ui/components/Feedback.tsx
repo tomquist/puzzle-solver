@@ -29,10 +29,22 @@ export function ProgressBar({ value, label, detail }: { value: number; label?: s
   );
 }
 
-export function EmptyState({ icon, title, children, actions }: { icon?: ReactNode; title: string; children?: ReactNode; actions?: ReactNode }) {
+export function EmptyState({
+  icon,
+  title,
+  children,
+  actions,
+  tone,
+}: {
+  icon?: ReactNode;
+  title: string;
+  children?: ReactNode;
+  actions?: ReactNode;
+  tone?: 'error';
+}) {
   return (
     <div className="empty">
-      {icon && <div className="empty-icon">{icon}</div>}
+      {icon && <div className={tone ? `empty-icon ${tone}` : 'empty-icon'}>{icon}</div>}
       <h2>{title}</h2>
       {children && <div className="empty-body">{children}</div>}
       {actions && <div className="row center wrap gap">{actions}</div>}
@@ -51,6 +63,7 @@ export function ErrorState({ title = 'Something went wrong', error, onRetry, act
   return (
     <EmptyState
       icon={<IconError size={32} />}
+      tone="error"
       title={title}
       actions={
         <>

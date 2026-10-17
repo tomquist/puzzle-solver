@@ -60,12 +60,12 @@ export default defineConfig({
     {
       name: 'phone',
       use: phoneChromium(390, 844, 2),
-      testMatch: /(smoke|camera|errors|pipeline)\.spec\.ts/,
+      testMatch: /(smoke|camera|errors)\.spec\.ts/,
     },
     {
       name: 'desktop',
       use: { browserName: 'chromium', viewport: { width: 1280, height: 860 } },
-      testMatch: /(smoke|camera|errors|pipeline)\.spec\.ts/,
+      testMatch: /(smoke|camera|errors|pipeline|box-check)\.spec\.ts/,
     },
     {
       name: 'iphone-13',

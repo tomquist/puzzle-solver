@@ -33,14 +33,18 @@ export function ProgressSummary() {
 }
 
 export function PuzzleWorkspace({ tab }: { tab: PuzzleTab }) {
-  const { puzzle, matcher } = usePuzzle();
+  const { puzzle, matcher, scanJob } = usePuzzle();
+  const analysing = scanJob?.kind === 'running';
   return (
     <>
       <TopBar title={puzzle.name} back={href.home()} backLabel="All puzzles" subtitle={<ProgressSummary />} />
       <nav className="tabbar" aria-label="Puzzle sections">
         {TABS.map(({ id, label, Icon }) => (
           <a key={id} href={href.puzzle(puzzle.id, id)} className={id === tab ? 'tab active' : 'tab'} aria-current={id === tab ? 'page' : undefined}>
-            <Icon size={22} />
+            <span className="tab-icon">
+              <Icon size={22} />
+              {id === 'scan' && analysing && <span className="tab-busy" aria-label="Analysing" />}
+            </span>
             <span>{label}</span>
           </a>
         ))}
@@ -50,6 +54,13 @@ export function PuzzleWorkspace({ tab }: { tab: PuzzleTab }) {
           <Banner tone="error" title="The puzzle picture could not be prepared">
             {matcher.message}
           </Banner>
+        )}
+        {analysing && tab !== 'scan' && (
+          <a className="job-strip" href={href.puzzle(puzzle.id, 'scan')} data-testid="job-strip">
+            <span className="spinner small-spinner" aria-hidden="true" />
+            <span className="grow">{scanJob.message}</span>
+            <span className="tabular">{Math.round(scanJob.progress * 100)}%</span>
+          </a>
         )}
         {tab === 'scan' && <ScanTab />}
         {tab === 'picture' && <PictureTab />}
