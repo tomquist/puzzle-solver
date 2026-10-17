@@ -387,13 +387,14 @@ describe('matchRegion — outline reliability', () => {
     capForBorder(shadowed, { outline: { borderTable: 0.5 } });
     expect(shadowed.match.status).toBe('ambiguous');
     expect(shadowed.match.candidates[0].confidence).toBeLessThan(CONFIDENT_THRESHOLD);
-    // In a scan where most outlines include shadow, a smaller excess already counts.
+    // In a scan where most outlines include shadow, every outline is suspect.
     const scanWide = detail(0.99);
-    capForBorder(scanWide, { outline: { borderTable: 0.25 } }, 0.4);
+    capForBorder(scanWide, { outline: { borderTable: 0.05 } }, 0.22);
     expect(scanWide.match.status).toBe('ambiguous');
     const normalScan = detail(0.99);
-    capForBorder(normalScan, { outline: { borderTable: 0.25 } }, 0.05);
+    capForBorder(normalScan, { outline: { borderTable: 0.22 } }, 0.06);
     expect(normalScan.match.status).toBe('confident');
+    expect(normalScan.match.candidates[0].confidence).toBeGreaterThan(0.98);
   });
 
   it('discounts doubtful segmentation', () => {

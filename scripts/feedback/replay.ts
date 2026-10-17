@@ -226,8 +226,12 @@ export function replayFeedback(bundle: FeedbackBundle, name: string, opts: Repla
         // app had found separately.
         const swallowed = overlaps(hit, origR).filter((o) => o.ofB > 0.5 && !containsPoint(o.r, at) && isPiece(o.r));
         const nowText = describeRegion(hit.region, curMatch.get(hit.id));
+        const ratio = regionDiag.get(hit.id)?.areaRatio ?? 1;
         if (swallowed.length > 0) {
           out.marks.push({ index, mark, at, original, now: `${nowText}, merged with old #${swallowed.map((o) => o.r.id).join(',#')}`, fixed: false, verdict: 'MERGED', why: diagText(hit.id), currentIds: [hit.id] });
+        } else if (hit.region.kind !== 'piece' || ratio > 1.6) {
+          // A piece the user had to mark is not found when it only sits inside a larger region.
+          out.marks.push({ index, mark, at, original, now: `inside ${nowText}`, fixed: false, verdict: 'IN LARGER REGION', why: diagText(hit.id), currentIds: [hit.id] });
         } else {
           out.marks.push({ index, mark, at, original, now: nowText, fixed: true, verdict: 'FOUND', currentIds: [hit.id] });
         }

@@ -388,22 +388,26 @@ export function outlineFactor(input: Pick<MatchInput, 'kind' | 'outline'>): numb
   return f;
 }
 
-/** Border-table fraction above which an outline counts as including shadow / table (normal scans). */
-const BORDER_TABLE_LIMIT = 0.36;
-/** Same, in scans where most outlines touch shadow or table (median border-table fraction ≥ 0.2). */
-const BORDER_TABLE_LIMIT_SHADOWED = 0.15;
+/** Border-table excess above which one outline counts as including shadow / table. */
+const BORDER_TABLE_LIMIT = 0.32;
+/**
+ * Median border-table excess of a scan's pieces above which the photo's outlines systematically
+ * include cast shadows (clean light tables ≲ 0.1, hard shadows ≳ 0.2).
+ */
+const BORDER_TABLE_SCAN_LIMIT = 0.15;
 
 /**
  * Cap the confidence of a region whose outline probably includes cast shadow or table (at most
- * 'ambiguous'). `scanMedian` = median border-table fraction of the scan's pieces, when known.
+ * 'ambiguous'): its own border-table excess is high, or the scan's median (`scanMedian`, over its
+ * pieces, when known) says most outlines in the photo include shadow.
  */
 export function capForBorder(detail: MatchDetail, input: Pick<MatchInput, 'outline'>, scanMedian?: number): void {
   const bt = input.outline?.borderTable;
   const c = detail.match.candidates[0];
   if (bt === undefined || !c) return;
-  const limit = scanMedian !== undefined && scanMedian >= 0.2 ? BORDER_TABLE_LIMIT_SHADOWED : BORDER_TABLE_LIMIT;
-  const bad = sigmoid((bt - limit) / 0.03);
-  const cap = 0.6 + 0.4 * (1 - bad);
+  const own = sigmoid((bt - BORDER_TABLE_LIMIT) / 0.02);
+  const scan = scanMedian === undefined ? 0 : sigmoid((scanMedian - BORDER_TABLE_SCAN_LIMIT) / 0.01);
+  const cap = 0.6 + 0.4 * (1 - Math.max(own, scan));
   if (c.confidence <= cap) return;
   c.confidence = cap;
   for (const o of detail.match.candidates.slice(1)) o.confidence = Math.min(o.confidence, cap);

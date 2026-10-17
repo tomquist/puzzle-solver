@@ -474,6 +474,7 @@ describe('segmentPieces on real-photo conditions', () => {
   });
 
   it('measures how much table or cast shadow the outlines take in on a light table', () => {
+    // Excess over the ring inside: a pale sky on a cream table is not mistaken for shadow.
     const median = (seg: ReturnType<typeof segmentPieces>) => {
       const v = seg.regions.filter((r) => r.region.kind === 'piece').map((r) => r.borderTable).sort((a, b) => a - b);
       return v[v.length >> 1];
@@ -483,8 +484,8 @@ describe('segmentPieces on real-photo conditions', () => {
     const shadowed = segmentPieces(scene('great-wave', 'light', 2, hard).photo, { assessQuality: false });
     const dark = segmentPieces(scene('great-wave', 'dark', 2, hard).photo, { assessQuality: false });
     console.log(`borderTable median: clean ${median(clean).toFixed(2)}, shadowed ${median(shadowed).toFixed(2)}`);
-    expect(median(clean)).toBeLessThan(0.15);
-    expect(median(shadowed)).toBeGreaterThan(0.2);
+    expect(median(clean)).toBeLessThan(0.12);
+    expect(median(shadowed)).toBeGreaterThan(0.18);
     // Only measured on plain light tables (dark painting content looks like a dark table).
     expect(dark.regions.every((r) => r.borderTable === 0)).toBe(true);
   });
