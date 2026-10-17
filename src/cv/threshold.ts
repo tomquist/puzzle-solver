@@ -6,8 +6,8 @@ import { createMask, type GrayImage, type Mask } from './image';
  * value range (bin k is centered on min + k·(max − min)/(bins − 1), so integer 0..255 data with
  * 256 bins is binned exactly). `threshold` lies halfway between bins, so `value > threshold`
  * selects the upper class; if several splits are equally good the middle one is used.
- * `separability` = between-class variance / total variance (0..1; ≈1 for two clean levels,
- * low for unimodal data). Empty or constant input gives { threshold: min, separability: 0 }.
+ * `separability` = between-class variance / total variance (0..1): 1 for two clean levels, ≈0.9+
+ * for well separated modes, ≈0.64 for a single Gaussian. Empty/constant input gives separability 0.
  */
 export function otsuThreshold(values: GrayImage, mask?: Mask, bins = 256): { threshold: number; separability: number } {
   const d = values.data;
@@ -54,7 +54,7 @@ export function otsuThreshold(values: GrayImage, mask?: Mask, bins = 256): { thr
       last = k;
     } else if (first >= 0) break;
   }
-  const kMid = (first + last) / 2;
+  const kMid = Math.floor((first + last) / 2);
   return { threshold: lo + (kMid + 0.5) / scale, separability: varTotal > 0 ? Math.min(1, best / varTotal) : 0 };
 }
 

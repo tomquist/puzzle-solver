@@ -90,6 +90,7 @@ function componentStart(m: Mask, sx: number, sy: number): Point {
  * default: the first set pixel in raster order). Returns [] when `start` is not a set pixel or the
  * mask is empty. Fast (O(contour length)) when `start` lies on the outer border with an unset
  * left neighbour, e.g. `ComponentStats.start`; otherwise it may flood-fill the component first.
+ * The result does not depend on which pixel of the component `start` names.
  */
 export function traceOuterContour(m: Mask, start?: Point): Point[] {
   const { width: w, height: h, data } = m;
@@ -106,7 +107,12 @@ export function traceOuterContour(m: Mask, start?: Point): Point[] {
   // hole) the traced border has non-negative signed area.
   while (x > 0 && data[y * w + x - 1] !== 0) x--;
   const pts = followBorder(m, x, y, WEST);
-  if (polygonSignedArea(pts) > -0.25) return pts;
+  if (polygonSignedArea(pts) > -0.25) {
+    // Outer border found. Canonical start = its first pixel in raster order (= the component's).
+    let b = pts[0];
+    for (const p of pts) if (p.y < b.y || (p.y === b.y && p.x < b.x)) b = p;
+    return b === pts[0] ? pts : followBorder(m, b.x, b.y, WEST);
+  }
   const s = componentStart(m, x, y);
   return followBorder(m, s.x, s.y, WEST);
 }

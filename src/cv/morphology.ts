@@ -1,38 +1,35 @@
 /**
  * Binary morphology on 0/1 masks. All operations run in O(width * height) independent of the
- * radius: square elements use separable running-count windows, disks use the exact Euclidean
- * distance transform (a disk of radius r = all offsets with dx² + dy² <= r²).
+ * radius: square elements are separable (row runs + running column counts); disks (all offsets
+ * with dx² + dy² <= r², exact) use column distances plus a per-row interval sweep.
  *
- * Border handling (OpenCV convention): pixels outside the image are neutral, i.e. they never set a
- * pixel during dilation and never clear one during erosion. Nonzero input values count as set;
- * outputs are always 0/1.
+ * Border handling: for erode/dilate/open, pixels outside the image are neutral (OpenCV
+ * convention), i.e. they never set a pixel during dilation and never clear one during erosion;
+ * `close` treats the outside as background (see there). Nonzero input values count as set; outputs
+ * are always 0/1.
  */
-import { squaredDistanceTransform } from './distance';
 import { createMask, type Mask } from './image';
 import { labelRuns } from './components';
 
 export type StructuringShape = 'square' | 'disk';
 
 /** Square window: out = 1 where the (2r+1)² window holds any (dilate) / only (erode) set pixels. */
-function squareMorph(m: Mask, r: number, dilate: boolean): Mask {
+function squareMorph(m: Mask, r: number, isDilate: boolean): Mask {
   const { width: w, height: h, data } = m;
   const tmp = new Uint8Array(w * h);
-  // Horizontal pass with a running count per row.
+  // Horizontal pass on runs of set pixels.
   for (let y = 0; y < h; y++) {
     const row = y * w;
-    let count = 0;
-    const pre = Math.min(r, w);
-    for (let x = 0; x < pre; x++) count += data[row + x] !== 0 ? 1 : 0;
-    for (let x = 0; x < w; x++) {
-      const add = x + r;
-      if (add < w && data[row + add] !== 0) count++;
-      const rem = x - r - 1;
-      if (rem >= 0 && data[row + rem] !== 0) count--;
-      if (dilate) tmp[row + x] = count > 0 ? 1 : 0;
-      else {
-        const size = Math.min(w - 1, x + r) - Math.max(0, x - r) + 1;
-        tmp[row + x] = count === size ? 1 : 0;
-      }
+    let x = 0;
+    while (x < w) {
+      while (x < w && data[row + x] === 0) x++;
+      if (x >= w) break;
+      const a = x;
+      while (x < w && data[row + x] !== 0) x++;
+      const b = x - 1;
+      const lo = isDilate ? Math.max(0, a - r) : a === 0 ? 0 : a + r;
+      const hi = isDilate ? Math.min(w - 1, b + r) : b === w - 1 ? b : b - r;
+      if (lo <= hi) tmp.fill(1, row + lo, row + hi + 1);
     }
   }
   // Vertical pass with running counts per column, processed row by row.
@@ -56,7 +53,7 @@ function squareMorph(m: Mask, r: number, dilate: boolean): Mask {
       for (let x = 0; x < w; x++) counts[x] -= tmp[row + x];
     }
     const row = y * w;
-    if (dilate) {
+    if (isDilate) {
       for (let x = 0; x < w; x++) o[row + x] = counts[x] > 0 ? 1 : 0;
     } else {
       const size = Math.min(h - 1, y + r) - Math.max(0, y - r) + 1;
@@ -66,16 +63,50 @@ function squareMorph(m: Mask, r: number, dilate: boolean): Mask {
   return out;
 }
 
-function diskMorph(m: Mask, r: number, dilate: boolean): Mask {
-  const out = createMask(m.width, m.height);
-  const r2 = r * r;
+/**
+ * Disk element {dx² + dy² <= r²}, exact. Dilation: per column, the vertical distance g to the
+ * nearest set pixel; pixel (x, y) is covered iff some column q has g² + (x − q)² <= r², i.e. x lies
+ * in the interval q ± span(g), and the union of those intervals is swept per row. Erosion is the
+ * complement of the dilation of the unset pixels (outside pixels stay neutral).
+ */
+function diskMorph(m: Mask, r: number, isDilate: boolean): Mask {
+  const { width: w, height: h, data } = m;
+  const R = Math.min(Math.floor(r), w + h);
+  const cap = R + 1;
+  const span = new Int32Array(R + 1);
+  for (let g = 0; g <= R; g++) span[g] = Math.floor(Math.sqrt(r * r - g * g) + 1e-9);
+  const isTarget = (v: number): boolean => (v !== 0) === isDilate;
+  const g = new Uint16Array(w * h);
+  for (let x = 0; x < w; x++) g[x] = isTarget(data[x]) ? 0 : cap;
+  for (let i = w; i < w * h; i++) {
+    if (isTarget(data[i])) continue;
+    const v = g[i - w] + 1;
+    g[i] = v < cap ? v : cap;
+  }
+  for (let i = w * (h - 1) - 1; i >= 0; i--) {
+    const v = g[i + w] + 1;
+    if (v < g[i]) g[i] = v;
+  }
+  const out = createMask(w, h);
   const o = out.data;
-  if (dilate) {
-    const d2 = squaredDistanceTransform(m, 1);
-    for (let i = 0; i < o.length; i++) o[i] = d2[i] <= r2 ? 1 : 0;
-  } else {
-    const d2 = squaredDistanceTransform(m, 0);
-    for (let i = 0; i < o.length; i++) o[i] = d2[i] > r2 ? 1 : 0;
+  const reach = new Int32Array(w).fill(-1);
+  const hit = isDilate ? 1 : 0, miss = isDilate ? 0 : 1;
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    for (let q = 0; q < w; q++) {
+      const gq = g[row + q];
+      if (gq > R) continue;
+      const sp = span[gq];
+      const a = q > sp ? q - sp : 0;
+      const e = q + sp;
+      if (e > reach[a]) reach[a] = e;
+    }
+    let cur = -1;
+    for (let x = 0; x < w; x++) {
+      if (reach[x] > cur) cur = reach[x];
+      reach[x] = -1;
+      o[row + x] = cur >= x ? hit : miss;
+    }
   }
   return out;
 }
@@ -111,9 +142,22 @@ export function open(m: Mask, radius: number, shape: StructuringShape = 'square'
   return dilate(erode(m, radius, shape), radius, shape);
 }
 
-/** Morphological closing (dilate, then erode): bridges gaps and fills notches narrower than the element. */
+/**
+ * Morphological closing (dilate, then erode): bridges gaps and fills notches narrower than the
+ * element. Computed on a padded copy, so the outside counts as background: objects near the image
+ * border are not bridged to it (the result is the exact closing of the mask in an empty plane).
+ */
 export function close(m: Mask, radius: number, shape: StructuringShape = 'square'): Mask {
-  return erode(dilate(m, radius, shape), radius, shape);
+  const { width: w, height: h } = m;
+  const p = Math.ceil(radius);
+  if (p < 1 || w === 0 || h === 0) return normalized(m);
+  const W = w + 2 * p;
+  const padded = createMask(W, h + 2 * p);
+  for (let y = 0; y < h; y++) padded.data.set(m.data.subarray(y * w, y * w + w), (y + p) * W + p);
+  const c = erode(dilate(padded, radius, shape), radius, shape);
+  const out = createMask(w, h);
+  for (let y = 0; y < h; y++) out.data.set(c.data.subarray((y + p) * W + p, (y + p) * W + p + w), y * w);
+  return out;
 }
 
 /**

@@ -116,16 +116,30 @@ erode / dilate / open / close (m: Mask, radius: number, shape?: 'square' | 'disk
 fillHoles(m: Mask): Mask
 labelComponents(m: Mask, connectivity?: 4 | 8): { labels: Int32Array; count: number; stats: ComponentStats[] }
   // ComponentStats { label, area, bbox: Rect, centroid: Point, touchesBorder: boolean }
-componentMask(labels, label, bbox): Mask                          // bbox-sized mask of one component
+  // ComponentStats also has `start: Point` (raster-first pixel; fast start for traceOuterContour)
+componentMask(labels, width, label, bbox, pad?): Mask             // bbox(+pad)-sized mask of one component
+findOuterContours(m: Mask, minArea?): { contour: Point[]; stats: ComponentStats }[]
 traceOuterContour(m: Mask, start?: Point): Point[]                // clockwise, pixel coordinates
 simplifyPolygon(pts: Point[], epsilon: number, closed?: boolean): Point[]  // Douglas–Peucker
 convexHull(pts: Point[]): Point[]
 polygonArea(pts) / polygonPerimeter(pts) / polygonCentroid(pts)
 minAreaRect(pts: Point[]): { center: Point; width: number; height: number; angle: number; corners: Quad }
 smoothContour(pts: Point[], sigma: number): Point[]               // closed-curve Gaussian smoothing
-resampleContour(pts: Point[], n: number): Point[]                 // equal arc-length
+resampleContour(pts: Point[], n: number, closed?: boolean): Point[] // equal arc-length
 pointInPolygon(p: Point, poly: Point[]): boolean
-canny(img: GrayImage, low: number, high: number, sigma?: number): Mask
+canny(img: GrayImage, low: number, high: number, sigma?: number): Mask   // thresholds in Sobel units (step H ≈ 4H)
+houghLines(edges: Mask, opts?): { rho; theta; votes }[]          // x·cosθ + y·sinθ = ρ
+fitLine(pts): { point; direction } | null;  lineIntersection(p1, d1, p2, d2): Point | null
+distanceTransform(m: Mask, opts?): GrayImage                      // exact Euclidean, set pixels → distance to nearest unset
+```
+
+### quality metrics (`src/pipeline/quality/metrics.ts`, shared)
+```ts
+blurMetric(gray, mask?, radius?): number        // 0 sharp .. 1 blurry, content-normalised
+laplacianVariance(gray, mask?): number
+exposureStats(img, mask?): { mean; clippedLow; clippedHigh; p05; p95 }
+glareMask(img, opts?): Mask
+noiseSigma(gray): number
 ```
 
 ### stitch (`src/cv/features/`, `src/pipeline/stitch/`)
