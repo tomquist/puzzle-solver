@@ -325,6 +325,13 @@ export interface RenderOptions {
   vignette?: number;
   /** Specular glare: bright soft spots (partly clipping) on pieces and table. */
   glare?: GlareStyle;
+  /**
+   * A large soft shadow reaching in from the photo border (the photographer or the phone blocking
+   * the light): darkens table and pieces alike.
+   */
+  shadowZone?: ShadowZoneStyle;
+  /** Some pieces printed in dark tones of the table colour (dark wood, deep shadow look-alikes). */
+  darkPieces?: DarkPieceStyle;
   /** Simulate phone JPEG compression (4:2:0 chroma, this quality 1..100) as the last step. */
   jpegQuality?: number;
   /**
@@ -364,7 +371,13 @@ export type TablePattern =
   /** Gingham tablecloth: two-colour check, `period` px per repeat (default 64). */
   | { kind: 'check'; colors?: [RGB, RGB]; period?: number }
   /** Polka-dot print: dots of `radius` px (default 7) on a hex grid `period` px apart (default 40). */
-  | { kind: 'dots'; colors?: [RGB, RGB]; period?: number; radius?: number };
+  | { kind: 'dots'; colors?: [RGB, RGB]; period?: number; radius?: number }
+  /**
+   * Wooden planks or floor tiles: light boards `width` px wide (default 300) with faint grain,
+   * separated by dark gaps `gap` px wide (default 8, colour `gapColor`, default 0.5 × background);
+   * `tiles` adds the crossing gaps of a tile grid.
+   */
+  | { kind: 'planks'; width?: number; gap?: number; gapColor?: RGB; tiles?: boolean };
 
 /** Things at the photo border that are not pieces. */
 export type ClutterKind = 'box-edge' | 'table-edge' | 'finger';
@@ -377,6 +390,24 @@ export interface GlareStyle {
   radius?: [number, number];
   /** Peak brightness added, fraction of full scale (default 0.8; ≥ 0.6 clips). */
   strength?: number;
+}
+
+/** Large soft border shadow (see {@link RenderOptions.shadowZone}). */
+export interface ShadowZoneStyle {
+  /** Darkening in the core of the zone, 0..1 (default 0.45). */
+  strength?: number;
+  /** Radius as a fraction of the shorter photo side (default 0.45). */
+  radius?: number;
+  /** Width of the soft edge as a fraction of the radius (default 0.3). */
+  softness?: number;
+}
+
+/** Pieces in dark table-coloured tones (see {@link RenderOptions.darkPieces}). */
+export interface DarkPieceStyle {
+  /** Share of the items drawn dark (default 0.35). */
+  share?: number;
+  /** Brightness relative to the background colour (default 0.5); the print still modulates it. */
+  level?: number;
 }
 
 /** Appearance of assembled patches (see {@link RenderOptions.patch}). */
@@ -592,6 +623,30 @@ function paintPattern(scene: FloatImage, p: TablePattern, bg: RGB, rng: Rng): vo
         put(y * W + x, mixRGB(a, b, (band(u) + band(v)) / 2));
       }
     }
+  } else if (p.kind === 'planks') {
+    const width = p.width ?? 300, gap = p.gap ?? 8;
+    const gapColor = p.gapColor ?? scaleRGB(bg, 0.5);
+    const ang = rng.uniform(-0.05, 0.05) + (rng.bool() ? Math.PI / 2 : 0);
+    const ca = Math.cos(ang), sa = Math.sin(ang);
+    const ou = rng.uniform(0, width), ov = rng.uniform(0, width);
+    const tone = new Float32Array(256);
+    for (let i = 0; i < tone.length; i++) tone[i] = rng.uniform(-0.04, 0.04);
+    const n1 = noiseField(rng), n2 = noiseField(rng);
+    // 1 inside a gap (centred on multiples of `width`), soft 1-px edges.
+    const inGap = (t: number) => {
+      const m = ((t % width) + width) % width;
+      return smooth01(gap / 2 + 0.5 - Math.min(m, width - m));
+    };
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const u = x * ca + y * sa + ou, v = -x * sa + y * ca + ov;
+        const iu = Math.floor(u / width + 0.5), iv = p.tiles ? Math.floor(v / width + 0.5) : 0;
+        // Per-board tone and faint grain running along the boards.
+        const k = 1 + tone[(iu * 31 + iv * 17) & 255] + 0.035 * n1(u / 16, v / 300) + 0.02 * n2(u / 3, v / 50);
+        const g = Math.max(inGap(u), p.tiles ? inGap(v) : 0);
+        put(y * W + x, mixRGB(scaleRGB(bg, k), gapColor, g));
+      }
+    }
   } else {
     const [a, b] = p.colors ?? [[42, 62, 112], [232, 226, 210]];
     const per = p.period ?? 40, r = p.radius ?? 7;
@@ -607,6 +662,30 @@ function paintPattern(scene: FloatImage, p: TablePattern, bg: RGB, rng: Rng): vo
         const d = Math.hypot(u - (i * per + shift), v - j * rowH);
         put(y * W + x, mixRGB(a, b, smooth01(r + 0.5 - d)));
       }
+    }
+  }
+}
+
+/** Darken a large soft zone reaching in from a random photo border (table and pieces alike). */
+function applyShadowZone(scene: FloatImage, z: ShadowZoneStyle, rng: Rng): void {
+  const { width: W, height: H, data } = scene;
+  const strength = z.strength ?? 0.45;
+  const R = (z.radius ?? 0.45) * Math.min(W, H);
+  const soft = Math.max(1, (z.softness ?? 0.3) * R);
+  const side = rng.int(4), t = rng.uniform(0.15, 0.85);
+  const cx = side === 0 || side === 2 ? t * W : side === 1 ? W + 0.25 * R : -0.25 * R;
+  const cy = side === 1 || side === 3 ? t * H : side === 0 ? H + 0.25 * R : -0.25 * R;
+  const wobble = noiseField(rng);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const d = Math.hypot(x - cx, y - cy);
+      if (d > 1.3 * R + soft) continue;
+      const edge = R * (1 + 0.12 * wobble(3 * Math.atan2(y - cy, x - cx) + 10, 0.5));
+      const f = 1 - strength * smooth01((edge - d) / soft + 0.5);
+      const o = (y * W + x) * 3;
+      data[o] *= f;
+      data[o + 1] *= f;
+      data[o + 2] *= f;
     }
   }
 }
@@ -1006,7 +1085,10 @@ export function renderPiecesPhoto(
   const style = opts.patch === false ? null : opts.patch ?? {};
   const seamDark = (style?.seam ?? 0.8) * edgeDark;
   const px = [0, 0, 0, 0];
-  const renders: { bx: number; by: number; bw: number; bh: number; cov: Float32Array; label: Int32Array; owner: Int32Array; Tinv: Mat3[]; seamDark: number; seamW: number; wall: Float32Array | null }[] = [];
+  const renders: { bx: number; by: number; bw: number; bh: number; cov: Float32Array; label: Int32Array; owner: Int32Array; Tinv: Mat3[]; seamDark: number; seamW: number; wall: Float32Array | null; dark: boolean }[] = [];
+  // Dark table-coloured pieces: chosen from their own random stream.
+  const darkRng = opts.darkPieces ? streamRng(opts.seed, 6) : null;
+  const darkShare = opts.darkPieces?.share ?? 0.35, darkLevel = opts.darkPieces?.level ?? 0.5;
   const rim = opts.rim;
   const rimT = rim ? rim.thickness ?? 2.5 : 0;
   const rimDir = (((rim?.direction ?? 60) * Math.PI) / 180);
@@ -1089,7 +1171,7 @@ export function renderPiecesPhoto(
         }
       }
     }
-    renders.push({ bx, by, bw, bh, cov, label, owner, Tinv, seamDark: multi ? seamDark : 0.5 * edgeDark, seamW: multi ? 1.0 : 0.8, wall });
+    renders.push({ bx, by, bw, bh, cov, label, owner, Tinv, seamDark: multi ? seamDark : 0.5 * edgeDark, seamW: multi ? 1.0 : 0.8, wall, dark: darkRng !== null && darkRng.random() < darkShare });
 
     const deg = (it.theta * 180) / Math.PI;
     const members: PatchMemberTruth[] = it.indices.map((i, k) => {
@@ -1174,6 +1256,12 @@ export function renderPiecesPhoto(
           const cx = Math.min(reference.width - 1, Math.max(0, p.x)), cy = Math.min(reference.height - 1, Math.max(0, p.y));
           sampleRGBA(reference, cx, cy, px);
         }
+        if (r.dark) {
+          // Dark tones of the table colour, modulated by the print's lightness (some print hue kept).
+          const l = (0.299 * px[0] + 0.587 * px[1] + 0.114 * px[2]) / 255;
+          const f = darkLevel * (0.6 + 0.8 * l);
+          for (let c = 0; c < 3; c++) px[c] = 0.75 * bg[c] * f + 0.25 * px[c] * darkLevel;
+        }
         const de = Math.max(0, dOut[i] - 0.5);
         const ds = dSeam[i];
         let f = 1 - edgeDark * Math.exp(-(de * de) / (2 * edgeW * edgeW));
@@ -1190,6 +1278,7 @@ export function renderPiecesPhoto(
     }
   }
 
+  if (opts.shadowZone) applyShadowZone(scene, opts.shadowZone, streamRng(opts.seed, 5));
   const photo = finishPhoto(scene, rng, opts);
   return { photo: opts.jpegQuality ? jpegRoundTrip(photo, opts.jpegQuality) : photo, truth };
 }

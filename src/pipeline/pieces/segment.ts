@@ -986,19 +986,31 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   // Shadow zones and local lighting the smooth surface cannot follow: learn them from the table
   // around the pieces found so far (coarse grid, cells of at least two pieces) and segment again.
   if (p.ref.refBody > 0 && fit.palette.length === 0) {
-    // Excluded: clear objects (median score above the high threshold) and anything piece-shaped.
-    // Other weak blobs, which may be the shadow zone itself, stay in the estimate (a cell spans
-    // several pieces, so the median is robust).
-    const exclude = createMask(W, H);
+    // Excluded (on a 4× coarser grid): clear objects (median score above the high threshold) and
+    // anything piece-shaped, plus the surroundings of every strong pixel of other blobs (print of
+    // weak pieces and patches is speckled with them). Smooth weak blobs, which may be the shadow
+    // zone itself, stay in the estimate (a cell spans several pieces, so the median is robust).
+    const f = 4, cw = Math.ceil(W / f), ch = Math.ceil(H / f);
+    const whole = createMask(cw, ch), strong = createMask(cw, ch);
+    const sd = p.score.data, high = p.th.high;
     for (const c of p.cands) {
       if (c.area < 0.25 * p.ref.refArea) continue;
       const pieceLike = c.area >= 0.5 * p.ref.refArea && c.shape !== null && c.shape.confidence >= MIN_SHAPE_CONFIDENCE;
-      if (!pieceLike && medianScore(p.score, c) < p.th.high) continue;
+      const all = pieceLike || medianScore(p.score, c) >= high;
       for (let y = 0; y < c.bbox.height; y++) {
-        for (let x = 0; x < c.bbox.width; x++) if (c.mask.data[y * c.bbox.width + x]) exclude.data[(y + c.bbox.y) * W + x + c.bbox.x] = 1;
+        const Y = y + c.bbox.y, crow = ((Y / f) | 0) * cw;
+        for (let x = 0; x < c.bbox.width; x++) {
+          if (!c.mask.data[y * c.bbox.width + x]) continue;
+          const X = x + c.bbox.x;
+          if (all) whole.data[crow + ((X / f) | 0)] = 1;
+          else if (sd[Y * W + X] >= high) strong.data[crow + ((X / f) | 0)] = 1;
+        }
       }
     }
-    const local = fitLocalTable(scored, fit, dilate(exclude, Math.max(3, Math.round(0.1 * p.ref.refBody))), Math.max(2 * p.ref.refBody, Math.min(W, H) / 10));
+    const exclude = dilate(whole, Math.max(1, Math.round((0.1 * p.ref.refBody) / f)));
+    const near = dilate(strong, Math.max(1, Math.round((0.3 * p.ref.refBody) / f)));
+    for (let i = 0; i < exclude.data.length; i++) exclude.data[i] |= near.data[i];
+    const local = fitLocalTable(scored, fit, exclude, Math.max(2 * p.ref.refBody, Math.min(W, H) / 10));
     lap('local');
     if (local) {
       fit = { ...fit, local };

@@ -28,6 +28,7 @@ const SHADOW_PENALTY = 2.5;
  * hardly get that deep (large shadow zones are left to the local table model), dark pieces do.
  */
 const DEEP_SHADOW_SLOPE = Number(globalThis.process?.env?.DSS ?? 25);
+const RHO_DEEP = Number(globalThis.process?.env?.RDK ?? 0.8);
 /** Modelled table lightness from which saturated pixels are compared by lightness only (over-exposure). */
 const CLIP_TABLE_L = 85;
 /** Floors for the per-channel noise sigma (Lab units), so noise-free backgrounds stay sane. */
@@ -98,11 +99,12 @@ function localRow(g: LocalTableGrid, y: number): Float32Array {
 
 /**
  * Local table-colour corrections: the median Lab residual (photo minus smooth model) of the table
- * pixels (`exclude` = clear objects) in a `cell`-sized window around each node of a grid with half
- * that spacing, so shadow zones and local lighting the quadratic surface cannot follow become
- * table. The outer nodes sit on the photo border (half windows there), so a shadow reaching in from
- * the edge is followed up to the edge. Nodes with too little table are filled from their neighbours. Returns null when the
- * residuals are negligible everywhere (< LOCAL_MIN_RESIDUAL sigmas).
+ * pixels (`exclude` = objects; a mask at any resolution, stretched over the photo) in a
+ * `cell`-sized window around each node of a grid with half that spacing, so shadow zones and local
+ * lighting the quadratic surface cannot follow become table. The outer nodes sit on the photo
+ * border (half windows there), so a shadow reaching in from the edge is followed up to the edge.
+ * Nodes with too little table are filled from their neighbours. Returns null when the residuals
+ * are negligible everywhere (< LOCAL_MIN_RESIDUAL sigmas).
  */
 export function fitLocalTable(photo: RGBAImage, fit: BackgroundFit, exclude: Mask, cell: number): LocalTableGrid | null {
   const { width: w, height: h, data } = photo;
@@ -123,7 +125,7 @@ export function fitLocalTable(photo: RGBAImage, fit: BackgroundFit, exclude: Mas
       for (let y = y0 + (step >> 1); y < y1; y += step) {
         for (let x = x0 + (step >> 1); x < x1; x += step) {
           n++;
-          if (exclude.data[y * w + x]) continue;
+          if (exclude.data[((y * exclude.height) / h | 0) * exclude.width + ((x * exclude.width) / w | 0)]) continue;
           const p = (y * w + x) * 4;
           const lab = rgbToLab(data[p], data[p + 1], data[p + 2]);
           const u = norm(x, w), v = norm(y, h);
@@ -199,7 +201,7 @@ function distance(L: number, a: number, b: number, bL: number, ba: number, bb: n
     const raw = ref > 1 ? (L + 16) / ref : 1;
     const rho = Math.max(RHO_MIN, raw);
     const sL = (L + 16 - rho * ref) * isL, sa = (a - rho * ba) * isa, sb = (b - rho * bb) * isb;
-    const pen = (SHADOW_PENALTY * (1 - rho)) / (1 - RHO_MIN) + deep * (rho - raw);
+    const pen = (SHADOW_PENALTY * (1 - rho)) / (1 - RHO_MIN) + (raw < RHO_DEEP ? deep * (RHO_DEEP - raw) : 0);
     const s2 = W_L * sL * sL + sa * sa + sb * sb + pen * pen;
     if (s2 < d2) d2 = s2;
   }
@@ -657,7 +659,7 @@ export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayIma
   const us = new Float32Array(w);
   for (let x = 0; x < w; x++) us[x] = norm(x, w);
   const lut = F_LUT, lin = LIN;
-  const wl = W_L, rhoMin = RHO_MIN, pen0 = SHADOW_PENALTY / (1 - RHO_MIN), deep = DEEP_SHADOW_SLOPE;
+  const wl = W_L, rhoMin = RHO_MIN, pen0 = SHADOW_PENALTY / (1 - RHO_MIN), deep = DEEP_SHADOW_SLOPE, rhoDeep = RHO_DEEP;
   // Local corrections per pixel column for the current row (bilinear in the grid).
   const g = model.local;
   const corr = g ? new Float32Array(w * 3) : null;
@@ -707,7 +709,7 @@ export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayIma
         const raw = ref > 1 ? (L + 16) / ref : 1;
         const rho = raw < rhoMin ? rhoMin : raw;
         const sL = (L + 16 - rho * ref) * isL, sa = (A - rho * ba) * isa, sb = (B - rho * bb) * isb;
-        const pen = pen0 * (1 - rho) + deep * (rho - raw);
+        const pen = pen0 * (1 - rho) + (raw < rhoDeep ? deep * (rhoDeep - raw) : 0);
         const s2 = wl * sL * sL + sa * sa + sb * sb + pen * pen;
         if (s2 < d2) d2 = s2;
       }
