@@ -187,9 +187,9 @@ export function saveOverlay(path: string, scene: Scene, det: BoxDetection): void
 type RGB = [number, number, number];
 
 /**
- * The accuracy sweep: both paintings, frames from none to wide, wood / plain / coloured /
- * lid-coloured tables, perspective 0.02–0.12, noise, blur, illumination gradients, glare, an
- * occluding hand and photos that cut off the lid edges.
+ * The accuracy sweep (38 scenes): both paintings, frames from none via thin (2 %) to wide, wood /
+ * plain / coloured / lid-coloured tables, perspective 0.02–0.12, noise, blur, illumination
+ * gradients, glare, an occluding hand and photos that cut off the lid edges.
  */
 export function sweepScenes(): SceneSpec[] {
   const S = (name: string, p: Painting, opts: BoxPhotoOptions, degrade?: Degrade): SceneSpec => ({
@@ -226,11 +226,14 @@ export function sweepScenes(): SceneSpec[] {
     S('gw-black-table', gw, { seed: 24, frameWidth: 0, background: [30, 30, 30], perspective: 0.08 }),
     S('gw-cream-table-noframe', gw, { seed: 25, frameWidth: 0, background: [214, 204, 178], perspective: 0.05 }),
     S('sn-big-1600', sn, { seed: 26, frameWidth: 0.06, perspective: 0.09, width: 1600, height: 1200 }),
+    // Thin frames: logo and text come within a few pixels of the picture.
+    S('sn-thinframe-illum', sn, { seed: 27, frameWidth: 0.02, perspective: 0.07, illumination: 0.25 }),
+    S('gw-thinframe-wood', gw, { seed: 28, frameWidth: 0.02, perspective: 0.05 }),
   ];
   // Seeded random combinations.
   const rng = new Rng(4242);
   const bgs: BoxPhotoOptions['background'][] = ['wood', 'plain', [90, 70, 50], [150, 150, 160], [35, 55, 80]];
-  for (let i = 0; list.length < 36; i++) {
+  for (let i = 0; list.length < 38; i++) {
     const p = i % 2 ? gw : sn;
     const frame = [0, 0.03, 0.06, 0.09][rng.int(4)];
     const bg = bgs[rng.int(bgs.length)];

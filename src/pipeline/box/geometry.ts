@@ -2,7 +2,7 @@
  * Quad geometry for box detection: rotation of the corner labelling, perspective-aware aspect-ratio
  * estimation, rectified output size, and small helpers (angles, convexity, unit-square mapping).
  */
-import { applyMat3, distance, findHomography, polygonSignedArea, type Mat3, type Point, type Quad } from '../../cv/geometry';
+import { distance, findHomography, polygonSignedArea, type Mat3, type Point, type Quad } from '../../cv/geometry';
 import { lineIntersection } from '../../cv/lines';
 
 /**
@@ -52,31 +52,11 @@ export function unitSquareToQuad(q: Quad): Mat3 | null {
   return findHomography([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }], q);
 }
 
-/** Map a quad with a point transform. */
-export function mapQuad(q: Quad, f: (p: Point) => Point): Quad {
-  return [f(q[0]), f(q[1]), f(q[2]), f(q[3])];
-}
-
-/** Rectangle [u0,u1]×[v0,v1] of unit-square coordinates mapped through `H` as a quad. */
-export function subQuad(H: Mat3, u0: number, v0: number, u1: number, v1: number): Quad {
-  return [
-    applyMat3(H, { x: u0, y: v0 }),
-    applyMat3(H, { x: u1, y: v0 }),
-    applyMat3(H, { x: u1, y: v1 }),
-    applyMat3(H, { x: u0, y: v1 }),
-  ];
-}
-
 /** Largest corner displacement between two quads (same corner order). */
 export function maxCornerDistance(a: Quad, b: Quad): number {
   let m = 0;
   for (let i = 0; i < 4; i++) m = Math.max(m, distance(a[i], b[i]));
   return m;
-}
-
-/** Length of a quad's diagonal (mean of both diagonals). */
-export function quadDiagonal(q: Quad): number {
-  return (distance(q[0], q[2]) + distance(q[1], q[3])) / 2;
 }
 
 type V3 = [number, number, number];

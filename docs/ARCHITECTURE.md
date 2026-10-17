@@ -153,8 +153,10 @@ composeHighRes(reference, closeups: { image; registration }[], opts: ComposeOpti
 
 ### box (`src/pipeline/box/`)
 ```ts
-detectBox(photo: RGBAImage): BoxDetection
+detectBox(photo: RGBAImage, opts?): BoxDetection   // candidate labels: 'picture' | 'lid' | 'frame-inner' | 'alternative' | 'whole-photo'
 suggestRectifiedSize(quad: Quad, aspect?: number, maxSide?: number): { width: number; height: number }
+rotateQuad(quad: Quad, quarterTurns: number): Quad  // +1 = rectified output rotated 90° clockwise
+estimateQuadAspect(quad: Quad): number
 assessReference(reference: RGBAImage, grid: GridSpec): QualityReport   // px per cell, sharpness, glare
 ```
 

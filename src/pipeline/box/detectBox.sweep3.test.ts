@@ -4,7 +4,7 @@ import { detectBox } from './detectBox';
 import { estimateQuadAspect } from './geometry';
 import { runSweep, sweepScenes } from './testkit';
 
-// The 36-scene accuracy sweep is split over three files so Vitest can render them in parallel.
+// The 38-scene accuracy sweep is split over three files so Vitest can render them in parallel.
 const PART = 3, PARTS = 3;
 
 describe(`detectBox accuracy sweep (part ${PART}/${PARTS})`, () => {

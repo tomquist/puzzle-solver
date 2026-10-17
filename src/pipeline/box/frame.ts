@@ -271,6 +271,8 @@ export interface FrameEvidence {
   bandSides: number;
   /** Narrowest measurable band (fraction of the outer quad). */
   minBand: number;
+  /** Per measured side: frame-likeness min(uniformity, flatness) of its best depth window. */
+  sideScores: number[];
 }
 
 /**
@@ -281,7 +283,7 @@ export interface FrameEvidence {
  */
 export function frameEvidence(img: RGBAImage, f: GradientField, outer: Quad, bands: [number, number, number, number]): FrameEvidence {
   const H = unitSquareToQuad(outer);
-  const none: FrameEvidence = { uniformity: 0, flatness: 0, innerSimilarity: 1, outerSimilarity: 1, evidence: 0, bandSides: 0, minBand: 0 };
+  const none: FrameEvidence = { uniformity: 0, flatness: 0, innerSimilarity: 1, outerSimilarity: 1, evidence: 0, bandSides: 0, minBand: 0, sideScores: [] };
   if (!H) return none;
   const sides = quadSides(outer);
   const [bt, br, bb, bl] = bands;
@@ -333,40 +335,51 @@ export function frameEvidence(img: RGBAImage, f: GradientField, outer: Quad, ban
     }
   }
   if (!per.length) return none;
-  // Frame colour: median of the samples 2.5 px outside the inner quad on all band sides.
-  const ref = per.flatMap((p) => p.out[1]);
-  const med = [0, 1, 2].map((c) => {
-    const v = ref.map((p) => p[c]).sort((x, y) => x - y);
-    return v[Math.floor(v.length / 2)];
-  });
-  const close = (p: RGB) => Math.hypot(p[0] - med[0], p[1] - med[1], p[2] - med[2]) < 32;
+  const median = (v: RGB[]): RGB => [0, 1, 2].map((c) => {
+    const x = v.map((p) => p[c]).sort((a, b) => a - b);
+    return x[Math.floor(x.length / 2)] ?? 0;
+  }) as RGB;
+  const near = (a: RGB, b: RGB) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) < 32;
   const frac = <T,>(v: T[], pred: (t: T) => boolean) => (v.length ? v.filter(pred).length / v.length : 0);
-  let innerSimilarity = 0;
-  const sideStats: { u: number; fl: number; score: number }[] = [];
-  for (const p of per) {
-    // Best window of two adjacent depths (flatness from the deeper one, away from the edge itself).
-    let best = { u: 0, fl: 0, score: -1 };
+  // Per side: the frame strip must be uniform in itself (its own median colour – lighting varies
+  // across a lid) and untextured; best window of two adjacent depths, flatness from the deeper one.
+  interface SideStat { u: number; fl: number; score: number; med: RGB; inner: number; beyond: number }
+  const stats: SideStat[] = per.map((p) => {
+    let best: SideStat = { u: 0, fl: 0, score: -1, med: [0, 0, 0], inner: 1, beyond: 1 };
     for (let i = 0; i + 1 < p.depths.length; i++) {
-      const u = frac([...p.out[i], ...p.out[i + 1]], close);
+      const samples = [...p.out[i], ...p.out[i + 1]];
+      const med = median(samples);
+      const u = frac(samples, (c) => near(c, med));
       const fl = frac(p.flat[i + 1], (x) => x);
       const score = Math.min(u, fl);
-      if (score > best.score) best = { u, fl, score };
+      if (score > best.score) best = { u, fl, score, med, inner: 0, beyond: 0 };
     }
-    sideStats.push(best);
-    innerSimilarity = Math.max(innerSimilarity, frac(p.ins, close));
+    best.inner = frac(p.ins, (c) => near(c, best.med));
+    best.beyond = frac(p.beyond, (c) => near(c, best.med));
+    return best;
+  });
+  // All sides show the same frame: chromaticity close to the common one (brightness may vary).
+  const chroma = (c: RGB): [number, number] => {
+    const t = c[0] + c[1] + c[2] + 1e-6;
+    return [c[0] / t, c[1] / t];
+  };
+  const common = chroma(median(stats.map((x) => x.med)));
+  for (const x of stats) {
+    const ch = chroma(x.med);
+    if (Math.hypot(ch[0] - common[0], ch[1] - common[1]) > 0.05) x.score = Math.min(x.score, 0.2);
   }
-  const beyond = per.flatMap((p) => p.beyond);
-  const outerSimilarity = frac(beyond, close);
+  const sideScores = stats.map((x) => x.score);
   // Every band side must look like frame – except one when the frame surrounds the picture (the
   // label strip with logo and text often comes close to the picture); that side is then left out.
-  // The picture just inside must differ on every side; a band that simply continues outside the
-  // outer quad is more likely table (or shadow) than frame.
-  sideStats.sort((a, b) => a.score - b.score);
-  const used = sideStats.length >= 4 ? sideStats.slice(1) : sideStats;
+  // The picture just inside must differ from the frame on every side; a band that simply continues
+  // outside the outer quad is more likely table (or shadow) than frame.
+  const used = [...stats].sort((a, b) => a.score - b.score).slice(stats.length >= 4 ? 1 : 0);
   const uniformity = used.reduce((a, x) => a + x.u, 0) / used.length;
   const flatness = used.reduce((a, x) => a + x.fl, 0) / used.length;
+  const innerSimilarity = Math.max(...used.map((x) => x.inner));
+  const outerSimilarity = used.reduce((a, x) => a + x.beyond, 0) / used.length;
   const evidence = used[0].score < 0.4 ? 0 : Math.min(uniformity, flatness) * (1 - innerSimilarity) * (1 - 0.6 * outerSimilarity);
-  return { uniformity, flatness, innerSimilarity, outerSimilarity, evidence, bandSides: per.length, minBand };
+  return { uniformity, flatness, innerSimilarity, outerSimilarity, evidence, bandSides: per.length, minBand, sideScores };
 }
 
 /** Unit-square coordinates of position `a` along side s at inward depth d. */
