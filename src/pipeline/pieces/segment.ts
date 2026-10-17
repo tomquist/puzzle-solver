@@ -103,7 +103,12 @@ function textureForeground(score: GrayImage, colourFg: Mask): Mask | null {
   const fgS = half ? resizeMask(colourFg, w, h) : colourFg;
   const r = Math.max(2, Math.round(Math.min(w, h) / 300));
   if (w < 8 * r || h < 8 * r) return null;
-  const energy = boxBlurGray(sobel(img).magnitude, r);
+  // High-pass energy (deviation from the local mean): print structure and outlines respond, smooth
+  // ramps such as soft cast shadows and lighting gradients do not.
+  const local = boxBlurGray(img, r);
+  const dev = createGray(w, h);
+  for (let i = 0; i < dev.data.length; i++) dev.data[i] = Math.abs(img.data[i] - local.data[i]);
+  const energy = boxBlurGray(dev, r);
   // Robust statistics of the table's texture (samples away from the colour foreground).
   const near = dilate(fgS, r + 3);
   const step = Math.max(1, Math.round(Math.sqrt((w * h) / 40000)));

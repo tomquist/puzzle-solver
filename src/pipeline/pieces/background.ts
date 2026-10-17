@@ -111,6 +111,8 @@ interface Samples {
   v: Float32Array;
   lab: Float32Array; // 3 per sample
   band: Uint8Array;
+  /** 1 = a channel is saturated (≥ 254): no noise, colour unreliable (over-exposed table). */
+  clip: Uint8Array;
   gw: number;
   gh: number;
 }
@@ -120,7 +122,7 @@ function takeSamples(photo: RGBAImage): Samples {
   const step = Math.max(1, Math.round(Math.sqrt((w * h) / 25000)));
   const gw = Math.ceil(w / step), gh = Math.ceil(h / step);
   const n = gw * gh;
-  const u = new Float32Array(n), v = new Float32Array(n), c = new Float32Array(n * 3), band = new Uint8Array(n);
+  const u = new Float32Array(n), v = new Float32Array(n), c = new Float32Array(n * 3), band = new Uint8Array(n), clip = new Uint8Array(n);
   const bw = Math.max(2 * step, Math.round(0.04 * Math.min(w, h)));
   for (let gy = 0, i = 0; gy < gh; gy++) {
     const y = Math.min(h - 1, gy * step + (step >> 1));
@@ -134,9 +136,10 @@ function takeSamples(photo: RGBAImage): Samples {
       c[i * 3 + 1] = lab[1];
       c[i * 3 + 2] = lab[2];
       band[i] = x < bw || y < bw || x >= w - bw || y >= h - bw ? 1 : 0;
+      clip[i] = Math.max(data[p], data[p + 1], data[p + 2]) >= 254 ? 1 : 0;
     }
   }
-  return { n, u, v, lab: c, band, gw, gh };
+  return { n, u, v, lab: c, band, clip, gw, gh };
 }
 
 /** Weighted least-squares quadratic fit of one channel; null when singular. */
@@ -177,9 +180,18 @@ function fitChannel(s: Samples, ch: number, weight: Float32Array): number[] | nu
 export function fitBackground(photo: RGBAImage): BackgroundFit {
   const { width, height } = photo;
   const s = takeSamples(photo);
+  // Over-exposed (clipped) table has no noise and a flattened colour: leave it out of the fit and the
+  // spread unless it is most of the table.
+  let clipped = 0;
+  for (let i = 0; i < s.n; i++) clipped += s.clip[i];
+  const skipClipped = clipped > 0 && s.n - clipped >= 0.3 * s.n;
   // 1) Robust start from the border band: per-channel median and MAD.
-  const bandIdx: number[] = [];
-  for (let i = 0; i < s.n; i++) if (s.band[i]) bandIdx.push(i);
+  let bandIdx: number[] = [];
+  for (let i = 0; i < s.n; i++) if (s.band[i] && !(skipClipped && s.clip[i])) bandIdx.push(i);
+  if (bandIdx.length < 3 * NT) {
+    bandIdx = [];
+    for (let i = 0; i < s.n; i++) if (s.band[i]) bandIdx.push(i);
+  }
   const color: [number, number, number] = [0, 0, 0];
   const sigma: [number, number, number] = [0, 0, 0];
   const tmp = new Float32Array(bandIdx.length);
@@ -216,7 +228,7 @@ export function fitBackground(photo: RGBAImage): BackgroundFit {
     let used = 0;
     for (let i = 0; i < s.n; i++) {
       const d = dist[i];
-      if ((bandOnly && !s.band[i]) || near.data[i] || d >= C) weight[i] = 0;
+      if ((bandOnly && !s.band[i]) || near.data[i] || d >= C || (skipClipped && s.clip[i])) weight[i] = 0;
       else {
         const t = d / C;
         weight[i] = (1 - t * t) * (1 - t * t);
