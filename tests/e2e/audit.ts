@@ -136,7 +136,9 @@ export async function auditPage(page: Page): Promise<Violation[]> {
         if (el.classList.contains('visually-hidden')) continue; // its <label class="btn"> is checked
         if (el instanceof HTMLInputElement && el.type === 'checkbox' && el.closest('label.switch')) continue;
         if (el.tagName === 'A' && el.closest('p, li') && getComputedStyle(el).display === 'inline') continue; // inline text link
-        const r = el.getBoundingClientRect();
+        // A checkbox/radio wrapped in its <label>: tapping the label toggles it, so the label is the hit area.
+        const wrap = el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio') ? el.closest('label') : null;
+        const r = (wrap ?? el).getBoundingClientRect();
         const g = pseudoGrow(el);
         const w = r.width + g.l + g.r;
         const h = r.height + g.t + g.b;

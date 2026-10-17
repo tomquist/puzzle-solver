@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_PREFS, loadPrefs, parsePrefs, PREFS_KEY, savePrefs, type StorageLike } from './prefs';
+import { DEFAULT_PREFS, loadPrefs, parsePrefs, PREFS_KEY, savePrefs, type StorageLike, setDismissed } from './prefs';
 
 class MemStorage implements StorageLike {
   data = new Map<string, string>();
@@ -44,5 +44,15 @@ describe('prefs', () => {
     const a = loadPrefs(undefined);
     a.view.turnHints = false;
     expect(loadPrefs(undefined).view.turnHints).toBe(true);
+  });
+});
+
+describe('setDismissed', () => {
+  it('remembers and forgets dismissed hints without duplicates', () => {
+    let p = setDismissed(DEFAULT_PREFS, 'camera-tips:pieces', true);
+    p = setDismissed(p, 'camera-tips:pieces', true);
+    expect(p.dismissed).toEqual(['camera-tips:pieces']);
+    expect(setDismissed(p, 'camera-tips:pieces', false).dismissed).toEqual([]);
+    expect(DEFAULT_PREFS.dismissed).toEqual([]);
   });
 });
