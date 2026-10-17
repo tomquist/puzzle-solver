@@ -46,18 +46,18 @@ export function CornersStep({
       <QualityBanner report={detection.quality} subject="box photo" hideWhenClean />
       <CornerEditor src={photo.url} source={source} width={photo.width} height={photo.height} quad={quad} onChange={onQuad} />
       <div className="toolbar wrap">
-        <button className="btn" onClick={() => onCandidate(0)}>
-          <IconWand size={18} />
+        <button className="btn btn-sm" onClick={() => onCandidate(0)}>
+          <IconWand size={16} />
           Auto-detect
         </button>
         {n > 1 && (
-          <button className="btn" onClick={() => onCandidate(next)}>
-            <IconRefresh size={18} />
+          <button className="btn btn-sm" onClick={() => onCandidate(next)}>
+            <IconRefresh size={16} />
             Next: {detection.candidates[next].label}
           </button>
         )}
-        <button className="btn" onClick={() => onQuad(whole)}>
-          <IconImage size={18} />
+        <button className="btn btn-sm" onClick={() => onQuad(whole)}>
+          <IconImage size={16} />
           Use whole photo
         </button>
       </div>

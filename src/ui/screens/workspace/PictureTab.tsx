@@ -6,6 +6,7 @@ import { ZoomPanView } from '../../components/ZoomPanView';
 import { usePuzzle } from '../../context/PuzzleContext';
 import { useRepo } from '../../context/RepositoryContext';
 import { useAsync } from '../../hooks/useAsync';
+import { navigate } from '../../hooks/useHashRoute';
 import { formatDate } from '../../lib/format';
 import { cellsForPlacement, displayStatus } from '../../lib/pieces';
 import { placedCells } from '../../lib/progress';
@@ -36,8 +37,8 @@ export function PictureTab() {
   if (!reference) return <Spinner label="Loading the picture…" />;
   return (
     <>
-      <div className="viewer-frame tall">
-        <ZoomPanView contentWidth={reference.width} contentHeight={reference.height} label={`Puzzle picture of ${puzzle.name}`}>
+      <div className="viewer-frame tall" style={{ aspectRatio: `${reference.width} / ${reference.height}` }}>
+        <ZoomPanView contentWidth={reference.width} contentHeight={reference.height} label={`Puzzle picture of ${puzzle.name}`} margin={14}>
           {(scale) => (
             <>
               <img src={reference.url} alt="" className="fill" draggable={false} />
@@ -49,7 +50,7 @@ export function PictureTab() {
                 placed={placed}
                 markers={showMarkers ? markers : []}
                 scale={scale}
-                onMarker={latest.data ? () => (location.hash = href.scan(puzzle.id, latest.data!.id)) : undefined}
+                onMarker={latest.data ? () => navigate(href.scan(puzzle.id, latest.data!.id)) : undefined}
               />
             </>
           )}

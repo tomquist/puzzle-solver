@@ -108,7 +108,6 @@ export function PieceDetail(props: PieceDetailProps) {
               </button>
             ) : (
               <button className="btn btn-primary grow" onClick={() => props.onPlace(current)} data-testid="mark-placed">
-                <IconCheck size={18} />
                 Placed ✓
               </button>
             )}
@@ -153,7 +152,7 @@ export function PieceDetail(props: PieceDetailProps) {
 
       {current && (
         <section className="pd-section">
-          <h3>Goes here</h3>
+          <h3>{status === 'unmatched' ? 'Best guess – low confidence' : status === 'ambiguous' && rejected === 0 ? 'Probably goes here' : 'Goes here'}</h3>
           <CandidateCard
             placement={current}
             grid={grid}

@@ -17,15 +17,16 @@ export async function saveNewPuzzle(repo: PuzzleRepository, r: WizardResult, onS
     const sources: SourcePhoto[] = [
       { blobId: await put(r.photo.blob), width: r.photo.width, height: r.photo.height, role: 'overview', quad: r.quad },
     ];
-    const used = r.closeups.filter((c) => c.status === 'ok' && c.rgba && c.registration);
+    const used = r.closeups.filter((c) => c.status === 'ok' && c.pixels && c.registration);
     for (let i = 0; i < used.length; i++) {
       const c = used[i];
       onStep(`Saving close-up ${i + 1} of ${used.length}…`, 0.2 + (0.3 * i) / used.length);
-      const blob = await rgbaToBlob(c.rgba!, 'image/jpeg', 0.92);
+      const img = c.pixels!.image;
+      const blob = await rgbaToBlob(img, 'image/jpeg', 0.92);
       sources.push({
         blobId: await put(blob),
-        width: c.rgba!.width,
-        height: c.rgba!.height,
+        width: img.width,
+        height: img.height,
         role: 'closeup',
         toReference: mat3Multiply(scaling(r.referenceScale), c.registration!.toReference),
       });
@@ -33,7 +34,7 @@ export async function saveNewPuzzle(repo: PuzzleRepository, r: WizardResult, onS
     onStep('Saving the reference picture…', 0.6);
     const referenceBlobId = await put(r.reference.blob);
     onStep('Making a thumbnail…', 0.8);
-    const thumbnailBlobId = await put(await makeThumbnail(r.reference.rgba, 320));
+    const thumbnailBlobId = await put(await makeThumbnail(r.reference.pixels.image, 320));
     const now = Date.now();
     const puzzle: PuzzleRecord = {
       id: newId(),

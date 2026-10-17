@@ -53,7 +53,7 @@ export function ReferenceStep({
   return (
     <div className="stack">
       <p className="lead">This is your reference picture. Check that it shows the whole puzzle picture, straight and uncropped.</p>
-      <div className="viewer-frame wizard-ref">
+      <div className="viewer-frame wizard-ref" style={{ aspectRatio: `${reference.width} / ${reference.height}` }}>
         <ZoomPanView contentWidth={reference.width} contentHeight={reference.height} label="Reference picture">
           {(scale) => (
             <>

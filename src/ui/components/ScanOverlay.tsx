@@ -3,7 +3,7 @@ import type { Rect } from '../../cv/image';
 import type { DetectedRegion, ScanResult } from '../../model/types';
 import { polygonPath, regionCenter, regionSize, upArrow } from '../lib/overlay';
 import { currentPlacement, displayStatus, matchFor } from '../lib/pieces';
-import { nearestQuarterTurn } from '../lib/rotation';
+import { turnBadge, upVector } from '../lib/rotation';
 
 export function ScanOverlay({
   result,
@@ -30,7 +30,7 @@ export function ScanOverlay({
   onSelect: (id: number) => void;
 }) {
   const { width, height } = result;
-  const minLabel = 13 / scale; // label radius at least ~13 screen px
+  const minLabel = 10.5 / scale; // label radius at least ~10 screen px
   const highlight = new Set(highlightIds ?? []);
   const dimOthers = highlight.size > 0;
   return (
@@ -93,9 +93,16 @@ function RegionMark({
   const placement = currentPlacement(match, rejected);
   const c = regionCenter(region);
   const size = regionSize(region);
-  const labelR = Math.max(minLabel, size * 0.16);
-  const arrow = placement ? upArrow(c, placement.rotationDeg, size * 0.42) : undefined;
-  const turn = placement ? nearestQuarterTurn(placement.rotationDeg) : 0;
+  const labelR = Math.max(minLabel, size * 0.13);
+  // The arrow sticks out of the number badge like a compass needle.
+  const tip = Math.max(size * 0.62, labelR * 2.6);
+  const arrow = placement ? upArrow(c, placement.rotationDeg, tip, { start: labelR * 0.6, head: Math.max(labelR * 0.95, size * 0.12) }) : undefined;
+  const badge = placement ? turnBadge(placement.rotationDeg) : '';
+  const u = placement ? upVector(placement.rotationDeg) : { x: 0, y: -1 };
+  // Turn hint on the side opposite the arrow.
+  const badgeH = labelR * 1.15;
+  const badgeW = badgeH * 2.4;
+  const bc = { x: c.x - u.x * (labelR + badgeH * 0.9), y: c.y - u.y * (labelR + badgeH * 0.9) };
   const cls = [
     'region',
     `st-${status}`,
@@ -126,8 +133,10 @@ function RegionMark({
       <path d={polygonPath(region.contour)} className="region-line" vectorEffect="non-scaling-stroke" />
       {arrow && !placed && (
         <g className="region-arrow">
-          <line x1={arrow.from.x} y1={arrow.from.y} x2={arrow.to.x} y2={arrow.to.y} strokeWidth={Math.max(labelR * 0.28, size * 0.045)} />
-          <polygon points={arrow.head.map((p) => `${p.x},${p.y}`).join(' ')} />
+          <line className="arrow-halo" x1={arrow.from.x} y1={arrow.from.y} x2={arrow.to.x} y2={arrow.to.y} strokeWidth={labelR * 0.62} />
+          <polygon className="arrow-halo" points={arrow.head.map((p) => `${p.x},${p.y}`).join(' ')} strokeWidth={labelR * 0.3} />
+          <line className="arrow-body" x1={arrow.from.x} y1={arrow.from.y} x2={arrow.to.x} y2={arrow.to.y} strokeWidth={labelR * 0.3} />
+          <polygon className="arrow-body" points={arrow.head.map((p) => `${p.x},${p.y}`).join(' ')} />
         </g>
       )}
       <g className="region-label">
@@ -136,10 +145,13 @@ function RegionMark({
           {placed ? '✓' : region.id}
         </text>
       </g>
-      {turn !== 0 && !placed && placement && (
-        <text className="region-turn" x={c.x} y={c.y + labelR * 2.3} fontSize={labelR * 0.95} textAnchor="middle">
-          {turn === 90 ? '↻' : turn === 270 ? '↺' : '↻↻'}
-        </text>
+      {badge && !placed && (
+        <g className="region-turn" aria-hidden="true">
+          <rect x={bc.x - badgeW / 2} y={bc.y - badgeH / 2} width={badgeW} height={badgeH} rx={badgeH / 2} />
+          <text x={bc.x} y={bc.y} fontSize={badgeH * 0.72} dy="0.35em" textAnchor="middle">
+            {badge}
+          </text>
+        </g>
       )}
     </g>
   );

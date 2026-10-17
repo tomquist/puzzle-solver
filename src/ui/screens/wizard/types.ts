@@ -2,10 +2,12 @@ import type { Quad } from '../../../cv/geometry';
 import type { RGBAImage } from '../../../cv/image';
 import type { CloseupRegistration, CutStyle, GridSpec, PhysicalSize } from '../../../model/types';
 import { createObjectUrl, revokeObjectUrl, rgbaToBlob } from '../../../platform/imageio';
+import { Pixels } from '../../lib/pixels';
 
 /** An image held in memory both as pixels (for the pipeline) and as a JPEG (for display/storage). */
 export interface EncodedImage {
-  rgba: RGBAImage;
+  /** Pixels (opaque holder – see Pixels for why). */
+  pixels: Pixels;
   blob: Blob;
   url: string;
   width: number;
@@ -14,7 +16,7 @@ export interface EncodedImage {
 
 export async function encodeImage(rgba: RGBAImage, quality = 0.92): Promise<EncodedImage> {
   const blob = await rgbaToBlob(rgba, 'image/jpeg', quality);
-  return { rgba, blob, url: createObjectUrl(blob), width: rgba.width, height: rgba.height };
+  return { pixels: new Pixels(rgba), blob, url: createObjectUrl(blob), width: rgba.width, height: rgba.height };
 }
 
 export function releaseImage(img: EncodedImage | undefined): void {
@@ -26,7 +28,7 @@ export interface Closeup {
   /** Preview URL of the original file. */
   previewUrl: string;
   status: 'reading' | 'registering' | 'ok' | 'failed';
-  rgba?: RGBAImage;
+  pixels?: Pixels;
   registration?: CloseupRegistration;
   error?: string;
 }

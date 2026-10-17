@@ -59,6 +59,8 @@ async function decodeWithImageElement(blob: Blob): Promise<HTMLImageElement> {
   }
 }
 
+const UNREADABLE = 'This file could not be opened as a photo. Try a JPEG or PNG image.';
+
 /**
  * Decode an image file/blob into an RGBAImage, applying the EXIF orientation of phone photos and
  * limiting the longer side to `maxSide` pixels.
@@ -75,12 +77,17 @@ export async function blobToRGBA(blob: Blob, maxSide = 4096): Promise<RGBAImage>
     sh = bitmap.height;
   } catch {
     // Older browsers: <img> applies EXIF orientation by default (CSS image-orientation: from-image).
-    const img = await decodeWithImageElement(blob);
+    let img: HTMLImageElement;
+    try {
+      img = await decodeWithImageElement(blob);
+    } catch {
+      throw new Error(UNREADABLE);
+    }
     source = img;
     sw = img.naturalWidth;
     sh = img.naturalHeight;
   }
-  if (!sw || !sh) throw new Error('The image could not be decoded');
+  if (!sw || !sh) throw new Error(UNREADABLE);
   const { width, height } = fitWithin(sw, sh, maxSide);
   const canvas = createCanvas(width, height);
   const ctx = context2d(canvas, { willReadFrequently: true });

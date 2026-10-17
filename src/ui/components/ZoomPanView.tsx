@@ -23,6 +23,7 @@ export function ZoomPanView({
   className = '',
   handle,
   label,
+  margin = 0,
 }: {
   contentWidth: number;
   contentHeight: number;
@@ -31,11 +32,13 @@ export function ZoomPanView({
   className?: string;
   handle?: Ref<ZoomPanHandle>;
   label?: string;
+  /** Free space (CSS px) around the content when fitted, e.g. for markers on the edges. */
+  margin?: number;
 }) {
   const viewport = useRef<HTMLDivElement>(null);
   const { width: vw, height: vh } = useElementSize(viewport);
   const [t, setT] = useState<ViewTransform>({ scale: 1, x: 0, y: 0 });
-  const touched = useRef(false);
+  const lastFit = useRef<ViewTransform | null>(null);
   const pointers = useRef(new Map<number, Point>());
   const gesture = useRef<{ moved: boolean; start: Point; last: Point; pinchDist?: number; pinchMid?: Point }>({
     moved: false,
@@ -44,34 +47,39 @@ export function ZoomPanView({
   });
   const suppressClick = useRef(false);
 
-  const fit = fitTransform(contentWidth, contentHeight, vw, vh);
-  const minScale = fit.scale * 0.9;
+  const fit = fitTransform(contentWidth, contentHeight, vw, vh, Math.min(margin, Math.min(vw, vh) / 8));
+  const minScale = fit.scale;
   const maxScale = Math.max(fit.scale * 6, 2.5);
   const tRef = useRef(t);
   tRef.current = t;
 
   const apply = useCallback(
-    (next: ViewTransform) => setT(clampPan(next, contentWidth, contentHeight, vw, vh)),
+    (next: ViewTransform) => {
+      const fitScale = lastFit.current?.scale ?? 0;
+      // At (or below) the fit scale the content simply stays fitted and centered.
+      setT(next.scale <= fitScale * 1.001 && lastFit.current ? lastFit.current : clampPan(next, contentWidth, contentHeight, vw, vh));
+    },
     [contentWidth, contentHeight, vw, vh],
   );
 
-  // Fit on first layout and on resize until the user interacts.
+  // Fit on first layout; on resize keep the zoom only if the user had zoomed in.
   useLayoutEffect(() => {
     if (!vw || !vh) return;
-    if (!touched.current) setT(fit);
+    const prev = lastFit.current;
+    lastFit.current = fit;
+    const zoomed = prev && tRef.current.scale > prev.scale * 1.02;
+    if (!zoomed) setT(fit);
     else setT((cur) => clampPan(cur, contentWidth, contentHeight, vw, vh));
-  }, [vw, vh, contentWidth, contentHeight]);
+  }, [vw, vh, contentWidth, contentHeight, fit.scale]);
 
   useImperativeHandle(
     handle,
     () => ({
       focus(p: Point, zoom = 3) {
-        touched.current = true;
         const scale = Math.min(maxScale, Math.max(fit.scale, fit.scale * zoom));
         apply(centerOn(p, scale, vw, vh));
       },
       reset() {
-        touched.current = false;
         setT(fit);
       },
     }),
@@ -84,7 +92,6 @@ export function ZoomPanView({
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      touched.current = true;
       const r = el.getBoundingClientRect();
       const factor = Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0018));
       apply(zoomAt(tRef.current, factor, { x: e.clientX - r.left, y: e.clientY - r.top }, minScale, maxScale));
@@ -121,7 +128,6 @@ export function ZoomPanView({
       const [a, b] = [...pointers.current.values()];
       const dist = Math.hypot(a.x - b.x, a.y - b.y);
       const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-      touched.current = true;
       let next = zoomAt(tRef.current, dist / g.pinchDist, mid, minScale, maxScale);
       next = { ...next, x: next.x + mid.x - g.pinchMid.x, y: next.y + mid.y - g.pinchMid.y };
       apply(next);
@@ -134,7 +140,6 @@ export function ZoomPanView({
       g.moved = true;
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     }
-    touched.current = true;
     const cur = tRef.current;
     apply({ scale: cur.scale, x: cur.x + p.x - g.last.x, y: cur.y + p.y - g.last.y });
     g.last = p;
@@ -151,7 +156,6 @@ export function ZoomPanView({
   };
 
   const zoomBy = (factor: number) => {
-    touched.current = true;
     apply(zoomAt(tRef.current, factor, { x: vw / 2, y: vh / 2 }, minScale, maxScale));
   };
 
@@ -162,7 +166,7 @@ export function ZoomPanView({
       <div
         ref={viewport}
         className="zoompan-viewport"
-        role="img"
+        role="group"
         aria-label={label}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -176,7 +180,6 @@ export function ZoomPanView({
           }
         }}
         onDoubleClick={(e) => {
-          touched.current = true;
           if (zoomedIn) setT(fit);
           else apply(zoomAt(tRef.current, 2.5, local(e), minScale, maxScale));
         }}
@@ -202,10 +205,7 @@ export function ZoomPanView({
         {zoomedIn && (
           <button
             className="icon-btn small glass"
-            onClick={() => {
-              touched.current = false;
-              setT(fit);
-            }}
+            onClick={() => setT(fit)}
             aria-label="Show whole picture"
           >
             <IconExpand size={16} />

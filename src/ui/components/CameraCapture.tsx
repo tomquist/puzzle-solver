@@ -8,7 +8,7 @@ import type { FrameQuality } from '../../model/types';
 import { CAMERA_ERROR_TEXT, cameraPermission, CameraError, isCameraSupported, openCamera, type CameraSession } from '../../platform/camera';
 import { usePipeline } from '../context/PipelineContext';
 import { Banner } from './Feedback';
-import { IconCamera, IconClose, IconImage, IconInfo, IconTorch, IconUpload } from './Icons';
+import { IconCamera, IconCheck, IconClose, IconImage, IconInfo, IconTorch, IconUpload } from './Icons';
 
 export type CaptureContext = 'box' | 'pieces' | 'closeup';
 
@@ -257,7 +257,7 @@ export function CameraCapture({
             )}
           </div>
         </div>
-        <div className="row center wrap gap">{uploadButtons}</div>
+        <div className="capture-actions">{uploadButtons}</div>
       </div>
     );
   }
@@ -278,11 +278,14 @@ export function CameraCapture({
       <h2>{tips.title}</h2>
       <ul className="tips">
         {tips.tips.map((t) => (
-          <li key={t}>{t}</li>
+          <li key={t}>
+            <IconCheck size={16} />
+            <span>{t}</span>
+          </li>
         ))}
       </ul>
       {cam.kind === 'error' && <Banner tone="warning">{cam.message}</Banner>}
-      <div className="row center wrap gap">
+      <div className="capture-actions">
         {isCameraSupported() && (
           <button className="btn btn-primary btn-lg" onClick={start} disabled={disabled || cam.kind === 'starting'}>
             <IconCamera />

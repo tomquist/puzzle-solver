@@ -554,7 +554,8 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
     const ch = ref.height / ref.grid.rows;
     const moveTo = (m: RegionMatch, row: number, col: number) => {
       const best = m.candidates[0];
-      if (row < 0 || col < 0 || row >= ref.grid.rows || col >= ref.grid.cols) return false;
+      // Only interior pieces are moved, so keep them off the border.
+      if (row < 1 || col < 1 || row >= ref.grid.rows - 1 || col >= ref.grid.cols - 1) return false;
       best.row = row;
       best.col = col;
       best.x = (col + 0.5) * cw;

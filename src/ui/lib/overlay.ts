@@ -50,13 +50,18 @@ export interface ArrowGeometry {
   head: [Point, Point, Point];
 }
 
-/** "Up" arrow for a region: from `center`, `length` long, pointing at upVector(rotationDeg). */
-export function upArrow(center: Point, rotationDeg: number, length: number): ArrowGeometry {
+/**
+ * "Up" arrow for a region: pointing from `center` at upVector(rotationDeg), with its tip `length`
+ * away. `start` is where the shaft begins (default slightly behind the center), `head` the
+ * length of the arrow head (default 32 % of `length`).
+ */
+export function upArrow(center: Point, rotationDeg: number, length: number, opts: { start?: number; head?: number } = {}): ArrowGeometry {
   const u = upVector(rotationDeg);
-  const from = { x: center.x - u.x * length * 0.15, y: center.y - u.y * length * 0.15 };
+  const start = opts.start ?? -length * 0.15;
+  const hl = Math.min(length - start, opts.head ?? length * 0.32);
+  const hw = hl * 0.7; // head half-width
+  const from = { x: center.x + u.x * start, y: center.y + u.y * start };
   const to = { x: center.x + u.x * length, y: center.y + u.y * length };
-  const hl = length * 0.32; // head length
-  const hw = length * 0.22; // head half-width
   const base = { x: to.x - u.x * hl, y: to.y - u.y * hl };
   const n = { x: -u.y, y: u.x };
   return {

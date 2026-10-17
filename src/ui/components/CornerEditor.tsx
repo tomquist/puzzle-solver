@@ -143,7 +143,7 @@ export function CornerEditor({
   }
 
   return (
-    <div className="corner-editor" ref={box} style={{ aspectRatio: `${width} / ${height}` }}>
+    <div className="corner-editor" ref={box} style={{ aspectRatio: `${width} / ${height}`, width: `min(100%, calc(66dvh * ${(width / height).toFixed(4)}))` }}>
       <img src={src} alt="Box photo" draggable={false} />
       <svg
         ref={svg}

@@ -15,6 +15,7 @@ import { TopBar } from '../../components/TopBar';
 import { usePipeline } from '../../context/PipelineContext';
 import { useRepository } from '../../context/RepositoryContext';
 import { navigate } from '../../hooks/useHashRoute';
+import { Pixels } from '../../lib/pixels';
 import { composeScale } from '../../lib/quality';
 import { href } from '../../lib/routes';
 import { CornersStep } from './CornersStep';
@@ -113,7 +114,7 @@ export function NewPuzzleWizard() {
     try {
       const aspect = d.physicalSize ? d.physicalSize.width / d.physicalSize.height : undefined;
       const size = await pipeline.suggestRectifiedSize(quad, aspect);
-      const rgba = await pipeline.rectify(cloneRGBA(photo.rgba), quad, size.width, size.height);
+      const rgba = await pipeline.rectify(cloneRGBA(photo.pixels.image), quad, size.width, size.height);
       const encoded = await encodeImage(rgba);
       setDetails(d);
       setBase(encoded);
@@ -140,8 +141,8 @@ export function NewPuzzleWizard() {
       const id = entries[i].id;
       try {
         const rgba = await blobToRGBA(files[i], 4096);
-        update(id, { status: 'registering', rgba });
-        const reg = await pipeline.registerCloseup(cloneRGBA(base.rgba), cloneRGBA(rgba));
+        update(id, { status: 'registering', pixels: new Pixels(rgba) });
+        const reg = await pipeline.registerCloseup(cloneRGBA(base.pixels.image), cloneRGBA(rgba));
         update(id, reg ? { status: 'ok', registration: reg } : { status: 'failed' });
       } catch (e) {
         update(id, { status: 'failed', error: errorText(e, 'This photo could not be read.') });
@@ -159,15 +160,15 @@ export function NewPuzzleWizard() {
 
   const compose = async () => {
     if (!base) return;
-    const ok = closeups.filter((c) => c.status === 'ok' && c.rgba && c.registration);
+    const ok = closeups.filter((c) => c.status === 'ok' && c.pixels && c.registration);
     if (!ok.length) return;
     setComposing(true);
     setError(undefined);
     try {
       const scale = composeScale(ok.map((c) => c.registration!.scaleGain), Math.max(base.width, base.height));
       const rgba = await pipeline.composeHighRes(
-        cloneRGBA(base.rgba),
-        ok.map((c) => ({ image: cloneRGBA(c.rgba!), registration: c.registration! })),
+        cloneRGBA(base.pixels.image),
+        ok.map((c) => ({ image: cloneRGBA(c.pixels!.image), registration: c.registration! })),
         { scale },
       );
       setComposed({ image: await encodeImage(rgba), ids: ok.map((c) => c.id).join(',') });
