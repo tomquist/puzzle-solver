@@ -75,8 +75,8 @@ export function warpRGBA(src: RGBAImage, H: Mat3, width: number, height: number,
   const inv = mat3Invert(H);
   const out = createRGBA(width, height, opts.fill);
   const ss = Math.max(1, Math.min(4, Math.round(opts.supersample ?? 1)));
-  const px = [0, 0, 0, 0];
-  const acc = [0, 0, 0, 0];
+  const px = new Float32Array(4);
+  const acc = new Float64Array(4);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       acc[0] = acc[1] = acc[2] = acc[3] = 0;

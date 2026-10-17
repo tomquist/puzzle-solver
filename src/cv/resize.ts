@@ -61,26 +61,39 @@ function axisWeights(srcLen: number, dstLen: number): AxisWeights {
 function resample(src: Arr, sw: number, sh: number, ch: number, dst: Arr, dw: number, dh: number): void {
   const wx = axisWeights(sw, dw);
   const wy = axisWeights(sh, dh);
-  const tmp = new Float32Array(dw * sh * ch);
-  for (let y = 0; y < sh; y++) {
+  const rowLen = dw * ch;
+  // Horizontally resampled source rows are produced on demand and kept in a small ring cache, so
+  // memory stays O(width) instead of O(width x source height) when shrinking large photos.
+  const cacheSize = wy.maxCount + 1;
+  const cacheRows: Float32Array[] = [];
+  const cacheIdx = new Int32Array(cacheSize).fill(-1);
+  for (let i = 0; i < cacheSize; i++) cacheRows.push(new Float32Array(rowLen));
+  const hRow = (y: number): Float32Array => {
+    const slot = y % cacheSize;
+    const row = cacheRows[slot];
+    if (cacheIdx[slot] === y) return row;
+    cacheIdx[slot] = y;
+    const base = y * sw;
     for (let x = 0; x < dw; x++) {
       const s0 = wx.start[x], n = wx.count[x], wo = x * wx.maxCount;
       for (let c = 0; c < ch; c++) {
         let acc = 0;
-        for (let k = 0; k < n; k++) acc += src[((y * sw) + s0 + k) * ch + c] * wx.weights[wo + k];
-        tmp[(y * dw + x) * ch + c] = acc;
+        for (let k = 0; k < n; k++) acc += src[(base + s0 + k) * ch + c] * wx.weights[wo + k];
+        row[x * ch + c] = acc;
       }
     }
-  }
+    return row;
+  };
+  const acc = new Float32Array(rowLen);
   for (let y = 0; y < dh; y++) {
     const s0 = wy.start[y], n = wy.count[y], wo = y * wy.maxCount;
-    for (let x = 0; x < dw; x++) {
-      for (let c = 0; c < ch; c++) {
-        let acc = 0;
-        for (let k = 0; k < n; k++) acc += tmp[((s0 + k) * dw + x) * ch + c] * wy.weights[wo + k];
-        dst[(y * dw + x) * ch + c] = acc;
-      }
+    acc.fill(0);
+    for (let k = 0; k < n; k++) {
+      const row = hRow(s0 + k);
+      const w = wy.weights[wo + k];
+      for (let i = 0; i < rowLen; i++) acc[i] += row[i] * w;
     }
+    dst.set(acc, y * rowLen);
   }
 }
 
