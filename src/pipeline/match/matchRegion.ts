@@ -12,7 +12,7 @@
  */
 import { findSimilarity, type Point } from '../../cv/geometry';
 import { cellKey, type CellRef, type MatchStatus, type Placement, type RegionMatch, type SideKind } from '../../model/types';
-import { buildTemplate, DEFAULT_SCORE, makePhotoSource, scoreAt, scoreMap, type ColorCorrection, type Mapping, type PhotoSource, type ScoreParams, type Template } from './template';
+import { buildTemplate, colourDistanceMap, DEFAULT_SCORE, makePhotoSource, scoreAt, scoreMap, type ColorCorrection, type Mapping, type PhotoSource, type ScoreParams, type Template } from './template';
 import type { MatchInput, MatchOptions, RefLevel, ReferenceIndex } from './types';
 
 /** A similarity hypothesis to search. */
@@ -329,18 +329,33 @@ export function matchConfidence(score: number, margin: number): number {
 
 /**
  * {@link matchConfidence} discounted by the information content of the region:
- * - Peak sharpness: a featureless piece (plain sky, gentle gradient) scores about the same when it is
- *   shifted by a quarter cell, so its high NCC is no evidence of the location. Unless the margin to
- *   every distinct alternative is large (colour or flat sides pin the piece down), a flat peak makes
- *   the match ambiguous.
+ * - A featureless piece (plain sky, gentle gradient: little texture once a linear ramp is removed)
+ *   reaches high NCC wherever the colour ramp is similar (photo lighting adds its own ramp), so
+ *   neither its score nor its margin is evidence. It stays ambiguous unless its correlation peak is
+ *   sharp (it scores clearly worse a quarter cell away), it is a corner piece with a clear margin,
+ *   or its colour occurs only at the best place (after colour correction). Textured pieces keep the
+ *   plain score/margin confidence.
+ *   A featureless piece is also capped by `share`, its likelihood share among all distinct places
+ *   (softmax of the scores), so a plateau of similar places keeps it ambiguous.
+ * - A textured piece whose content correlates poorly at the best place (score well below what a
+ *   correct match of a textured piece reaches) is suspicious: wrong flat sides, bad segmentation.
  * - Single pieces without a detected shape whose area does not look like one piece (fragments of a
  *   badly segmented piece, merged pieces) are not trusted.
  */
-export function informedConfidence(f: Pick<MatchFeatures, 'score' | 'margin' | 'drop25' | 'areaRatio'>, opts: { hasShape: boolean; isPatch: boolean }): number {
+export function informedConfidence(
+  f: Pick<MatchFeatures, 'score' | 'margin' | 'drop25' | 'detail' | 'areaRatio' | 'flats' | 'colourArea'>,
+  opts: { hasShape: boolean; isPatch: boolean; share?: number },
+): number {
   const base = matchConfidence(f.score, f.margin);
+  const textured = sigmoid((f.detail - TEXTURE_DETAIL) / 1);
   const sharp = sigmoid((f.drop25 - 0.045) / 0.01);
-  const pinned = sigmoid((f.margin - 0.2) / 0.03);
-  let conf = base * (1 - (1 - sharp) * (1 - pinned));
+  // Pinned down without texture: a corner piece (two flat sides) with a clear margin, or a colour
+  // found nowhere else in the picture (only after the scan-level colour correction).
+  const byCorner = f.flats >= 2 ? sigmoid((f.margin - 0.12) / 0.03) : 0;
+  const byColour = sigmoid((1.5 - f.colourArea) / 0.3);
+  let conf = base * (1 - (1 - textured) * (1 - sharp) * (1 - byCorner) * (1 - byColour));
+  conf *= 1 - textured * (1 - sigmoid((f.score - 0.45) / 0.04));
+  if (opts.share !== undefined) conf = Math.min(conf, opts.share + textured * (1 - opts.share));
   if (!opts.hasShape && !opts.isPatch) {
     const r = f.areaRatio;
     const out = r < AREA_RATIO_RANGE[0] ? AREA_RATIO_RANGE[0] - r : r > AREA_RATIO_RANGE[1] ? r - AREA_RATIO_RANGE[1] : 0;
@@ -348,6 +363,11 @@ export function informedConfidence(f: Pick<MatchFeatures, 'score' | 'margin' | '
   }
   return conf;
 }
+
+/** Template detail (weighted-Lab std after removing a linear ramp) above which a region counts as textured. */
+const TEXTURE_DETAIL = 5;
+/** Weight of the gross-colour-difference penalty for featureless regions (after colour correction). */
+const FLAT_COLOUR_HINGE = 0.6;
 
 /** Plausible area of a single piece relative to its body area (4 blanks … 4 tabs, with tolerance). */
 const AREA_RATIO_RANGE: [number, number] = [0.82, 1.45];
@@ -388,6 +408,12 @@ export interface MatchFeatures {
   flats: number;
   /** Region area / expected body area (single pieces: ≈ 0.8–1.3; fragments and merged pieces fall outside). */
   areaRatio: number;
+  /**
+   * Only with a scan-level colour correction: area (in cells) of the places whose mean colour is
+   * about as close to the region's as the closest place, or Infinity when the closest colour is not
+   * at the best placement (or no correction is active). Small = the colour pins the location down.
+   */
+  colourArea: number;
 }
 
 /** Match result plus the winning similarity (for scan-level post-processing). */
@@ -445,7 +471,7 @@ export function matchRegion(index: ReferenceIndex, input: MatchInput, opts: Matc
 export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, opts: MatchOptions = {}, ctx: MatchContext = {}): MatchDetail {
   const maxCandidates = opts.maxCandidates ?? 5;
   const isPatch = input.kind === 'patch';
-  const sp = ctx.score ?? DEFAULT_SCORE;
+  let sp = ctx.score ?? DEFAULT_SCORE;
   const empty: MatchDetail = { match: { regionId: input.regionId, candidates: [], status: 'unmatched' } };
   // Body size estimate for the erosion radius.
   const roughBody = input.shape?.bodySize ?? input.expectedBodySize ?? Math.sqrt(Math.max(1, input.mask.data.reduce((s, v) => s + v, 0)));
@@ -461,6 +487,14 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
 
   // 1. Coarse dense search (on the first level with >= 6 px per cell, prefiltered by level 0).
   const ci = Math.max(0, index.levels.findIndex((l) => l.prefix && l.ppc >= 6));
+  // A featureless region correlates only with noise and lighting ramps; once colours are corrected,
+  // a clearly different mean colour rules a place out.
+  if (ctx.correction) {
+    const mid = Math.min(ci + 1, L - 1);
+    const probe = cache.get(index.levels[mid], mid, hyps[0].map);
+    const flatness = probe ? 1 - sigmoid((templateDetail(probe, index.levels[mid].stride).detail - TEXTURE_DETAIL) / 1) : 0;
+    if (flatness > 0.01) sp = { ...sp, hinge: FLAT_COLOUR_HINGE * flatness };
+  }
   const coarse: Candidate[] = [];
   for (const h of hyps) coarseSearch(index, ci, h, cache, sp, coarse);
   if (coarse.length === 0) return empty;
@@ -495,9 +529,8 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   const best = cands[0];
   const second = cands.find((c) => distinct(best, c));
   const margin = second ? best.score - second.score : 0.3;
-  const features = informationFeatures(index, cache, Math.min(ci + 1, L - 1), best, cands, distinct, sp, input);
+  const features = informationFeatures(index, cache, Math.min(ci + 1, L - 1), best, cands, distinct, sp, input, !!ctx.correction);
   features.margin = margin;
-  const conf = informedConfidence(features, { hasShape: !!input.shape, isPatch });
 
   // Distinct places (one per cell, well apart; best rotation each) for the candidate list. The
   // likelihood shares of all places (listed or not) give the alternatives' confidences.
@@ -514,6 +547,7 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   const q = places.map((c) => Math.exp((c.score - best.score) / CANDIDATE_TAU));
   const qsum = q.reduce((a, v) => a + v, 0);
   for (let i = 0; i < q.length; i++) q[i] /= qsum;
+  const conf = informedConfidence(features, { hasShape: !!input.shape, isPatch, share: q[0] });
   const confidences = chosen.map((_, i) => {
     if (i === 0) return conf;
     // Less information than the scores suggest: scale every share down; otherwise the alternatives
@@ -561,12 +595,15 @@ function informationFeatures(
   distinct: (a: Candidate, b: Candidate) => boolean,
   sp: ScoreParams,
   input: MatchInput,
+  colourCorrected: boolean,
 ): MatchFeatures {
   const f: MatchFeatures = {
     score: best.score, margin: 0, detail: 0, rawStd: 0, drop25: 0, drop50: 0, plateau05: 0, plateau10: 0,
     flats: input.shape ? input.shape.sides.filter((x) => x.kind === 'flat').length : 0,
     areaRatio: 1,
+    colourArea: Infinity,
   };
+  if (colourCorrected) f.colourArea = colourUniqueness(index, cache, best);
   const body = input.shape?.bodySize ?? input.expectedBodySize;
   if (body && body > 0) f.areaRatio = input.mask.data.reduce((a, v) => a + v, 0) / (body * body);
   for (const c of cands) {
@@ -593,6 +630,30 @@ function informationFeatures(
     else f.drop50 = Number.isFinite(worst) ? worst : 0;
   }
   return f;
+}
+
+/** Colour tolerance (weighted Lab) within which places count as having the region's colour. */
+const COLOUR_TOLERANCE = 10;
+
+/** See {@link MatchFeatures.colourArea}: computed on the prefilter level over the whole picture. */
+function colourUniqueness(index: ReferenceIndex, cache: TemplateCache, best: Candidate): number {
+  const level = index.levels[0];
+  if (!level.prefix) return Infinity;
+  const t = cache.get(level, 0, best.map);
+  if (!t) return Infinity;
+  const b = searchBounds(level, t);
+  if (!b) return Infinity;
+  const nx = b.x1 - b.x0 + 1, ny = b.y1 - b.y0 + 1;
+  const map = new Float32Array(nx * ny);
+  colourDistanceMap(level, t, b.x0, b.x1, b.y0, b.y1, map);
+  let min = Infinity, mi = 0;
+  for (let i = 0; i < map.length; i++) if (map[i] < min) { min = map[i]; mi = i; }
+  const at = pivotRef(level, t, b.x0 + (mi % nx), b.y0 + Math.floor(mi / nx));
+  const cell = Math.sqrt(index.cellW * index.cellH);
+  if (Math.hypot(at.x - best.ref.x, at.y - best.ref.y) > 0.75 * cell || min > COLOUR_TOLERANCE) return Infinity;
+  let close = 0;
+  for (let i = 0; i < map.length; i++) if (map[i] <= min + COLOUR_TOLERANCE) close++;
+  return close / (level.scaleX * index.cellW * level.scaleY * index.cellH);
 }
 
 /** Cells whose body area is mostly covered by the region mask at the given placement. */

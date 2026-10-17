@@ -8,7 +8,7 @@ import type { CellRef, RegionMatch } from '../../model/types';
 import { DEBUG_IMAGES, loadTestAsset, savePng } from '../../testing/nodeImageIO';
 import { generateJigsaw, perturbReference, renderPiecesPhoto, Rng, type JigsawCut, type PieceTruth } from '../../testing/synth';
 import { matchRegionsDetailed } from './colorCorrection';
-import { CONFIDENT_THRESHOLD, matchConfidence } from './matchRegion';
+import { CONFIDENT_THRESHOLD, matchConfidence, matchRegionDetailed } from './matchRegion';
 import { buildReferenceIndex, cellAt, matchRegion, matchRegions, type MatchInput, type ReferenceIndex } from './index';
 import { accuracy, angleError, inputFromTruth, renderScenario, type Accuracy } from './testkit';
 
@@ -236,6 +236,10 @@ describe('matchRegion — Great Wave 40×25 (1000 pieces)', () => {
     report('Great Wave 40×25, shape, matchRegions', acc, batch.ms / inputs.length);
     expect(acc.top1).toBeGreaterThanOrEqual(0.75);
     expect(acc.rotation).toBeGreaterThanOrEqual(0.95);
+    // 'confident' must mean right, even with the large plain sky areas.
+    batch.value.forEach((m, i) => {
+      if (m.status === 'confident') expect({ row: m.candidates[0].row, col: m.candidates[0].col }).toEqual({ row: scene.truth[i].row, col: scene.truth[i].col });
+    });
     expect(single.ms / inputs.length).toBeLessThan(900); // target < 300 ms
     const noShape = scene.truth.map((t, i) => inputFromTruth(scene.photo, cut, t, i + 1, { withShape: false }));
     const ns = timed(() => matchRegions(index, noShape));
@@ -258,9 +262,9 @@ describe('matchRegion — Great Wave 40×25 (1000 pieces)', () => {
 });
 
 describe('matchRegion — featureless pieces', () => {
-  // Left half: a smooth sky-like gradient (colour changes with y only, plus faint low-frequency
-  // mottling), right half: textured painting. Featureless pieces must not be reported 'confident'
-  // unless they are right; their alternatives must name several distinct places.
+  // Left half: smooth colour waves (featureless pieces that only see gentle ramps) with one small
+  // plain patch of a unique colour; right half: textured painting. Featureless pieces must not be
+  // reported 'confident' when wrong; their alternatives must name distinct places.
   const W = 1000, H = 800, rows = 16, cols = 20;
   let ref: RGBAImage;
   let index: ReferenceIndex;
@@ -273,7 +277,12 @@ describe('matchRegion — featureless pieces', () => {
       const t = y / (H - 1);
       for (let x = 0; x < W; x++) {
         const o = (y * W + x) * 4;
-        if (x < W / 2) {
+        if (Math.abs(x - 225) < 60 && Math.abs(y - 625) < 60) {
+          // A plain patch of a colour found nowhere else (2.4 cells wide, around cell r12 c4).
+          ref.data[o] = 205;
+          ref.data[o + 1] = 70;
+          ref.data[o + 2] = 55;
+        } else if (x < W / 2) {
           // Broad colour waves (a few cells long): locally every piece just sees a gentle ramp.
           const m = mottle(x, y);
           const w1 = 14 * Math.sin((2 * Math.PI * x) / 230 + 1), w2 = 12 * Math.sin((2 * Math.PI * y) / 190);
@@ -297,20 +306,34 @@ describe('matchRegion — featureless pieces', () => {
     for (const seed of [1, 2]) {
       const cut = generateJigsaw(rows, cols, W, H, 70 + seed);
       const rng = new Rng(seed);
-      const plain = rng.shuffle(cut.pieces.filter((p) => p.col < cols / 2 - 1)).slice(0, 16);
+      const unique = cut.pieces[12 * cols + 4];
+      const plain = [unique, ...rng.shuffle(cut.pieces.filter((p) => p.col < cols / 2 - 1 && p !== unique)).slice(0, 15)];
       const textured = rng.shuffle(cut.pieces.filter((p) => p.col > cols / 2)).slice(0, 8);
       const g = () => rng.uniform(0.9, 1.1);
       const { photo, truth } = renderPiecesPhoto(ref, cut, [...plain, ...textured].map((p) => p.index), {
         seed, scale: [1.5, 1.8], noiseSigma: 3, blurSigma: 0.7, gain: [g(), g(), g()], illumination: 0.2,
       });
       const inputs = truth.map((t, i) => inputFromTruth(photo, cut, t, i + 1, { withShape: true }));
+      // Single pass (no colour correction yet): score and margin alone are fooled by plain pieces.
+      inputs.forEach((inp, i) => {
+        const d = matchRegionDetailed(index, inp);
+        const t = truth[i], c0 = d.match.candidates[0];
+        const correct = c0.row === t.row && c0.col === t.col;
+        if (!correct && matchConfidence(d.features!.score, d.features!.margin) >= CONFIDENT_THRESHOLD) naiveWrong++;
+        if (!correct) expect(d.match.status, `single pass: confident but wrong r${t.row}c${t.col}`).not.toBe('confident');
+      });
       const details = matchRegionsDetailed(index, inputs);
       details.forEach((d, i) => {
         const m = d.match, t = truth[i], c0 = m.candidates[0];
         const isPlain = t.col < cols / 2;
         const correct = c0.row === t.row && c0.col === t.col;
-        // Score and margin alone (the old calibration) are fooled by plain pieces.
-        if (isPlain && !correct && matchConfidence(d.features!.score, d.features!.margin) >= CONFIDENT_THRESHOLD) naiveWrong++;
+        if (t.row === 12 && t.col === 4) {
+          // Plain but of a unique colour: the colour narrows it down to its patch, yet the cell
+          // within that patch stays undetermined, so it must not be called confident unless right.
+          expect(Math.max(Math.abs(c0.row - t.row), Math.abs(c0.col - t.col))).toBeLessThanOrEqual(1);
+          if (!correct) expect(m.status).not.toBe('confident');
+          return;
+        }
         if (isPlain) plainN++;
         else texturedN++;
         if (m.status === 'confident') {
@@ -338,7 +361,7 @@ describe('matchRegion — featureless pieces', () => {
         }
       });
     }
-    table.push(`featureless test: plain confident ${plainConfident}/${plainN} (score+margin alone: ${naiveWrong} confident-wrong), textured confident ${texturedConfident}/${texturedN}`);
+    table.push(`featureless test: plain confident ${plainConfident}/${plainN} (single pass, score+margin alone would give ${naiveWrong} confident-wrong), textured confident ${texturedConfident}/${texturedN}`);
     expect(naiveWrong).toBeGreaterThan(0);
     expect(plainConfident).toBeLessThanOrEqual(plainN / 4);
     expect(texturedConfident).toBeGreaterThanOrEqual(0.8 * texturedN);

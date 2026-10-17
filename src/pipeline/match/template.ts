@@ -268,6 +268,21 @@ export interface ScoreParams {
   beta: number;
   /** Colour difference at which the penalty saturates. */
   cap: number;
+  /**
+   * Weight of an extra penalty for gross colour differences (beyond HINGE_FROM): used for
+   * featureless regions once colours are corrected, where small differences are lighting noise but
+   * a clearly different colour rules a place out.
+   */
+  hinge?: number;
+}
+
+const HINGE_FROM = 15;
+const HINGE_SPAN = 30;
+
+function colourPenalty(dm: number, p: ScoreParams): number {
+  let pen = (p.beta * Math.min(dm, p.cap)) / p.cap;
+  if (p.hinge && dm > HINGE_FROM) pen += p.hinge * Math.min(1, (dm - HINGE_FROM) / HINGE_SPAN);
+  return pen;
 }
 
 export const DEFAULT_SCORE: ScoreParams = { eps: 1, beta: 0.2, cap: 30 };
@@ -298,7 +313,7 @@ export function scoreAt(level: RefLevel, t: Template, X: number, Y: number, p: S
   const ncc = num / Math.sqrt((t.energy + fl) * (Math.max(0, varR) + fl));
   const d0 = t.mean[0] - m0, d1 = t.mean[1] - m1, d2 = t.mean[2] - m2;
   const dm = Math.sqrt(d0 * d0 + d1 * d1 + d2 * d2);
-  return ncc - (p.beta * Math.min(dm, p.cap)) / p.cap;
+  return ncc - colourPenalty(dm, p);
 }
 
 /** Runs of consecutive valid template pixels: prefix offsets (relative to a position) and lengths, ×4 channels. */
@@ -328,7 +343,7 @@ export function scoreMap(level: RefLevel, t: Template, x0: number, x1: number, y
   if (!t.runs) t.runs = templateRuns(t, stride);
   const { ro, rl } = t.runs;
   const R = ro.length;
-  const invN = 1 / n, fl = p.eps * n, cap = p.cap, beta = p.beta;
+  const invN = 1 / n, fl = p.eps * n, cap = p.cap, beta = p.beta, hinge = p.hinge ?? 0;
   const tm0 = t.mean[0] - level.center[0], tm1 = t.mean[1] - level.center[1], tm2 = t.mean[2] - level.center[2];
   const te = t.energy + fl;
   const nx = x1 - x0 + 1;
@@ -354,7 +369,36 @@ export function scoreMap(level: RefLevel, t: Template, x0: number, x1: number, y
       const ncc = num / Math.sqrt(te * ((varR > 0 ? varR : 0) + fl));
       const d0 = tm0 - m0, d1 = tm1 - m1, d2 = tm2 - m2;
       const dm = Math.sqrt(d0 * d0 + d1 * d1 + d2 * d2);
-      out[(Y - y0) * nx + (X - x0)] = ncc - (beta * (dm < cap ? dm : cap)) / cap;
+      out[(Y - y0) * nx + (X - x0)] = ncc - (hinge ? colourPenalty(dm, p) : (beta * (dm < cap ? dm : cap)) / cap);
+    }
+  }
+}
+
+/**
+ * Mean-colour distance (weighted Lab) between the template and the reference under its mask, for
+ * every top-left position in [x0, x1] × [y0, y1] (prefix-sum level only).
+ */
+export function colourDistanceMap(level: RefLevel, t: Template, x0: number, x1: number, y0: number, y1: number, out: Float32Array): void {
+  const P = level.prefix;
+  if (!P) throw new Error('colourDistanceMap: level has no prefix sums');
+  const W1 = level.stride + 1;
+  if (!t.runs) t.runs = templateRuns(t, level.stride);
+  const { ro, rl } = t.runs;
+  const R = ro.length, invN = 1 / t.n;
+  const tm0 = t.mean[0] - level.center[0], tm1 = t.mean[1] - level.center[1], tm2 = t.mean[2] - level.center[2];
+  const nx = x1 - x0 + 1;
+  for (let Y = y0; Y <= y1; Y++) {
+    for (let X = x0; X <= x1; X++) {
+      const pb = (Y * W1 + X) * 4;
+      let s0 = 0, s1 = 0, s2 = 0;
+      for (let r = 0; r < R; r++) {
+        const a = pb + ro[r], b = a + rl[r];
+        s0 += P[b] - P[a];
+        s1 += P[b + 1] - P[a + 1];
+        s2 += P[b + 2] - P[a + 2];
+      }
+      const d0 = tm0 - s0 * invN, d1 = tm1 - s1 * invN, d2 = tm2 - s2 * invN;
+      out[(Y - y0) * nx + (X - x0)] = Math.sqrt(d0 * d0 + d1 * d1 + d2 * d2);
     }
   }
 }
