@@ -70,6 +70,7 @@ export function makePhotoSource(
   erodeRadius: number,
   weights: readonly number[],
   correction?: ColorCorrection,
+  seams?: SeamHint,
 ): PhotoSource {
   const { width: w, height: h } = image;
   const lab = rgbaToLab(image);
@@ -88,6 +89,7 @@ export function makePhotoSource(
     }
   }
   const eroded = erodeMask(mask, erodeRadius);
+  if (seams) removeSeams(lab, eroded, seams, weights[0]);
   const base = createFloat(w, h, 4);
   let sx = 0, sy = 0, n = 0;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -125,6 +127,100 @@ export function makePhotoSource(
     area: n,
     bounds: n > 0 ? { x0: x0 + origin.x, y0: y0 + origin.y, x1: x1 + origin.x, y1: y1 + origin.y } : { x0: origin.x, y0: origin.y, x1: origin.x + w - 1, y1: origin.y + h - 1 },
   };
+}
+
+/** Minimum contrast (L*, unweighted) of a thin line against its surroundings to count as a seam. */
+const SEAM_DEPTH = 10;
+/** Seams lie within this distance (fraction of the body size) of the patch's grid lines (knobs included). */
+const SEAM_BAND = 0.32;
+
+/** Where to look for the seams of an assembled patch (see {@link makePhotoSource}). */
+export interface SeamHint {
+  /** Line width scale in photo px (top-hat radius). */
+  radius: number;
+  /** Grid orientation in the photo (deg, clockwise from +x). */
+  angleDeg: number;
+  /** Photo px per grid cell. */
+  body: number;
+}
+
+/**
+ * Drop the seams of an assembled patch from the mask: thin lines the printed picture does not have —
+ * dark cut lines, and gaps between the pieces that show the table (dark or light). Found as black and
+ * white top-hats of the lightness ((2r+1)² square), slightly dilated. Thin print lines of strong
+ * contrast go too, which costs little.
+ */
+function removeSeams(lab: FloatImage, mask: Mask, seams: SeamHint, wl: number): void {
+  const r = seams.radius;
+  const { width: w, height: h } = lab;
+  const L = new Float32Array(w * h);
+  for (let i = 0; i < L.length; i++) L[i] = lab.data[i * 3] / wl;
+  const pass = (src: Float32Array, horizontal: boolean, take: (a: number, b: number) => number): Float32Array => {
+    const out = new Float32Array(src.length);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        let v = src[y * w + x];
+        for (let k = -r; k <= r; k++) {
+          const xx = horizontal ? x + k : x, yy = horizontal ? y : y + k;
+          if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+          v = take(v, src[yy * w + xx]);
+        }
+        out[y * w + x] = v;
+      }
+    }
+    return out;
+  };
+  const dil = pass(pass(L, true, Math.max), false, Math.max);
+  const closed = pass(pass(dil, true, Math.min), false, Math.min);
+  const ero = pass(pass(L, true, Math.min), false, Math.min);
+  const opened = pass(pass(ero, true, Math.max), false, Math.max);
+  const seam = new Uint8Array(w * h);
+  for (let i = 0; i < L.length; i++) seam[i] = (closed[i] - L[i] > SEAM_DEPTH || L[i] - opened[i] > SEAM_DEPTH) && mask.data[i] ? 1 : 0;
+  // Seams follow the grid: keep only line pixels near the (periodic) grid lines of the patch, so
+  // that thin print lines elsewhere survive. Line phase = histogram peak of the line pixels.
+  const a = (seams.angleDeg * Math.PI) / 180, ca = Math.cos(a), sa = Math.sin(a), body = seams.body;
+  const bins = Math.max(8, Math.round(body / 2));
+  const phase = (proj: (x: number, y: number) => number): number => {
+    const hist = new Float64Array(bins);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (!seam[y * w + x]) continue;
+        const f = (((proj(x, y) / body) % 1) + 1) % 1;
+        hist[Math.min(bins - 1, Math.floor(f * bins))]++;
+      }
+    }
+    let best = 0, bi = 0;
+    for (let i = 0; i < bins; i++) {
+      const v = hist[(i - 1 + bins) % bins] + 2 * hist[i] + hist[(i + 1) % bins];
+      if (v > best) { best = v; bi = i; }
+    }
+    return ((bi + 0.5) / bins) * body;
+  };
+  const pu = (x: number, y: number) => x * ca + y * sa, pv = (x: number, y: number) => -x * sa + y * ca;
+  const phU = phase(pu), phV = phase(pv);
+  const near = (t: number, ph: number) => {
+    const d = (((t - ph) % body) + body) % body;
+    return Math.min(d, body - d) <= SEAM_BAND * body;
+  };
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (seam[i] && !near(pu(x, y), phU) && !near(pv(x, y), phV)) seam[i] = 0;
+    }
+  }
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!mask.data[y * w + x]) continue;
+      let hit = 0;
+      for (let dy = -1; dy <= 1 && !hit; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx, yy = y + dy;
+          if (xx >= 0 && yy >= 0 && xx < w && yy < h && seam[yy * w + xx]) { hit = 1; break; }
+        }
+      }
+      if (hit) mask.data[y * w + x] = 0;
+    }
+  }
 }
 
 /** Similarity hypothesis: reference-local = R(phi) · s · (photo - pivot); phi clockwise radians. */

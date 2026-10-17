@@ -22,6 +22,8 @@ export interface ItemSpec {
   patches?: [number, number][];
   /** Only border pieces as singles. */
   bordersOnly?: boolean;
+  /** Runs of adjacent cells photographed as separate loose pieces (lengths, e.g. [2, 2, 3]). */
+  neighborRuns?: number[];
 }
 
 /** Pick non-overlapping items (singles and rectangular patches, anchor = top-left piece first). */
@@ -38,6 +40,17 @@ export function pickItems(cut: JigsawCut, spec: ItemSpec, seed: number): (number
       // Keep a one-cell gap so single pieces never fit the patch by accident in the truth.
       idx.forEach((i) => used.add(i));
       items.push(idx);
+      break;
+    }
+  }
+  for (const len of spec.neighborRuns ?? []) {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const horizontal = rng.bool();
+      const r = rng.int(cut.rows - (horizontal ? 0 : len - 1)), c = rng.int(cut.cols - (horizontal ? len - 1 : 0));
+      const idx: number[] = [];
+      for (let k = 0; k < len; k++) idx.push(horizontal ? r * cut.cols + c + k : (r + k) * cut.cols + c);
+      if (idx.some((i) => used.has(i))) continue;
+      idx.forEach((i) => { used.add(i); items.push(i); });
       break;
     }
   }
@@ -133,6 +146,16 @@ export interface ScanMetrics {
   fitRecall: number;
   /** Number of warning/error quality issues (should be 0 on clean scenarios). */
   warnings: number;
+  /** Truth patches found as an 'assembled' group (cells Jaccard ≥ 0.8, rotation within 10°). */
+  assembledRecall: number;
+  /** 'assembled' groups that match a truth patch (cells Jaccard ≥ 0.8). */
+  assembledPrecision: number;
+  /** Adjacent member pairs of 'neighbors' groups whose truth cells are adjacent. */
+  neighborPrecision: number;
+  /** Truth-adjacent pairs of loose single pieces found in one 'neighbors' group. */
+  neighborRecall: number;
+  /** Truth items whose regions all end up 'unmatched' (hidden in the UI). */
+  hiddenRate: number;
   ms: number;
 }
 
@@ -156,17 +179,43 @@ export function evaluateScan(result: ScanResult, truth: PieceTruth[], cut: Jigsa
       truthToRegion.set(best, r.id);
     }
   }
+  // Regions that lie (≥ 80 %) inside a truth item: parts of it (a patch split into several regions).
+  const partsOf = new Map<number, number[]>();
+  for (const r of result.regions) {
+    const rm = regionMasks.get(r.id)!;
+    truth.forEach((_, i) => {
+      if (regionToTruth.get(r.id) === i || containedFraction(rm, truthMasks[i]) >= 0.8) partsOf.set(i, [...(partsOf.get(i) ?? []), r.id]);
+    });
+  }
   const matchById = new Map<number, RegionMatch>(result.matches.map((m) => [m.regionId, m]));
   const regionById = new Map<number, DetectedRegion>(result.regions.map((r) => [r.id, r]));
   const cellsOf = (t: PieceTruth): CellRef[] => t.pieces.map((i) => ({ row: cut.pieces[i].row, col: cut.pieces[i].col }));
   const key = (c: CellRef) => `${c.row},${c.col}`;
 
-  let singles = 0, shapes = 0, kindsOk = 0, top1 = 0, top3 = 0, rotOk = 0, confident = 0, confidentOk = 0, matchedItems = 0;
+  let singles = 0, shapes = 0, kindsOk = 0, top1 = 0, top3 = 0, rotOk = 0, confident = 0, confidentOk = 0, matchedItems = 0, hidden = 0;
   const correct = new Set<number>();
   truth.forEach((t, i) => {
     const rid = truthToRegion.get(i);
     const isPatch = t.pieces.length > 1;
     if (!isPatch) singles++;
+    const parts = partsOf.get(i) ?? [];
+    if (parts.length === 0 || parts.every((id) => (matchById.get(id)?.status ?? 'unmatched') === 'unmatched')) hidden++;
+    if (rid === undefined && isPatch && parts.length > 1) {
+      // Patch split into several regions: judge the union of the parts' placements.
+      const truthCells = new Set(cellsOf(t).map(key));
+      const found = new Set<string>();
+      for (const id of parts) {
+        const m = matchById.get(id);
+        const c = m?.candidates[0];
+        if (!m || !c || m.status === 'unmatched') continue;
+        for (const cell of m.coveredCells && m.coveredCells.length ? m.coveredCells : [{ row: c.row, col: c.col }]) found.add(key(cell));
+      }
+      let inter = 0;
+      found.forEach((k) => { if (truthCells.has(k)) inter++; });
+      matchedItems++;
+      if (inter / (truthCells.size + found.size - inter) >= 0.5) top1++;
+      return;
+    }
     if (rid === undefined) return;
     matchedItems++;
     const region = regionById.get(rid)!;
@@ -199,8 +248,20 @@ export function evaluateScan(result: ScanResult, truth: PieceTruth[], cut: Jigsa
       if (ok) confidentOk++;
     }
   });
-  // Confident regions without any truth item count against precision.
-  for (const m of result.matches) if (m.status === 'confident' && !regionToTruth.has(m.regionId)) confident++;
+  // Confident regions without any truth item count against precision, unless they are part of a
+  // patch that was split into several regions and placed within it.
+  const partOwner = new Map<number, number>();
+  partsOf.forEach((ids, i) => ids.forEach((id) => { if (!regionToTruth.has(id)) partOwner.set(id, i); }));
+  for (const m of result.matches) {
+    if (m.status !== 'confident' || regionToTruth.has(m.regionId)) continue;
+    confident++;
+    const owner = partOwner.get(m.regionId);
+    const c = m.candidates[0];
+    if (owner === undefined || !c) continue;
+    const truthCells = new Set(cellsOf(truth[owner]).map(key));
+    const cells = m.coveredCells && m.coveredCells.length ? m.coveredCells : [{ row: c.row, col: c.col }];
+    if (cells.every((x) => truthCells.has(key(x)))) confidentOk++;
+  }
 
   // Fits: truth adjacency between items.
   const adjacent = (a: PieceTruth, b: PieceTruth) => {
@@ -227,6 +288,53 @@ export function evaluateScan(result: ScanResult, truth: PieceTruth[], cut: Jigsa
       foundPairs.add(pair);
     }
   }
+  // Groups.
+  const groups = result.groups ?? [];
+  const jaccard = (a: CellRef[], b: CellRef[]) => {
+    const A = new Set(a.map(key)), B = new Set(b.map(key));
+    let inter = 0;
+    A.forEach((k) => { if (B.has(k)) inter++; });
+    return inter / (A.size + B.size - inter);
+  };
+  const truthPatches = truth.map((t, i) => ({ t, i })).filter(({ t }) => t.pieces.length > 1);
+  let assembledFound = 0;
+  for (const { t } of truthPatches) {
+    const ok = groups.some((g) => g.kind === 'assembled' && jaccard(g.cells, cellsOf(t)) >= 0.8 && g.rotationDeg !== undefined && angleError(g.rotationDeg, t.rotationDeg) <= 10);
+    if (ok) assembledFound++;
+  }
+  const assembled = groups.filter((g) => g.kind === 'assembled');
+  const assembledOk = assembled.filter((g) => truthPatches.some(({ t }) => jaccard(g.cells, cellsOf(t)) >= 0.8)).length;
+  // Neighbours: adjacent pairs inside 'neighbors' groups vs. truth-adjacent loose single pieces.
+  const cellOfRegion = (id: number): CellRef | null => {
+    const c = matchById.get(id)?.candidates[0];
+    return c ? { row: c.row, col: c.col } : null;
+  };
+  const isAdj = (a: CellRef, b: CellRef) => Math.abs(a.row - b.row) + Math.abs(a.col - b.col) === 1;
+  let nbPairs = 0, nbOk = 0;
+  const nbFound = new Set<string>();
+  for (const g of groups.filter((x) => x.kind === 'neighbors')) {
+    for (let a = 0; a < g.regionIds.length; a++) {
+      for (let b = a + 1; b < g.regionIds.length; b++) {
+        const ca = cellOfRegion(g.regionIds[a]), cb = cellOfRegion(g.regionIds[b]);
+        if (!ca || !cb || !isAdj(ca, cb)) continue;
+        nbPairs++;
+        const ta = regionToTruth.get(g.regionIds[a]), tb = regionToTruth.get(g.regionIds[b]);
+        if (ta === undefined || tb === undefined) continue;
+        const A = truth[ta], B = truth[tb];
+        if (A.pieces.length === 1 && B.pieces.length === 1 && isAdj({ row: A.row, col: A.col }, { row: B.row, col: B.col })) {
+          nbOk++;
+          nbFound.add(ta < tb ? `${ta}-${tb}` : `${tb}-${ta}`);
+        }
+      }
+    }
+  }
+  let nbTruth = 0;
+  for (let i = 0; i < truth.length; i++) {
+    for (let j = i + 1; j < truth.length; j++) {
+      const A = truth[i], B = truth[j];
+      if (A.pieces.length === 1 && B.pieces.length === 1 && isAdj({ row: A.row, col: A.col }, { row: B.row, col: B.col })) nbTruth++;
+    }
+  }
   const warnings = result.quality.issues.filter((i) => i.severity !== 'info').length;
   const rate = (a: number, b: number) => (b === 0 ? 1 : a / b);
   return {
@@ -246,9 +354,29 @@ export function evaluateScan(result: ScanResult, truth: PieceTruth[], cut: Jigsa
       fitPrecision: rate(hintsOk, hintsScored),
       fitRecall: rate(foundPairs.size, truthPairs.size),
       warnings,
+      assembledRecall: rate(assembledFound, truthPatches.length),
+      assembledPrecision: rate(assembledOk, assembled.length),
+      neighborPrecision: rate(nbOk, nbPairs),
+      neighborRecall: rate(nbFound.size, nbTruth),
+      hiddenRate: truth.length === 0 ? 0 : hidden / truth.length,
       ms,
     },
   };
+}
+
+/** Fraction of mask `a` that lies inside mask `b`. */
+function containedFraction(a: PolyMask, b: PolyMask): number {
+  const x0 = Math.max(a.rect.x, b.rect.x), y0 = Math.max(a.rect.y, b.rect.y);
+  const x1 = Math.min(a.rect.x + a.rect.width, b.rect.x + b.rect.width);
+  const y1 = Math.min(a.rect.y + a.rect.height, b.rect.y + b.rect.height);
+  if (x1 <= x0 || y1 <= y0 || a.area === 0) return 0;
+  let inter = 0;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      if (a.mask.data[(y - a.rect.y) * a.rect.width + (x - a.rect.x)] && b.mask.data[(y - b.rect.y) * b.rect.width + (x - b.rect.x)]) inter++;
+    }
+  }
+  return inter / a.area;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -268,7 +396,7 @@ export function quadError(found: Quad, truth: Quad): number {
 // ---------------------------------------------------------------------------------------------
 
 /** Metrics where lower is better; everything else is higher-is-better. Timing is report-only. */
-const LOWER_IS_BETTER = new Set(['warnings', 'meanError', 'maxError', 'falseWarnings']);
+const LOWER_IS_BETTER = new Set(['warnings', 'meanError', 'maxError', 'falseWarnings', 'hiddenRate']);
 const REPORT_ONLY = new Set(['ms', 'items', 'regions', 'scenes', 'confidentRate']);
 
 export type MetricRecord = Record<string, number>;
@@ -363,6 +491,19 @@ export function overlay(photo: RGBAImage, result: ScanResult, truth: PieceTruth[
       color = ok ? [40, 220, 80, 255] : [240, 40, 40, 255];
     }
     drawPolygon(out, r.contour, color, 3);
+  }
+  // Groups: assembled members get a cyan outline, neighbours are linked by magenta lines.
+  const regionById = new Map(result.regions.map((r) => [r.id, r]));
+  const centre = (id: number): Point => {
+    const b = regionById.get(id)!.bbox;
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  };
+  for (const g of result.groups ?? []) {
+    if (g.kind === 'assembled') {
+      for (const id of g.regionIds) drawPolygon(out, regionById.get(id)!.contour, [0, 220, 255, 255], 1);
+    } else {
+      for (let i = 1; i < g.regionIds.length; i++) drawPolygon(out, [centre(g.regionIds[i - 1]), centre(g.regionIds[i])], [255, 0, 255, 255], 2);
+    }
   }
   return out;
 }
