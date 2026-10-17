@@ -11,7 +11,9 @@ so changes can be made and judged without manual photo-taking feedback loops.
 | Synthetic scenario tests | Vitest + `src/testing/synth.ts` | Each pipeline stage meets accuracy targets on generated photos with exact ground truth | `npm test`, CI |
 | Quality-check tests | Vitest + degradations | Every quality warning fires on degraded photos and stays quiet on clean ones | `npm test`, CI |
 | Accuracy benchmark | `npm run bench` | End-to-end metrics across many seeded scenes; compared against `bench/baseline.json` | CI (gate) |
-| Browser end-to-end | Playwright + Chromium | Real app + real Web Worker + IndexedDB: setup wizard, persistence, scanning, results | `npm run test:e2e`, CI |
+| Browser end-to-end | Playwright (Chromium + WebKit) | Real app + real Web Worker + IndexedDB: setup wizard, persistence, scanning, results — on desktop and iPhone (WebKit) | `npm run test:e2e`, CI |
+| Mobile audit | Playwright device matrix | No horizontal overflow, ≥ 44 px touch targets, ≥ 16 px inputs (no iOS zoom), readable text, reachable primary actions, safe areas — iPhone SE/13, iPad, small Android, Pixel 7, landscape | `npm run test:e2e`, CI |
+| PWA / offline, slow phone | Playwright | Manifest, icons, service worker, offline reload of the production build; 4× CPU throttling keeps progress and taps responsive | `npm run test:e2e`, CI |
 | Real-photo corpus | `npm run bench -- --corpus` | Real photos confirmed by the user still match | locally / CI when present |
 
 ## Synthetic ground truth

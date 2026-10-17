@@ -9,8 +9,6 @@
 import * as Comlink from 'comlink';
 import type { RGBAImage } from '../cv/image';
 import type { PipelineApi } from './api';
-import { createLocalPipeline } from './localPipeline';
-import { createMockPipeline } from './mockPipeline';
 
 let instance: PipelineApi | undefined;
 
@@ -36,6 +34,23 @@ function createWorkerPipeline(): PipelineApi {
   };
 }
 
+/**
+ * A PipelineApi whose implementation module is loaded on first use, so the mock and the
+ * main-thread pipeline stay out of the main bundle (the default worker build has its own chunk).
+ */
+function lazyPipeline(load: () => Promise<PipelineApi>): PipelineApi {
+  let loaded: Promise<PipelineApi> | undefined;
+  return new Proxy({} as PipelineApi, {
+    get(_target, key: keyof PipelineApi) {
+      return async (...args: unknown[]) => {
+        loaded ??= load();
+        const api = await loaded;
+        return (api[key] as (...a: unknown[]) => unknown)(...args);
+      };
+    },
+  });
+}
+
 function selectedMode(): 'worker' | 'mock' | 'local' {
   if (typeof location === 'undefined') return 'local';
   const mode = new URLSearchParams(location.search).get('pipeline');
@@ -46,7 +61,10 @@ function selectedMode(): 'worker' | 'mock' | 'local' {
 export function getPipeline(): PipelineApi {
   if (!instance) {
     const mode = selectedMode();
-    instance = mode === 'mock' ? createMockPipeline() : mode === 'local' ? createLocalPipeline() : createWorkerPipeline();
+    instance =
+      mode === 'mock' ? lazyPipeline(async () => (await import('./mockPipeline')).createMockPipeline())
+      : mode === 'local' ? lazyPipeline(async () => (await import('./localPipeline')).createLocalPipeline())
+      : createWorkerPipeline();
   }
   return instance;
 }

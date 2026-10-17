@@ -26,6 +26,10 @@ puzzles are stored in the browser (IndexedDB).
 6. **Come back any time.** Puzzles, scans and progress stay in your browser. Use *Settings → Export*
    to back up or move a puzzle to another device.
 
+It is built for phones: open the page on your phone and use *Add to Home Screen* to install it as
+an app – it works offline after the first visit. On iPhone, *Take photo* uses the native camera for
+the sharpest pictures.
+
 Tips for good scans – the app checks these and tells you what to fix:
 - Even light without reflections (glossy pieces and boxes reflect lamps).
 - Hold still; blurry photos lose the piece outlines.
