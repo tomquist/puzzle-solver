@@ -336,7 +336,7 @@ export function matchConfidence(score: number, margin: number): number {
  *   or its colour occurs only at the best place (after colour correction). Textured pieces keep the
  *   plain score/margin confidence.
  *   Every piece is also capped by `share`, its likelihood share among all distinct places (softmax
- *   of the scores; square root for textured pieces), so a plateau of similar places (plain areas,
+ *   of the scores; cube root for textured pieces), so a plateau of similar places (plain areas,
  *   repetitive texture) keeps it ambiguous.
  * - A textured piece whose content correlates poorly at the best place (score well below what a
  *   correct match of a textured piece reaches) is suspicious: wrong flat sides, bad segmentation.
@@ -357,8 +357,8 @@ export function informedConfidence(
   let conf = base * (1 - (1 - textured) * (1 - sharp) * (1 - byCorner) * (1 - byColour));
   conf *= 1 - textured * (1 - sigmoid((f.score - 0.45) / 0.04));
   // Many similar places (repetitive texture, plain areas) cap the confidence: fully for featureless
-  // pieces, softly (square root of the share) for textured ones.
-  if (opts.share !== undefined) conf = Math.min(conf, Math.pow(opts.share, 1 - 0.5 * textured));
+  // pieces, softly (cube root of the share) for textured ones.
+  if (opts.share !== undefined) conf = Math.min(conf, Math.pow(opts.share, 1 - (2 / 3) * textured));
   if (!opts.hasShape && !opts.isPatch) {
     const r = f.areaRatio;
     const out = r < AREA_RATIO_RANGE[0] ? AREA_RATIO_RANGE[0] - r : r > AREA_RATIO_RANGE[1] ? r - AREA_RATIO_RANGE[1] : 0;

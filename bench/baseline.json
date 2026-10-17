@@ -13,7 +13,12 @@
         "confidentPrecision": 1,
         "fitPrecision": 1,
         "fitRecall": 1,
-        "warnings": 0
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
       },
       "wave-1000-dark": {
         "segRecall": 1,
@@ -26,7 +31,12 @@
         "confidentPrecision": 1,
         "fitPrecision": 1,
         "fitRecall": 1,
-        "warnings": 0
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
       },
       "starry-light-table": {
         "segRecall": 1,
@@ -39,7 +49,12 @@
         "confidentPrecision": 1,
         "fitPrecision": 1,
         "fitRecall": 1,
-        "warnings": 0
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
       },
       "wave-wood-table": {
         "segRecall": 1,
@@ -52,7 +67,12 @@
         "confidentPrecision": 1,
         "fitPrecision": 0.8,
         "fitRecall": 1,
-        "warnings": 0
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
       },
       "starry-patches": {
         "segRecall": 1,
@@ -65,7 +85,12 @@
         "confidentPrecision": 1,
         "fitPrecision": 1,
         "fitRecall": 1,
-        "warnings": 0.5
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
       },
       "wave-edges": {
         "segRecall": 1,
@@ -78,7 +103,12 @@
         "confidentPrecision": 1,
         "fitPrecision": 1,
         "fitRecall": 1,
-        "warnings": 0
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
       },
       "starry-noisy-blurry": {
         "segRecall": 1,
@@ -91,7 +121,12 @@
         "confidentPrecision": 1,
         "fitPrecision": 1,
         "fitRecall": 1,
-        "warnings": 1
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
       },
       "starry-via-box-photo": {
         "segRecall": 1,
@@ -104,7 +139,12 @@
         "confidentPrecision": 1,
         "fitPrecision": 1,
         "fitRecall": 1,
-        "warnings": 0
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
       },
       "wave-via-box-photo": {
         "segRecall": 1,
@@ -117,7 +157,120 @@
         "confidentPrecision": 1,
         "fitPrecision": 1,
         "fitRecall": 1,
-        "warnings": 0
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
+      },
+      "starry-grids-dark": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
+      },
+      "starry-grids-light": {
+        "segRecall": 1,
+        "segPrecision": 0.846,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 2,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
+      },
+      "wave-grids-wood": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 0.864,
+        "top3": 0.875,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 0.5,
+        "assembledRecall": 0.833,
+        "assembledPrecision": 0.833,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
+      },
+      "wave-grids-dark": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
+      },
+      "starry-neighbors": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
+      },
+      "wave-neighbors-wood": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 0.765,
+        "top3": 0.824,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 0.6,
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 0.6,
+        "hiddenRate": 0
       }
     },
     "box": {
