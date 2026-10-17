@@ -26,6 +26,10 @@ export interface BackgroundModel {
   lightingRatio: number;
   /** Fraction of the photo classified as background. */
   coverage: number;
+  /** Estimated sensor noise (gray levels, measured on the photo's border bands). */
+  noise: number;
+  /** Box-filter radius applied before scoring (0 = none; 1–2 for noisy photos). */
+  smoothing: number;
   /** Foreground score threshold (in background-sigma units) used for the segmentation. */
   threshold: number;
   /** Otsu separability (0..1) of the foreground score: low = pieces hard to tell from the background. */

@@ -104,12 +104,17 @@ export function estimateColorCorrection(index: ReferenceIndex, details: MatchDet
  * confidently matched. Prefer this over calling {@link matchRegionDetailed} per region.
  */
 export function matchRegions(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions = {}): RegionMatch[] {
+  return matchRegionsDetailed(index, inputs, opts).map((d) => d.match);
+}
+
+/** {@link matchRegions} with the per-region details (winning similarity, confidence features). */
+export function matchRegionsDetailed(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions = {}): MatchDetail[] {
   const first = inputs.map((inp) => matchRegionDetailed(index, inp, opts));
   const correction = estimateColorCorrection(index, first);
-  if (!correction) return first.map((d) => d.match);
+  if (!correction) return first;
   return inputs.map((inp, i) => {
     const d = first[i];
-    if (d.match.status === 'confident' && d.match.candidates[0].confidence >= 0.9) return d.match;
-    return matchRegionDetailed(index, inp, opts, { correction, score: CORRECTED_SCORE }).match;
+    if (d.match.status === 'confident' && d.match.candidates[0].confidence >= 0.9) return d;
+    return matchRegionDetailed(index, inp, opts, { correction, score: CORRECTED_SCORE });
   });
 }

@@ -76,6 +76,7 @@ export function ReferenceOverlay({
               const rc = cellRect(c, grid, width, height);
               return <rect key={`${c.row},${c.col}`} className="marker-cell" x={rc.x} y={rc.y} width={rc.width} height={rc.height} vectorEffect="non-scaling-stroke" />;
             })}
+          {onMarker && <circle className="hit" cx={m.x} cy={m.y} r={Math.max(r, 22 / scale)} />}
           <circle cx={m.x} cy={m.y} r={r} vectorEffect="non-scaling-stroke" />
           <text x={m.x} y={m.y} fontSize={r * 1.1} dy="0.36em" textAnchor="middle">
             {m.id}

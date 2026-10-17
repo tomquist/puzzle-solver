@@ -1,11 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { applyMat3, similarityAbout, type Mat3, type Point } from '../../cv/geometry';
-import { cloneRGBA, type RGBAImage } from '../../cv/image';
+import { cloneRGBA, createRGBA, type RGBAImage } from '../../cv/image';
+import { resizeRGBA } from '../../cv/resize';
 import { drawPolygon } from '../../cv/raster';
 import { warpRGBA } from '../../cv/warp';
 import type { CellRef, RegionMatch } from '../../model/types';
 import { DEBUG_IMAGES, loadTestAsset, savePng } from '../../testing/nodeImageIO';
-import { generateJigsaw, perturbReference, renderPiecesPhoto, type JigsawCut, type PieceTruth } from '../../testing/synth';
+import { generateJigsaw, perturbReference, renderPiecesPhoto, Rng, type JigsawCut, type PieceTruth } from '../../testing/synth';
+import { matchRegionsDetailed } from './colorCorrection';
+import { CONFIDENT_THRESHOLD, matchConfidence } from './matchRegion';
 import { buildReferenceIndex, cellAt, matchRegion, matchRegions, type MatchInput, type ReferenceIndex } from './index';
 import { accuracy, angleError, inputFromTruth, renderScenario, type Accuracy } from './testkit';
 
@@ -251,5 +254,93 @@ describe('matchRegion — Great Wave 40×25 (1000 pieces)', () => {
     expect({ row: m.candidates[0].row, col: m.candidates[0].col }).toEqual({ row: 10, col: 20 });
     expect(angleError(m.candidates[0].rotationDeg, truth[0].rotationDeg)).toBeLessThan(5);
     expect(ms).toBeLessThan(6000); // target < 2 s
+  });
+});
+
+describe('matchRegion — featureless pieces', () => {
+  // Left half: a smooth sky-like gradient (colour changes with y only, plus faint low-frequency
+  // mottling), right half: textured painting. Featureless pieces must not be reported 'confident'
+  // unless they are right; their alternatives must name several distinct places.
+  const W = 1000, H = 800, rows = 16, cols = 20;
+  let ref: RGBAImage;
+  let index: ReferenceIndex;
+
+  beforeAll(() => {
+    const starry = resizeRGBA(loadTestAsset('starry-night'), 1000, 792);
+    ref = createRGBA(W, H, [0, 0, 0, 255]);
+    const mottle = (x: number, y: number) => 1.2 * Math.sin(x / 37 + Math.sin(y / 53)) + 0.8 * Math.sin(y / 29 - x / 71);
+    for (let y = 0; y < H; y++) {
+      const t = y / (H - 1);
+      for (let x = 0; x < W; x++) {
+        const o = (y * W + x) * 4;
+        if (x < W / 2) {
+          // Broad colour waves (a few cells long): locally every piece just sees a gentle ramp.
+          const m = mottle(x, y);
+          const w1 = 14 * Math.sin((2 * Math.PI * x) / 230 + 1), w2 = 12 * Math.sin((2 * Math.PI * y) / 190);
+          const w3 = 9 * Math.sin((2 * Math.PI * (x + y)) / 310);
+          ref.data[o] = 150 + 60 * t + w1 + w3 + m;
+          ref.data[o + 1] = 180 + 30 * t + w2 + 0.5 * w3 + m;
+          ref.data[o + 2] = 215 - 25 * t + 0.6 * w1 - w2 + m;
+        } else {
+          const s = (Math.min(791, y) * 1000 + x) * 4;
+          ref.data[o] = starry.data[s];
+          ref.data[o + 1] = starry.data[s + 1];
+          ref.data[o + 2] = starry.data[s + 2];
+        }
+      }
+    }
+    index = buildReferenceIndex(perturbReference(ref, { seed: 2 }), { rows, cols }, 'grid');
+  });
+
+  it('reports plain pieces as ambiguous with spread-out alternatives', () => {
+    let plainConfident = 0, plainN = 0, texturedConfident = 0, texturedN = 0, naiveWrong = 0;
+    for (const seed of [1, 2]) {
+      const cut = generateJigsaw(rows, cols, W, H, 70 + seed);
+      const rng = new Rng(seed);
+      const plain = rng.shuffle(cut.pieces.filter((p) => p.col < cols / 2 - 1)).slice(0, 16);
+      const textured = rng.shuffle(cut.pieces.filter((p) => p.col > cols / 2)).slice(0, 8);
+      const g = () => rng.uniform(0.9, 1.1);
+      const { photo, truth } = renderPiecesPhoto(ref, cut, [...plain, ...textured].map((p) => p.index), {
+        seed, scale: [1.5, 1.8], noiseSigma: 3, blurSigma: 0.7, gain: [g(), g(), g()], illumination: 0.2,
+      });
+      const inputs = truth.map((t, i) => inputFromTruth(photo, cut, t, i + 1, { withShape: true }));
+      const details = matchRegionsDetailed(index, inputs);
+      details.forEach((d, i) => {
+        const m = d.match, t = truth[i], c0 = m.candidates[0];
+        const isPlain = t.col < cols / 2;
+        const correct = c0.row === t.row && c0.col === t.col;
+        // Score and margin alone (the old calibration) are fooled by plain pieces.
+        if (isPlain && !correct && matchConfidence(d.features!.score, d.features!.margin) >= CONFIDENT_THRESHOLD) naiveWrong++;
+        if (isPlain) plainN++;
+        else texturedN++;
+        if (m.status === 'confident') {
+          expect(correct, `confident but wrong: r${t.row}c${t.col} -> r${c0.row}c${c0.col}`).toBe(true);
+          if (isPlain) plainConfident++;
+          else texturedConfident++;
+        }
+        // Alternatives: distinct, well-spread places with ordered confidences summing to ≤ 1.
+        expect(m.candidates.length).toBeLessThanOrEqual(5);
+        let sum = 0;
+        m.candidates.forEach((c, k) => {
+          sum += c.confidence;
+          expect(c.confidence).toBeGreaterThanOrEqual(0);
+          if (k > 0) expect(c.confidence).toBeLessThanOrEqual(m.candidates[k - 1].confidence + 1e-9);
+          for (let j = 0; j < k; j++) {
+            const o = m.candidates[j];
+            expect(Math.hypot(c.x - o.x, c.y - o.y)).toBeGreaterThanOrEqual(0.9 * Math.sqrt(index.cellW * index.cellH) - 1e-6);
+            expect(`${c.row},${c.col}`).not.toBe(`${o.row},${o.col}`);
+          }
+        });
+        expect(sum).toBeLessThanOrEqual(1 + 1e-6);
+        if (m.status !== 'confident') {
+          expect(m.candidates.length).toBe(5);
+          expect(c0.confidence).toBeLessThan(CONFIDENT_THRESHOLD);
+        }
+      });
+    }
+    table.push(`featureless test: plain confident ${plainConfident}/${plainN} (score+margin alone: ${naiveWrong} confident-wrong), textured confident ${texturedConfident}/${texturedN}`);
+    expect(naiveWrong).toBeGreaterThan(0);
+    expect(plainConfident).toBeLessThanOrEqual(plainN / 4);
+    expect(texturedConfident).toBeGreaterThanOrEqual(0.8 * texturedN);
   });
 });

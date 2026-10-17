@@ -30,7 +30,7 @@ export function ScanOverlay({
   onSelect: (id: number) => void;
 }) {
   const { width, height } = result;
-  const minLabel = 10.5 / scale; // label radius at least ~10 screen px
+  const minLabel = 10.5 / scale; // label radius at least ~10 screen px (12 px numbers)
   const highlight = new Set(highlightIds ?? []);
   const dimOthers = highlight.size > 0;
   return (
@@ -47,6 +47,7 @@ export function ScanOverlay({
           highlighted={highlight.has(region.id)}
           dimmed={dimOthers && !highlight.has(region.id)}
           minLabel={minLabel}
+          minHit={22 / scale}
           onSelect={onSelect}
         />
       ))}
@@ -75,6 +76,7 @@ function RegionMark({
   highlighted,
   dimmed,
   minLabel,
+  minHit,
   onSelect,
 }: {
   region: DetectedRegion;
@@ -86,6 +88,8 @@ function RegionMark({
   highlighted: boolean;
   dimmed: boolean;
   minLabel: number;
+  /** Radius (photo px) of the invisible touch target around the number: ≥ 44 screen px across. */
+  minHit: number;
   onSelect: (id: number) => void;
 }) {
   const match = matchFor(result, region.id);
@@ -100,7 +104,7 @@ function RegionMark({
   const badge = placement ? turnBadge(placement.rotationDeg) : '';
   const u = placement ? upVector(placement.rotationDeg) : { x: 0, y: -1 };
   // Turn hint on the side opposite the arrow.
-  const badgeH = labelR * 1.15;
+  const badgeH = Math.max(labelR * 1.15, minHit * 0.76); // text ≥ 12 screen px
   const badgeW = badgeH * 2.4;
   const bc = { x: c.x - u.x * (labelR + badgeH * 0.9), y: c.y - u.y * (labelR + badgeH * 0.9) };
   const cls = [
@@ -129,6 +133,7 @@ function RegionMark({
         }
       }}
     >
+      <circle className="hit" cx={c.x} cy={c.y} r={Math.max(minHit, labelR)} />
       <path d={polygonPath(region.contour)} className="region-fill" />
       <path d={polygonPath(region.contour)} className="region-line" vectorEffect="non-scaling-stroke" />
       {arrow && !placed && (

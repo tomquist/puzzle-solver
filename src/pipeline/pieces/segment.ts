@@ -20,7 +20,9 @@ import { fitBackground, foregroundScore } from './background';
 import { assessPhoto, assessRegions } from './quality';
 import { analyzePieceShape, bodyOrientation, orientationHistogram } from './shape';
 import type { BackgroundModel, SegmentOptions, Segmentation, SegmentedRegion } from './types';
-import { median, offsetPoints } from './util';
+import { boxBlurRGB, median, offsetPoints } from './util';
+import { noiseSigma } from '../quality/metrics';
+import { rgbaToGray } from '../../cv/color';
 
 /** Minimum shape confidence for a region to serve as a single-piece size reference. */
 const REFERENCE_CONFIDENCE = 0.45;
@@ -39,6 +41,31 @@ const NECK_RADIUS = 0.2;
  * at different rotations (assembled patches share one grid: measured ≤ 0.31 vs. up to 0.95).
  */
 const TOUCHING_SECOND_PEAK = 0.42;
+
+/** Gray-level noise sigma from which the score is computed on a 3×3 / 5×5 box-filtered photo. */
+const NOISE_SMOOTH_1 = 3;
+const NOISE_SMOOTH_2 = 4;
+
+/**
+ * Sensor-noise estimate (gray levels) from the photo's border bands, which mostly show the table,
+ * so piece content does not inflate it.
+ */
+function estimateNoise(photo: RGBAImage): number {
+  const { width: w, height: h } = photo;
+  const b = Math.max(8, Math.round(0.05 * Math.min(w, h)));
+  if (w < 3 * b || h < 3 * b) return noiseSigma(rgbaToGray(photo));
+  const bands: Rect[] = [
+    { x: 0, y: 0, width: w, height: b }, { x: 0, y: h - b, width: w, height: b },
+    { x: 0, y: b, width: b, height: h - 2 * b }, { x: w - b, y: b, width: b, height: h - 2 * b },
+  ];
+  let sum = 0, n = 0;
+  for (const r of bands) {
+    const a = r.width * r.height;
+    sum += noiseSigma(rgbaToGray(cropRGBA(photo, r))) * a;
+    n += a;
+  }
+  return sum / n;
+}
 
 /** A region candidate: local mask (tight bbox) plus derived geometry. */
 interface Candidate {
@@ -235,9 +262,14 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     if (timings) timings[name] = (timings[name] ?? 0) + (t - t0);
     t0 = t;
   };
-  const fit = fitBackground(photo);
+  // Noisy photos (dim light): score a box-filtered copy, so that white noise does not drown the
+  // small colour difference of dark pieces on a dark table (clean photos keep full sharpness).
+  const noise = estimateNoise(photo);
+  const smoothing = noise < NOISE_SMOOTH_1 ? 0 : noise < NOISE_SMOOTH_2 ? 1 : 2;
+  const scored = smoothing > 0 ? boxBlurRGB(photo, smoothing) : photo;
+  const fit = fitBackground(scored);
   lap('background');
-  const score = foregroundScore(photo, fit);
+  const score = foregroundScore(scored, fit);
   lap('score');
   const th = chooseThreshold(score);
   let fg = hysteresis(score, th.high, th.low);
@@ -352,6 +384,8 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   const bodies = regions.filter((r) => r.region.shape).map((r) => r.region.shape!.bodySize);
   const background: BackgroundModel = {
     ...fit,
+    noise,
+    smoothing,
     coverage: 1 - maskArea(fg) / (W * H),
     threshold: th.high,
     separability: th.separability,

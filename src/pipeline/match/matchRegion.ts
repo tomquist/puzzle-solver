@@ -320,11 +320,41 @@ function sigmoid(x: number): number {
 /**
  * Confidence that the best placement is right, from its score and the margin over the best distinct
  * alternative: a logistic fit on synthetic scans (Starry Night 20×16, Great Wave 40×25), made a bit
- * more conservative because real photos are harder.
+ * more conservative because real photos are harder. Use {@link informedConfidence} when the
+ * information content of the region is known.
  */
 export function matchConfidence(score: number, margin: number): number {
   return sigmoid(4.6 + 3 * score + 1.5 * Math.log(Math.max(1e-4, margin)));
 }
+
+/**
+ * {@link matchConfidence} discounted by the information content of the region:
+ * - Peak sharpness: a featureless piece (plain sky, gentle gradient) scores about the same when it is
+ *   shifted by a quarter cell, so its high NCC is no evidence of the location. Unless the margin to
+ *   every distinct alternative is large (colour or flat sides pin the piece down), a flat peak makes
+ *   the match ambiguous.
+ * - Single pieces without a detected shape whose area does not look like one piece (fragments of a
+ *   badly segmented piece, merged pieces) are not trusted.
+ */
+export function informedConfidence(f: Pick<MatchFeatures, 'score' | 'margin' | 'drop25' | 'areaRatio'>, opts: { hasShape: boolean; isPatch: boolean }): number {
+  const base = matchConfidence(f.score, f.margin);
+  const sharp = sigmoid((f.drop25 - 0.045) / 0.01);
+  const pinned = sigmoid((f.margin - 0.2) / 0.03);
+  let conf = base * (1 - (1 - sharp) * (1 - pinned));
+  if (!opts.hasShape && !opts.isPatch) {
+    const r = f.areaRatio;
+    const out = r < AREA_RATIO_RANGE[0] ? AREA_RATIO_RANGE[0] - r : r > AREA_RATIO_RANGE[1] ? r - AREA_RATIO_RANGE[1] : 0;
+    conf *= Math.exp(-((out / 0.05) ** 2));
+  }
+  return conf;
+}
+
+/** Plausible area of a single piece relative to its body area (4 blanks … 4 tabs, with tolerance). */
+const AREA_RATIO_RANGE: [number, number] = [0.82, 1.45];
+/** Minimum distance (cells) between listed candidates, so alternatives show different places. */
+const CANDIDATE_SPREAD = 0.9;
+/** Softmax temperature turning score differences into relative candidate likelihoods. */
+const CANDIDATE_TAU = 0.04;
 
 /** Confidence at or above which a match is reported as 'confident'. */
 export const CONFIDENT_THRESHOLD = 0.7;
@@ -338,11 +368,72 @@ export interface MatchContext {
   score?: ScoreParams;
 }
 
+/** Evidence used for the confidence of the best placement. */
+export interface MatchFeatures {
+  score: number;
+  /** Best score minus the best spatially distinct (or differently rotated) alternative. */
+  margin: number;
+  /** Std (weighted Lab) of the 16 px/cell template after removing a per-channel linear ramp. */
+  detail: number;
+  /** Std of the template including the ramp. */
+  rawStd: number;
+  /** Smallest score drop when the placement is shifted by 1/4 cell (worst of 8 directions). */
+  drop25: number;
+  /** Smallest score drop for a 1/2-cell shift. */
+  drop50: number;
+  /** Distinct candidates scoring within 0.05 / 0.1 of the best. */
+  plateau05: number;
+  plateau10: number;
+  /** Number of known flat sides (shape). */
+  flats: number;
+  /** Region area / expected body area (single pieces: ≈ 0.8–1.3; fragments and merged pieces fall outside). */
+  areaRatio: number;
+}
+
 /** Match result plus the winning similarity (for scan-level post-processing). */
 export interface MatchDetail {
   match: RegionMatch;
   best?: { map: Mapping; ref: Point };
   src?: PhotoSource;
+  features?: MatchFeatures;
+}
+
+/** Template std with and without a per-channel linear ramp (plane fit over template coordinates). */
+function templateDetail(t: Template, stride: number): { detail: number; rawStd: number } {
+  const n = t.n;
+  let si = 0, sj = 0;
+  const I = new Float64Array(n), J = new Float64Array(n);
+  for (let q = 0; q < n; q++) {
+    const j = Math.floor(t.off[q] / stride);
+    I[q] = t.off[q] - j * stride;
+    J[q] = j;
+    si += I[q];
+    sj += J[q];
+  }
+  si /= n;
+  sj /= n;
+  let aa = 0, ab = 0, bb = 0;
+  for (let q = 0; q < n; q++) {
+    const di = I[q] - si, dj = J[q] - sj;
+    aa += di * di;
+    ab += di * dj;
+    bb += dj * dj;
+  }
+  const det = aa * bb - ab * ab;
+  let explained = 0;
+  for (let c = 0; c < 3; c++) {
+    let pi = 0, pj = 0;
+    for (let q = 0; q < n; q++) {
+      const v = t.val[q * 3 + c];
+      pi += (I[q] - si) * v;
+      pj += (J[q] - sj) * v;
+    }
+    if (det > 1e-9) {
+      const b = (bb * pi - ab * pj) / det, cc = (aa * pj - ab * pi) / det;
+      explained += b * pi + cc * pj;
+    }
+  }
+  return { detail: Math.sqrt(Math.max(0, t.energy - explained) / n), rawStd: Math.sqrt(t.variance) };
 }
 
 /** Locate one region in the reference. See module documentation. */
@@ -401,27 +492,37 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   const rot = (c: Candidate) => norm360(c.map.phi * DEG);
   const distinct = (a: Candidate, b: Candidate) =>
     Math.hypot(a.ref.x - b.ref.x, a.ref.y - b.ref.y) > 0.6 * cell || angleDiff(rot(a), rot(b)) > 45;
-  const chosen: Candidate[] = [];
-  const usedCells = new Set<string>();
-  for (const c of cands) {
-    if (chosen.length >= maxCandidates) break;
-    const key = isPatch || index.cut !== 'grid' ? '' : `${cellKey(cellAt(index, c.ref))}|${Math.round(rot(c) / 90) % 4}`;
-    if (key && usedCells.has(key)) continue;
-    if (chosen.some((k) => !distinct(k, c))) continue;
-    if (key) usedCells.add(key);
-    chosen.push(c);
-  }
-  const best = chosen[0];
+  const best = cands[0];
   const second = cands.find((c) => distinct(best, c));
   const margin = second ? best.score - second.score : 0.3;
-  const conf = matchConfidence(best.score, margin);
-  const tau = 0.03;
-  const weights = chosen.map((c) => Math.exp((c.score - best.score) / tau));
-  const wsum = weights.reduce((s, v) => s + v, 0);
+  const features = informationFeatures(index, cache, Math.min(ci + 1, L - 1), best, cands, distinct, sp, input);
+  features.margin = margin;
+  const conf = informedConfidence(features, { hasShape: !!input.shape, isPatch });
+
+  // Distinct places (one per cell, well apart; best rotation each) for the candidate list. The
+  // likelihood shares of all places (listed or not) give the alternatives' confidences.
+  const places: Candidate[] = [];
+  const usedCells = new Set<string>();
+  for (const c of cands) {
+    const key = isPatch || index.cut !== 'grid' ? '' : cellKey(cellAt(index, c.ref));
+    if (key && usedCells.has(key)) continue;
+    if (places.some((k) => Math.hypot(k.ref.x - c.ref.x, k.ref.y - c.ref.y) < CANDIDATE_SPREAD * cell)) continue;
+    if (key) usedCells.add(key);
+    places.push(c);
+  }
+  const chosen = places.slice(0, maxCandidates);
+  const q = places.map((c) => Math.exp((c.score - best.score) / CANDIDATE_TAU));
+  const qsum = q.reduce((a, v) => a + v, 0);
+  for (let i = 0; i < q.length; i++) q[i] /= qsum;
+  const confidences = chosen.map((_, i) => {
+    if (i === 0) return conf;
+    // Less information than the scores suggest: scale every share down; otherwise the alternatives
+    // share what the best one leaves.
+    return conf <= q[0] ? (q[i] * conf) / q[0] : ((1 - conf) * q[i]) / Math.max(1e-9, 1 - q[0]);
+  });
 
   const candidates: Placement[] = chosen.map((c, i) => {
     const cellRef = cellAt(index, c.ref);
-    const share = weights[i] / wsum;
     return {
       row: cellRef.row,
       col: cellRef.col,
@@ -429,7 +530,7 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
       y: c.ref.y,
       rotationDeg: norm360(c.map.phi * DEG) % 360,
       score: c.score,
-      confidence: i === 0 ? conf : Math.min(share, 1 - conf) * sigmoid(8 * (c.score - 0.3)),
+      confidence: confidences[i],
     };
   });
 
@@ -447,7 +548,51 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
     });
   }
   const status: MatchStatus = best.score < UNMATCHED_SCORE ? 'unmatched' : conf >= CONFIDENT_THRESHOLD ? 'confident' : 'ambiguous';
-  return { match: { regionId: input.regionId, candidates, coveredCells, status }, best: { map: best.map, ref: best.ref }, src };
+  return { match: { regionId: input.regionId, candidates, coveredCells, status }, best: { map: best.map, ref: best.ref }, src, features };
+}
+
+/** Information content of the best placement: texture detail, peak sharpness and plateau size. */
+function informationFeatures(
+  index: ReferenceIndex,
+  cache: TemplateCache,
+  li: number,
+  best: Candidate,
+  cands: Candidate[],
+  distinct: (a: Candidate, b: Candidate) => boolean,
+  sp: ScoreParams,
+  input: MatchInput,
+): MatchFeatures {
+  const f: MatchFeatures = {
+    score: best.score, margin: 0, detail: 0, rawStd: 0, drop25: 0, drop50: 0, plateau05: 0, plateau10: 0,
+    flats: input.shape ? input.shape.sides.filter((x) => x.kind === 'flat').length : 0,
+    areaRatio: 1,
+  };
+  const body = input.shape?.bodySize ?? input.expectedBodySize;
+  if (body && body > 0) f.areaRatio = input.mask.data.reduce((a, v) => a + v, 0) / (body * body);
+  for (const c of cands) {
+    if (!distinct(best, c)) continue;
+    if (c.score >= best.score - 0.05) f.plateau05++;
+    if (c.score >= best.score - 0.1) f.plateau10++;
+  }
+  const level = index.levels[li];
+  const t = cache.get(level, li, best.map);
+  if (!t) return f;
+  Object.assign(f, templateDetail(t, level.stride));
+  const { X, Y } = topLeftFor(level, t, best.ref);
+  const peak = searchWindow(level, t, X, Y, 1, sp);
+  if (!peak) return f;
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [0.7071, 0.7071], [-0.7071, 0.7071], [0.7071, -0.7071], [-0.7071, -0.7071]];
+  for (const [k, frac] of [[0, 0.25], [1, 0.5]] as const) {
+    let worst = Infinity;
+    for (const [dx, dy] of dirs) {
+      const XX = peak.X + Math.round(dx * frac * level.ppc), YY = peak.Y + Math.round(dy * frac * level.ppc);
+      if (!fits(level, t, XX, YY)) continue;
+      worst = Math.min(worst, peak.raw - scoreAt(level, t, XX, YY, sp));
+    }
+    if (k === 0) f.drop25 = Number.isFinite(worst) ? worst : 0;
+    else f.drop50 = Number.isFinite(worst) ? worst : 0;
+  }
+  return f;
 }
 
 /** Cells whose body area is mostly covered by the region mask at the given placement. */

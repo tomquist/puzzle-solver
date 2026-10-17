@@ -49,7 +49,7 @@ function makeFixtures(dir: string): Fixtures {
 }
 
 test('real pipeline: set up from a box photo, scan pieces, find their places', async ({ page }, info) => {
-  test.skip(info.project.name !== 'desktop', 'pipeline e2e runs once (desktop)');
+  test.skip(!['desktop', 'iphone-13'].includes(info.project.name), 'pipeline e2e runs on desktop Chromium and iPhone WebKit');
   test.setTimeout(240_000);
   const fx = makeFixtures(info.outputPath('fixtures'));
   const errors: string[] = [];
