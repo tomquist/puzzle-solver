@@ -8,7 +8,7 @@ import type { CellRef, RegionMatch } from '../../model/types';
 import { DEBUG_IMAGES, loadTestAsset, savePng } from '../../testing/nodeImageIO';
 import { generateJigsaw, perturbReference, renderPiecesPhoto, Rng, type JigsawCut, type PieceTruth } from '../../testing/synth';
 import { matchRegionsDetailed } from './colorCorrection';
-import { CONFIDENT_THRESHOLD, matchConfidence, matchRegionDetailed } from './matchRegion';
+import { capForBorder, CONFIDENT_THRESHOLD, matchConfidence, matchRegionDetailed, outlineFactor, type MatchDetail } from './matchRegion';
 import { buildReferenceIndex, cellAt, matchRegion, matchRegions, type MatchInput, type ReferenceIndex } from './index';
 import { accuracy, angleError, inputFromTruth, renderScenario, type Accuracy } from './testkit';
 
@@ -365,5 +365,42 @@ describe('matchRegion — featureless pieces', () => {
     expect(naiveWrong).toBeGreaterThan(0);
     expect(plainConfident).toBeLessThanOrEqual(plainN / 4);
     expect(texturedConfident).toBeGreaterThanOrEqual(0.8 * texturedN);
+  });
+});
+
+describe('matchRegion — outline reliability', () => {
+  const detail = (conf: number): MatchDetail => ({
+    match: {
+      regionId: 1,
+      status: conf >= CONFIDENT_THRESHOLD ? 'confident' : 'ambiguous',
+      candidates: [0, 1].map((i) => ({ row: 0, col: i, x: 0, y: 0, rotationDeg: 0, score: 0.8, confidence: i === 0 ? conf : 0.01 })),
+    },
+  });
+
+  it('caps the confidence of outlines that include table or shadow', () => {
+    const clean = detail(0.99);
+    capForBorder(clean, { outline: { borderTable: 0.1 } });
+    expect(clean.match.status).toBe('confident');
+    expect(clean.match.candidates[0].confidence).toBeCloseTo(0.99, 6);
+    // Mostly table around the border: at most 'ambiguous'.
+    const shadowed = detail(0.99);
+    capForBorder(shadowed, { outline: { borderTable: 0.5 } });
+    expect(shadowed.match.status).toBe('ambiguous');
+    expect(shadowed.match.candidates[0].confidence).toBeLessThan(CONFIDENT_THRESHOLD);
+    // In a scan where most outlines include shadow, a smaller excess already counts.
+    const scanWide = detail(0.99);
+    capForBorder(scanWide, { outline: { borderTable: 0.25 } }, 0.4);
+    expect(scanWide.match.status).toBe('ambiguous');
+    const normalScan = detail(0.99);
+    capForBorder(normalScan, { outline: { borderTable: 0.25 } }, 0.05);
+    expect(normalScan.match.status).toBe('confident');
+  });
+
+  it('discounts doubtful segmentation', () => {
+    expect(outlineFactor({ kind: 'piece' })).toBe(1);
+    expect(outlineFactor({ kind: 'piece', outline: { issues: ['touching_pieces'], solidity: 0.9 } })).toBe(1);
+    expect(outlineFactor({ kind: 'piece', outline: { issues: ['low_contrast', 'shape_uncertain'] } })).toBeCloseTo(0.855, 6);
+    expect(outlineFactor({ kind: 'piece', outline: { solidity: 0.5 } })).toBeCloseTo(0.85, 6);
+    expect(outlineFactor({ kind: 'patch', outline: { issues: ['shape_uncertain'], solidity: 0.5 } })).toBe(1);
   });
 });

@@ -118,6 +118,13 @@ export interface SegmentedRegion {
   mask: Mask;
   /** Photo crop of `region.bbox`. */
   image: RGBAImage;
+  /**
+   * Fraction of the region's outer band (≈ 0.12 piece sizes wide) whose colour is explained by the
+   * table, also when darkened by a cast shadow: high values mean the outline probably includes
+   * shadow or table. Measured on plain light tables only (L* ≥ 60, where shadows are visible); 0
+   * otherwise. Outline-reliability evidence for matching.
+   */
+  borderTable: number;
 }
 
 /** Result of {@link segmentPieces}. */

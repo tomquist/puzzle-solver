@@ -472,6 +472,22 @@ describe('segmentPieces on real-photo conditions', () => {
     expect(recall).toBeGreaterThanOrEqual(0.9);
     expect(singles.filter((p) => p.shapeFound).length).toBeGreaterThanOrEqual(0.8 * singles.length);
   });
+
+  it('measures how much table or cast shadow the outlines take in on a light table', () => {
+    const median = (seg: ReturnType<typeof segmentPieces>) => {
+      const v = seg.regions.filter((r) => r.region.kind === 'piece').map((r) => r.borderTable).sort((a, b) => a - b);
+      return v[v.length >> 1];
+    };
+    const hard = { rim: {}, edgeDarkening: 0.15, shadow: 0.5, shadowOffset: [8, 5] as [number, number], shadowBlur: 4.5 };
+    const clean = segmentPieces(scene('great-wave', 'light', 2).photo, { assessQuality: false });
+    const shadowed = segmentPieces(scene('great-wave', 'light', 2, hard).photo, { assessQuality: false });
+    const dark = segmentPieces(scene('great-wave', 'dark', 2, hard).photo, { assessQuality: false });
+    console.log(`borderTable median: clean ${median(clean).toFixed(2)}, shadowed ${median(shadowed).toFixed(2)}`);
+    expect(median(clean)).toBeLessThan(0.15);
+    expect(median(shadowed)).toBeGreaterThan(0.2);
+    // Only measured on plain light tables (dark painting content looks like a dark table).
+    expect(dark.regions.every((r) => r.borderTable === 0)).toBe(true);
+  });
 });
 
 describe('segmentPieces performance', () => {

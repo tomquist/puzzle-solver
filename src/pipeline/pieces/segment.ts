@@ -22,13 +22,13 @@ import { boxBlurGray } from '../../cv/filter';
 import { simplifyPolygon, smoothContour } from '../../cv/polygon';
 import { otsuThreshold, threshold } from '../../cv/threshold';
 import type { DetectedRegion, PieceShape, QualityIssue, RegionKind } from '../../model/types';
-import { fitBackground, foregroundScore } from './background';
+import { backgroundAt, fitBackground, foregroundScore } from './background';
 import { assessPhoto, assessRegions } from './quality';
 import { analyzePieceShape, bodyOrientation, orientationHistogram } from './shape';
 import type { BackgroundModel, RegionDiagnostics, SegmentOptions, Segmentation, SegmentedRegion } from './types';
 import { boxBlurRGB, doubleMask, halveGray, median, offsetPoints } from './util';
 import { noiseSigma } from '../quality/metrics';
-import { rgbaToGray } from '../../cv/color';
+import { rgbaToGray, rgbToLab } from '../../cv/color';
 
 /** Minimum shape confidence for a region to serve as a single-piece size reference. */
 const REFERENCE_CONFIDENCE = 0.45;
@@ -585,8 +585,6 @@ function peelSoft(c: Candidate, img: RGBAImage, ra: number, W: number, H: number
   if (parts.length === 0) return null;
   const before = c.shape?.confidence ?? 0;
   const ok = Math.max(...parts.map((p) => p.shape?.confidence ?? 0)) >= Math.max(0.6, before + 0.2);
-  if (process.env.SEGDBG) console.log('PEEL', c.bbox.x, c.bbox.y, 'area', c.area, 'removed', removed, (removed / c.area).toFixed(2), 'before', before.toFixed(2), 'after', parts.map((p) => (p.shape?.confidence ?? 0).toFixed(2) + '/' + p.area).join(' '), 'ok', ok);
-  if (process.env.PEELALL && !ok && parts.length === 1 && removed >= 0.08 * c.area && (parts[0].shape?.confidence ?? 0) >= before - 0.05 && parts[0].area >= 0.6 * ra) return parts;
   return ok ? parts : null;
 }
 
@@ -899,7 +897,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     const out: Candidate[] = [];
     for (const c of cands) {
       const ra = refAreaAt(c);
-      const doubtful = !c.touchesBorder && c.area >= 0.6 * ra && (process.env.PEELALL ? true : (c.area > 1.3 * ra || !c.shape || c.shape.confidence < 0.7));
+      const doubtful = !c.touchesBorder && c.area >= 0.6 * ra && (c.area > 1.3 * ra || !c.shape || c.shape.confidence < 0.7);
       out.push(...((doubtful ? peelSoft(c, scored, ra, W, H) : null) ?? [c]));
     }
     cands = out;
@@ -976,7 +974,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
       issues: [],
     };
     if (shape) region.shape = shape;
-    return { region, mask: c.mask, image: cropRGBA(photo, c.bbox) };
+    return { region, mask: c.mask, image: cropRGBA(photo, c.bbox), borderTable: 0 };
   });
 
   // Region-level structural issues.
@@ -1023,6 +1021,10 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
 
   if (diag) diag.regions = regionDiag;
   const bodies = regions.filter((r) => r.region.shape).map((r) => r.region.shape!.bodySize);
+  const bodyRef = bodies.length > 0 ? median(bodies) : refBody;
+  if (fit.palette.length === 0 && fit.color[0] >= BORDER_TABLE_MIN_L && bodyRef > 0) {
+    for (const r of regions) r.borderTable = borderTableFraction(photo, fit, r, bodyRef);
+  }
   const background: BackgroundModel = {
     ...fit,
     noise,
@@ -1046,6 +1048,35 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     lap('quality');
   }
   return seg;
+}
+
+/** Table lightness from which cast shadows are visible and the border-table fraction is measured. */
+const BORDER_TABLE_MIN_L = 60;
+
+/**
+ * Fraction of a region's outer band (≈ 0.12 body sizes wide) whose colour is the table's, possibly
+ * darkened by a cast shadow: (L* + 16) scaled by 0.5…1.08 relative to the modelled table with
+ * a*, b* scaled alike (± 5).
+ */
+function borderTableFraction(photo: RGBAImage, model: Pick<BackgroundModel, 'coefficients' | 'width' | 'height'>, r: SegmentedRegion, body: number): number {
+  const { mask } = r;
+  const { x: bx, y: by } = r.region.bbox;
+  const core = erode(mask, Math.max(2, Math.round(0.12 * body)));
+  let band = 0, table = 0;
+  for (let y = 0; y < mask.height; y++) {
+    for (let x = 0; x < mask.width; x++) {
+      const i = y * mask.width + x;
+      if (!mask.data[i] || core.data[i]) continue;
+      band++;
+      const X = x + bx, Y = y + by;
+      const o = (Y * photo.width + X) * 4;
+      const lab = rgbToLab(photo.data[o], photo.data[o + 1], photo.data[o + 2]);
+      const t = backgroundAt(model, X, Y);
+      const rho = (lab[0] + 16) / (t[0] + 16);
+      if (rho > 0.5 && rho < 1.08 && Math.abs(lab[1] - rho * t[1]) < 5 && Math.abs(lab[2] - rho * t[2]) < 5) table++;
+    }
+  }
+  return band > 0 ? table / band : 0;
 }
 
 /**

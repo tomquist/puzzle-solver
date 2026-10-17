@@ -372,6 +372,44 @@ const TEXTURE_DETAIL = 5;
 /** Weight of the gross-colour-difference penalty for featureless regions (after colour correction). */
 const FLAT_COLOUR_HINGE = 0.6;
 
+/**
+ * Confidence factor for doubts about the region's outline (segmentation issues, ragged mask): a
+ * placement of a wrongly outlined region rests on a wrong template.
+ */
+export function outlineFactor(input: Pick<MatchInput, 'kind' | 'outline'>): number {
+  const o = input.outline;
+  if (!o) return 1;
+  let f = 1;
+  const issues = o.issues ?? [];
+  // 'touching_pieces' is left out: a split pair's halves keep their content and match reliably.
+  if (issues.includes('low_contrast')) f *= 0.9;
+  if (input.kind === 'piece' && issues.includes('shape_uncertain')) f *= 0.95;
+  if (input.kind === 'piece' && o.solidity !== undefined && o.solidity < 0.65) f *= 0.85;
+  return f;
+}
+
+/** Border-table fraction above which an outline counts as including shadow / table (normal scans). */
+const BORDER_TABLE_LIMIT = 0.36;
+/** Same, in scans where most outlines touch shadow or table (median border-table fraction ≥ 0.2). */
+const BORDER_TABLE_LIMIT_SHADOWED = 0.15;
+
+/**
+ * Cap the confidence of a region whose outline probably includes cast shadow or table (at most
+ * 'ambiguous'). `scanMedian` = median border-table fraction of the scan's pieces, when known.
+ */
+export function capForBorder(detail: MatchDetail, input: Pick<MatchInput, 'outline'>, scanMedian?: number): void {
+  const bt = input.outline?.borderTable;
+  const c = detail.match.candidates[0];
+  if (bt === undefined || !c) return;
+  const limit = scanMedian !== undefined && scanMedian >= 0.2 ? BORDER_TABLE_LIMIT_SHADOWED : BORDER_TABLE_LIMIT;
+  const bad = sigmoid((bt - limit) / 0.03);
+  const cap = 0.6 + 0.4 * (1 - bad);
+  if (c.confidence <= cap) return;
+  c.confidence = cap;
+  for (const o of detail.match.candidates.slice(1)) o.confidence = Math.min(o.confidence, cap);
+  if (detail.match.status === 'confident' && cap < CONFIDENT_THRESHOLD) detail.match.status = 'ambiguous';
+}
+
 /** Plausible area of a single piece relative to its body area (4 blanks … 4 tabs, with tolerance). */
 const AREA_RATIO_RANGE: [number, number] = [0.82, 1.45];
 /** Minimum distance (cells) between listed candidates, so alternatives show different places. */
@@ -469,7 +507,9 @@ function templateDetail(t: Template, stride: number): { detail: number; rawStd: 
 
 /** Locate one region in the reference. See module documentation. */
 export function matchRegion(index: ReferenceIndex, input: MatchInput, opts: MatchOptions = {}): RegionMatch {
-  return matchRegionDetailed(index, input, opts).match;
+  const d = matchRegionDetailed(index, input, opts);
+  capForBorder(d, input);
+  return d.match;
 }
 
 /** {@link matchRegion} with internal options and the winning similarity. */
@@ -555,7 +595,7 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   const qsum = q.reduce((a, v) => a + v, 0);
   for (let i = 0; i < q.length; i++) q[i] /= qsum;
   features.share = q[0];
-  const conf = informedConfidence(features, { hasShape: !!input.shape, isPatch, share: q[0] });
+  const conf = informedConfidence(features, { hasShape: !!input.shape, isPatch, share: q[0] }) * outlineFactor(input);
   const confidences = chosen.map((_, i) => {
     if (i === 0) return conf;
     // Less information than the scores suggest: scale every share down; otherwise the alternatives

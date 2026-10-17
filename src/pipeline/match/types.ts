@@ -1,6 +1,6 @@
 import type { Point } from '../../cv/geometry';
 import type { Mask, RGBAImage } from '../../cv/image';
-import type { CellRef, CutStyle, GridSpec, PieceShape, RegionKind } from '../../model/types';
+import type { CellRef, CutStyle, GridSpec, PieceShape, QualityCode, RegionKind } from '../../model/types';
 
 /** One level of the reference pyramid (Lab, channel-weighted, padded by edge replication). */
 export interface RefLevel {
@@ -61,6 +61,21 @@ export interface MatchInput {
   orientationDeg: number;
   /** Photo px per grid cell (e.g. median bodySize of the scan's pieces). Required for patches without shape. */
   expectedBodySize?: number;
+  /** How trustworthy the region's outline is (from segmentation); unreliable outlines cap the confidence. */
+  outline?: OutlineEvidence;
+}
+
+/** Segmentation evidence about a region's outline (all optional). */
+export interface OutlineEvidence {
+  /**
+   * Fraction of the region's outer band whose colour is the (possibly shadowed) table — the outline
+   * probably includes cast shadow or table (see the pieces package's `SegmentedRegion.borderTable`).
+   */
+  borderTable?: number;
+  /** Codes of the region's quality issues ('low_contrast', 'shape_uncertain', 'touching_pieces', …). */
+  issues?: QualityCode[];
+  /** Region area / area of the convex hull of its outline (single pieces ≈ 0.75–0.9). */
+  solidity?: number;
 }
 
 export interface MatchOptions {
