@@ -7,6 +7,7 @@
  * background model and the spatial trend of piece sizes (perspective).
  */
 import { rgbaToGray, rgbToLab } from '../../cv/color';
+import { labelComponents } from '../../cv/components';
 import { createMask, createRGBA, type Mask, type RGBAImage } from '../../cv/image';
 import { erode, open } from '../../cv/morphology';
 import { sampleRGBA } from '../../cv/warp';
@@ -30,9 +31,10 @@ export const QUALITY_THRESHOLDS = {
   darkMean: 0.15,
   /** 95th percentile of piece luminance below which the photo is too dark. */
   darkP95: 0.33,
-  /** Fraction of piece pixels with a clipped channel (≥ 254) above which the photo is too bright (white-heavy prints reach ≈ 0.2). */
+  /** Fraction of piece pixels clipped in textured surroundings (detail lost) above which the photo is too bright. */
+  brightLossy: Number((globalThis as unknown as { __lossyT?: number }).__lossyT ?? 0.06),
+  /** Clipped (any channel ≥ 254) / blown (all ≥ 253) piece fractions reported as info when the clipping is featureless. */
   brightClipped: 0.25,
-  /** Fraction of piece pixels blown out to white (all channels ≥ 253). */
   brightBlown: 0.04,
   /** Fraction of the whole photo blown out to white. */
   brightPhotoBlown: 0.3,
@@ -53,6 +55,13 @@ export const QUALITY_THRESHOLDS = {
 };
 
 const T = QUALITY_THRESHOLDS;
+/** Width (px) of the unclipped ring examined around clipped areas. */
+const RING = 4;
+/** Bright neutral (paper, sky) pixel: all channels ≥ NEUTRAL_MIN and max − min ≤ NEUTRAL_SPREAD. */
+const NEUTRAL_MIN = 190;
+const NEUTRAL_SPREAD = 55;
+/** Near-white clipped areas whose ring is at least this bright-neutral are featureless. */
+const FEATURELESS_RING = Number((globalThis as unknown as { __featT?: number }).__featT ?? 0.5);
 
 function issue(code: QualityCode, severity: Severity, message: string, hint?: string, regionIds?: number[]): QualityIssue {
   const out: QualityIssue = { code, severity, message };
@@ -200,27 +209,82 @@ export function outlineEdgeWidths(photo: RGBAImage, seg: Segmentation): EdgeWidt
   return { median: median(widths), widest: ok ? hi : median(widths), anisotropy: ok ? hi / lo : 1, widestDirection, samples: widths.length };
 }
 
+/** Clipping of one region's interior and how much of it destroys detail. */
+export interface ClipAnalysis {
+  /** Interior pixels. */
+  pixels: number;
+  /** Pixels with a clipped channel (≥ 254). */
+  clipped: number;
+  /** Clipped pixels in areas whose unclipped surroundings are textured (detail was probably lost). */
+  lossy: number;
+  /** Pixels of compact blown-out blobs (glare candidates) with textured surroundings / halo. */
+  glare: number;
+  /** Pixels of compact blown-out blobs in featureless surroundings (white paper, sky). */
+  featurelessBlown: number;
+}
+
 /**
- * Fraction of a region's interior covered by compact glare blobs: blown-out white pixels (specular
- * highlights clip all channels) surviving a 3×3 opening, so isolated bright pixels and merely
- * bright (cream, yellow) print do not count.
+ * Clipping analysis of a region (interior `inner`). Clipped pixels of coloured print (another
+ * channel well below the clip) lose hue and texture: lossy. Near-white clipped areas are judged by
+ * their surroundings (a ring a few px wide): surrounded mostly by bright neutral material they are
+ * featureless paper or sky that merely crossed the clip level (no detail lost); surrounded by
+ * coloured print they are glare or blown highlights inside the picture (detail lost).
  */
-function regionGlare(sr: SegmentedRegion, inner: Mask): number {
-  const d = sr.image.data;
-  let n = 0, bright = 0;
-  for (let i = 0; i < inner.data.length; i++) {
+export function clipAnalysis(sr: SegmentedRegion, inner: Mask): ClipAnalysis {
+  const { width: w, height: h, data: d } = sr.image;
+  const out: ClipAnalysis = { pixels: 0, clipped: 0, lossy: 0, glare: 0, featurelessBlown: 0 };
+  const C = createMask(w, h);
+  for (let i = 0; i < w * h; i++) {
     if (!inner.data[i]) continue;
-    n++;
-    if (d[i * 4] >= 245 && d[i * 4 + 1] >= 245 && d[i * 4 + 2] >= 245) bright++;
+    out.pixels++;
+    if (d[i * 4] >= 254 || d[i * 4 + 1] >= 254 || d[i * 4 + 2] >= 254) { C.data[i] = 1; out.clipped++; }
   }
-  if (n === 0 || bright < Math.max(12, 0.5 * T.regionGlare * n)) return 0;
+  if (out.clipped === 0) return out;
+  const { labels, stats } = labelComponents(C, 8);
+  // Ring: propagate component labels RING px into the unclipped interior (4-neighbour layers).
+  const ring = new Int32Array(labels);
+  let frontier: number[] = [];
+  for (let i = 0; i < w * h; i++) if (labels[i]) frontier.push(i);
+  for (let step = 0; step < RING && frontier.length; step++) {
+    const next: number[] = [];
+    for (const i of frontier) {
+      const x = i % w;
+      for (const j of [i - 1, i + 1, i - w, i + w]) {
+        if (j < 0 || j >= w * h || (j === i - 1 && x === 0) || (j === i + 1 && x === w - 1)) continue;
+        if (ring[j] || !inner.data[j]) continue;
+        ring[j] = ring[i];
+        next.push(j);
+      }
+    }
+    frontier = next;
+  }
+  const ringN = new Float64Array(stats.length), ringNeutral = new Float64Array(stats.length);
+  for (let i = 0; i < w * h; i++) {
+    if (!ring[i] || labels[i]) continue;
+    const k = ring[i] - 1, p = i * 4;
+    const mx = Math.max(d[p], d[p + 1], d[p + 2]), mn = Math.min(d[p], d[p + 1], d[p + 2]);
+    ringN[k]++;
+    if (mn >= NEUTRAL_MIN && mx - mn <= NEUTRAL_SPREAD) ringNeutral[k]++;
+  }
+  // Featureless: a near-white area surrounded mostly by bright neutral material.
+  const featureless = stats.map((_, k) => ringN[k] >= 4 && ringNeutral[k] >= FEATURELESS_RING * ringN[k]);
+  if ((globalThis as unknown as { __clipDbg?: string[] }).__clipDbg) stats.forEach((st, k) => { if (st.area >= 60) (globalThis as unknown as { __clipDbg: string[] }).__clipDbg.push(`${st.area}:${ringN[k] ? (ringNeutral[k] / ringN[k]).toFixed(2) : '-'}`); });
+  for (let i = 0; i < w * h; i++) {
+    if (!labels[i]) continue;
+    const p = i * 4;
+    const coloured = Math.min(d[p], d[p + 1], d[p + 2]) < NEUTRAL_MIN;
+    if (coloured || !featureless[labels[i] - 1]) out.lossy++;
+  }
+  // Compact blown-out blobs (opening scaled to the piece removes thin white print structures).
   const g = glareMask(sr.image, { minValue: 0.98, maxSaturation: 0.025 });
   for (let i = 0; i < g.data.length; i++) g.data[i] &= inner.data[i];
-  // Opening scaled to the piece size: thin white print structures vanish, glare spots survive.
-  const blobs = open(g, Math.max(1, Math.round(0.05 * Math.sqrt(n))));
-  let hit = 0;
-  for (let i = 0; i < blobs.data.length; i++) hit += blobs.data[i];
-  return hit / n;
+  const blobs = open(g, Math.max(1, Math.round(0.05 * Math.sqrt(out.pixels))));
+  for (let i = 0; i < blobs.data.length; i++) {
+    if (!blobs.data[i]) continue;
+    if (labels[i] && !featureless[labels[i] - 1]) out.glare++;
+    else out.featurelessBlown++;
+  }
+  return out;
 }
 
 /** Per-region photo issues (glare on the piece); appends to `region.issues`. Called by `segmentPieces`. */
@@ -228,9 +292,9 @@ export function assessRegions(seg: Segmentation): void {
   for (const sr of seg.regions) {
     const r = sr.region;
     if (r.kind === 'unknown') continue;
-    const frac = regionGlare(sr, insetMask(sr.mask, 2));
-    if (frac > T.regionGlare) {
-      r.issues.push({ code: 'glare', severity: 'warning', message: 'Glare or blown-out highlight on this piece.', hint: 'Avoid direct light or reflections on the pieces.', regionIds: [r.id], area: r.bbox });
+    const a = clipAnalysis(sr, insetMask(sr.mask, 2));
+    if (a.pixels > 0 && a.glare > T.regionGlare * a.pixels && a.glare >= 12) {
+      r.issues.push({ code: 'glare', severity: 'warning', message: 'Glare on this piece.', hint: 'Avoid direct light or reflections on the pieces.', regionIds: [r.id], area: r.bbox });
     }
   }
 }
@@ -313,14 +377,26 @@ export function assessPhoto(photo: RGBAImage, seg: Segmentation): QualityReport 
   const packed = packInterior(useful, inner);
   const ex = exposureStats(packed);
   const clip = clipping(packed);
+  let pixels = 0, lossy = 0;
+  for (const r of useful) {
+    const a = clipAnalysis(r, inner.get(r.region.id)!);
+    pixels += a.pixels;
+    lossy += a.lossy;
+  }
+  const lossyFrac = pixels > 0 ? lossy / pixels : 0;
   metrics.brightness = ex.mean;
   metrics.p95 = ex.p95;
   metrics.clipped = clip.clipped;
   metrics.blown = clip.blown;
+  metrics.clippedLossy = lossyFrac;
   if (ex.mean < T.darkMean || ex.p95 < T.darkP95) {
     issues.push(issue('too_dark', ex.mean < 0.07 ? 'error' : 'warning', 'The photo is too dark.', HINT.dark));
-  } else if (clip.clipped > T.brightClipped || clip.blown > T.brightBlown || photoClip.blown > T.brightPhotoBlown) {
-    issues.push(issue('too_bright', clip.clipped > 0.5 ? 'error' : 'warning', 'The photo is overexposed.', HINT.bright));
+  } else if (lossyFrac > T.brightLossy || photoClip.blown > T.brightPhotoBlown) {
+    // Clipping that cuts through print structure: detail is lost.
+    issues.push(issue('too_bright', lossyFrac > 0.25 ? 'error' : 'warning', 'The photo is overexposed.', HINT.bright));
+  } else if (clip.clipped > T.brightClipped || clip.blown > T.brightBlown) {
+    // Clipping confined to featureless bright print (paper, sky): little detail lost.
+    issues.push(issue('too_bright', 'info', 'Bright areas are clipped (featureless, little detail lost).', HINT.bright));
   }
 
   // Sharpness: edge width across the outlines (+ content blur on the pieces).
@@ -344,7 +420,9 @@ export function assessPhoto(photo: RGBAImage, seg: Segmentation): QualityReport 
   const bgm = seg.background;
   metrics.separability = bgm.separability;
   metrics.outlineContrast = bgm.outlineContrast;
-  if (bgm.separability < T.lowSeparability || bgm.outlineContrast < T.lowOutlineContrast) {
+  // Global: weak outlines overall (separability alone is too content-dependent). Region-level
+  // low_contrast issues (unreliable, low-contrast regions) are merged into the same issue below.
+  if (bgm.outlineContrast < T.lowOutlineContrast || (bgm.separability < T.lowSeparability && bgm.outlineContrast < 10)) {
     issues.push(issue('low_contrast', 'warning', 'The pieces are hard to tell from the background.', HINT.contrast));
   }
 
@@ -367,8 +445,19 @@ export function assessPhoto(photo: RGBAImage, seg: Segmentation): QualityReport 
     issues.push(issue('perspective', 'warning', 'The photo is taken at an angle.', HINT.perspective));
   }
 
-  issues.push(...aggregateRegionIssues(seg.regions));
-  return { score: scoreOf(issues), issues, metrics };
+  const all = mergeIssues(issues, aggregateRegionIssues(seg.regions));
+  return { score: scoreOf(all), issues: all, metrics };
+}
+
+/** Append region issues; a region issue whose code is already present adds its region ids there. */
+function mergeIssues(global: QualityIssue[], regional: QualityIssue[]): QualityIssue[] {
+  const out = [...global];
+  for (const r of regional) {
+    const g = out.find((i) => i.code === r.code);
+    if (!g) { out.push(r); continue; }
+    g.regionIds = [...new Set([...(g.regionIds ?? []), ...(r.regionIds ?? [])])].sort((a, b) => a - b);
+  }
+  return out;
 }
 
 const AGGREGATE_TEXT: Partial<Record<QualityCode, [string, string, string]>> = {
@@ -376,7 +465,8 @@ const AGGREGATE_TEXT: Partial<Record<QualityCode, [string, string, string]>> = {
   touching_pieces: ['Some pieces touch each other.', 'regions contain touching pieces.', 'Leave a small gap between loose pieces.'],
   fragment: ['A small fragment was ignored.', 'small fragments were ignored.', 'Remove crumbs and dust from the table.'],
   shape_uncertain: ['A piece outline is unclear.', 'piece outlines are unclear.', 'Use a plain background and spread the pieces out.'],
-  glare: ['Glare or blown-out highlights on a piece.', 'pieces have glare or blown-out highlights.', 'Avoid direct light or reflections on the pieces.'],
+  glare: ['Glare on a piece.', 'pieces have glare.', 'Avoid direct light or reflections on the pieces.'],
+  low_contrast: ['A piece is hard to tell from the background; its outline may be wrong.', 'pieces are hard to tell from the background; their outlines may be wrong.', 'Use a plain background that contrasts with the pieces.'],
 };
 
 function aggregateRegionIssues(regions: SegmentedRegion[]): QualityIssue[] {

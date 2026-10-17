@@ -188,3 +188,41 @@ export function parseImageHeader(b: Uint8Array): ImageHeader {
   }
   return { format: 'unknown', orientation: 1 };
 }
+
+export interface DrawRects {
+  sx: number;
+  sy: number;
+  sw: number;
+  sh: number;
+  dx: number;
+  dy: number;
+  dw: number;
+  dh: number;
+}
+
+/**
+ * Clip a drawImage source rectangle to the source bounds (W × H) and shrink the destination
+ * rectangle accordingly. Safari draws nothing at all when the source rectangle extends outside
+ * the image (Chrome clips), so crops near picture edges must be clipped by hand. Returns null when
+ * nothing of the source is inside the rectangle.
+ */
+export function clipDrawRects(r: DrawRects, W: number, H: number): DrawRects | null {
+  if (r.sw <= 0 || r.sh <= 0) return null;
+  const x0 = Math.max(0, r.sx);
+  const y0 = Math.max(0, r.sy);
+  const x1 = Math.min(W, r.sx + r.sw);
+  const y1 = Math.min(H, r.sy + r.sh);
+  if (x1 <= x0 || y1 <= y0) return null;
+  const kx = r.dw / r.sw;
+  const ky = r.dh / r.sh;
+  return {
+    sx: x0,
+    sy: y0,
+    sw: x1 - x0,
+    sh: y1 - y0,
+    dx: r.dx + (x0 - r.sx) * kx,
+    dy: r.dy + (y0 - r.sy) * ky,
+    dw: (x1 - x0) * kx,
+    dh: (y1 - y0) * ky,
+  };
+}

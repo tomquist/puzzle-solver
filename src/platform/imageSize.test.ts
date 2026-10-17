@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import jpeg from 'jpeg-js';
 import { PNG } from 'pngjs';
-import { MAX_CANVAS_AREA, orientedSize, parseImageHeader, stepDownSizes, targetSize } from './imageSize';
+import { clipDrawRects, MAX_CANVAS_AREA, orientedSize, parseImageHeader, stepDownSizes, targetSize } from './imageSize';
 
 function jpegBytes(width: number, height: number): Uint8Array {
   const data = Buffer.alloc(width * height * 4, 128);
@@ -100,5 +100,25 @@ describe('parseImageHeader', () => {
     const avif = new Uint8Array([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66]);
     expect(parseImageHeader(avif).format).toBe('avif');
     expect(parseImageHeader(new TextEncoder().encode('not an image')).format).toBe('unknown');
+  });
+});
+
+describe('clipDrawRects', () => {
+  it('keeps rectangles that are inside the source', () => {
+    const r = { sx: 10, sy: 10, sw: 50, sh: 50, dx: 0, dy: 0, dw: 100, dh: 100 };
+    expect(clipDrawRects(r, 200, 200)).toEqual(r);
+  });
+  it('clips at the top-left and shifts the destination', () => {
+    expect(clipDrawRects({ sx: -20, sy: -10, sw: 100, sh: 100, dx: 0, dy: 0, dw: 200, dh: 200 }, 1000, 1000)).toEqual({
+      sx: 0, sy: 0, sw: 80, sh: 90, dx: 40, dy: 20, dw: 160, dh: 180,
+    });
+  });
+  it('clips at the bottom-right', () => {
+    expect(clipDrawRects({ sx: 950, sy: 900, sw: 100, sh: 200, dx: 5, dy: 5, dw: 100, dh: 100 }, 1000, 1000)).toEqual({
+      sx: 950, sy: 900, sw: 50, sh: 100, dx: 5, dy: 5, dw: 50, dh: 50,
+    });
+  });
+  it('returns null when nothing is visible', () => {
+    expect(clipDrawRects({ sx: -200, sy: 0, sw: 100, sh: 100, dx: 0, dy: 0, dw: 10, dh: 10 }, 100, 100)).toBeNull();
   });
 });

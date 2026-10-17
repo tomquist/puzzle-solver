@@ -7,7 +7,8 @@
  * score is a noise-normalised colour distance to the model that tolerates soft cast shadows
  * (moderately darker pixels with proportionally scaled chroma).
  */
-import { rgbToLab } from '../../cv/color';
+import { rgbaToGray, rgbToLab } from '../../cv/color';
+import { boxBlurGray, sobel } from '../../cv/filter';
 import { solveLinear } from '../../cv/geometry';
 import { createGray, type GrayImage, type RGBAImage } from '../../cv/image';
 import { dilate } from '../../cv/morphology';
@@ -292,4 +293,15 @@ export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayIma
     }
   }
   return out;
+}
+
+/**
+ * Local texture energy: mean Sobel gradient magnitude of the 3×3-smoothed luminance over a
+ * (2r+1)² window. Brush strokes and print structure make pieces stand out by this measure even
+ * where their colour matches the table; normalise it with the table's own statistics.
+ */
+export function textureEnergy(photo: RGBAImage, r: number): GrayImage {
+  const lum = rgbaToGray(photo);
+  const grad = sobel(boxBlurGray(lum, 1)).magnitude;
+  return boxBlurGray(grad, r);
 }

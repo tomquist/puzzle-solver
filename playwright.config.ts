@@ -41,7 +41,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: `npm run dev -- --port ${DEV_PORT} --strictPort`,
+      command: `npx vite --config tests/e2e/vite.e2e.config.ts --port ${DEV_PORT} --strictPort`,
       url: `http://localhost:${DEV_PORT}`,
       reuseExistingServer: !process.env.CI,
       timeout: 60_000,
@@ -76,7 +76,7 @@ export default defineConfig({
     {
       name: 'android-small',
       use: phoneChromium(360, 640, 3),
-      testMatch: /(smoke|errors|mobile|mobile-camera)\.spec\.ts/,
+      testMatch: /(smoke|errors|mobile|mobile-camera|audit)\.spec\.ts/,
     },
     {
       name: 'iphone-se',

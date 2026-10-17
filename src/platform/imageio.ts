@@ -6,7 +6,7 @@
  */
 import type { RGBAImage } from '../cv/image';
 import { resizeRGBA } from '../cv/resize';
-import { HEADER_BYTES, MAX_CANVAS_AREA, parseImageHeader, stepDownSizes, targetSize, type ImageHeader } from './imageSize';
+import { clipDrawRects, HEADER_BYTES, MAX_CANVAS_AREA, parseImageHeader, stepDownSizes, targetSize, type ImageHeader } from './imageSize';
 
 export type AnyCanvas = HTMLCanvasElement | OffscreenCanvas;
 export type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
@@ -257,6 +257,37 @@ export function downloadBlob(blob: Blob, filename: string): void {
 // Crops for display
 // ---------------------------------------------------------------------------------------------
 
+/** Intrinsic size of a drawImage source. */
+export function sourceSize(src: CanvasImageSource): { width: number; height: number } {
+  if (typeof HTMLImageElement !== 'undefined' && src instanceof HTMLImageElement) return { width: src.naturalWidth, height: src.naturalHeight };
+  if (typeof HTMLVideoElement !== 'undefined' && src instanceof HTMLVideoElement) return { width: src.videoWidth, height: src.videoHeight };
+  if (typeof VideoFrame !== 'undefined' && src instanceof VideoFrame) return { width: src.displayWidth, height: src.displayHeight };
+  const s = src as { width: number | SVGAnimatedLength; height: number | SVGAnimatedLength };
+  const n = (v: number | SVGAnimatedLength) => (typeof v === 'number' ? v : v.baseVal.value);
+  return { width: n(s.width), height: n(s.height) };
+}
+
+/**
+ * drawImage(source, sx, sy, sw, sh, dx, dy, dw, dh) that also works in Safari when the source
+ * rectangle reaches outside the image (Safari would draw nothing).
+ */
+export function drawImageClipped(
+  ctx: Ctx2D,
+  source: CanvasImageSource,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  dx: number,
+  dy: number,
+  dw: number,
+  dh: number,
+): void {
+  const { width, height } = sourceSize(source);
+  const r = clipDrawRects({ sx, sy, sw, sh, dx, dy, dw, dh }, width, height);
+  if (r) ctx.drawImage(source, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
+}
+
 export interface RotatedCropOptions {
   /** Center of the crop in source pixels. */
   cx: number;
@@ -292,7 +323,7 @@ export function drawRotatedCrop(canvas: AnyCanvas, source: CanvasImageSource, op
   ctx.scale(scale, scale);
   // Sample a larger area (side * sqrt 2) so rotated corners are filled.
   const half = (opts.side * Math.SQRT2) / 2;
-  ctx.drawImage(source, opts.cx - half, opts.cy - half, half * 2, half * 2, -half, -half, half * 2, half * 2);
+  drawImageClipped(ctx, source, opts.cx - half, opts.cy - half, half * 2, half * 2, -half, -half, half * 2, half * 2);
   ctx.restore();
 }
 
@@ -314,7 +345,7 @@ export function drawCrop(
   const h = rect.height * s;
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(source, rect.x, rect.y, rect.width, rect.height, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+  drawImageClipped(ctx, source, rect.x, rect.y, rect.width, rect.height, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
 }
 
 /** Downscaled copy of an RGBAImage drawn from a canvas source (fast, uses the GPU path). */

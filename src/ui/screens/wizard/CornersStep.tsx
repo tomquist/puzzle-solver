@@ -5,6 +5,7 @@ import { CornerEditor, isConvexQuad } from '../../components/CornerEditor';
 import { Banner } from '../../components/Feedback';
 import { IconImage, IconRefresh, IconWand } from '../../components/Icons';
 import { QualityBanner } from '../../components/Quality';
+import { candidateLabel, needsCornerCheck } from '../../lib/boxLabels';
 import type { EncodedImage } from './types';
 
 export function CornersStep({
@@ -38,9 +39,11 @@ export function CornersStep({
   return (
     <div className="stack">
       <p className="lead">Drag the four corners onto the corners of the puzzle picture.</p>
-      {detection.confidence < 0.5 && (
-        <Banner tone="warning" title="The picture edges were hard to find">
-          Please check the corners – you can also try the other suggestions.
+      {needsCornerCheck(detection.confidence, detection.quality.issues.map((i) => i.code)) && (
+        <Banner tone="warning" title="Please check the corners">
+          {detection.quality.issues.some((i) => i.code === 'cut_off')
+            ? 'Part of the picture may be cut off by the photo edge. Make sure all four corners sit on the picture’s corners, or retake the photo with some space around the box.'
+            : 'The picture edges were hard to find. Drag the corners onto the picture, or try the other suggestions.'}
         </Banner>
       )}
       <QualityBanner report={detection.quality} subject="box photo" hideWhenClean />
@@ -53,7 +56,7 @@ export function CornersStep({
         {n > 1 && (
           <button className="btn btn-sm" onClick={() => onCandidate(next)}>
             <IconRefresh size={16} />
-            Next: {detection.candidates[next].label}
+            Next: {candidateLabel(detection.candidates[next].label)}
           </button>
         )}
         <button className="btn btn-sm" onClick={() => onQuad(whole)}>

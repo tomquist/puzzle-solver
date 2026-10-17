@@ -20,9 +20,15 @@ class Auditor {
 
   async check(screen: string) {
     // Let images decode, sheets finish their entry animation and layout settle.
-    await this.page.waitForTimeout(350);
+    await this.page.waitForTimeout(250);
+    await this.page.waitForFunction(() =>
+      document.getAnimations().every((a) => a.playState !== 'running' || a.effect?.getTiming().iterations === Infinity),
+    );
+    await this.page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
     await this.page.screenshot({ path: `.debug/mobile/${this.info.project.name}-${screen}.png` });
+    const t0 = Date.now();
     const vs = await auditPage(this.page);
+    if (process.env.AUDIT_TIMING) console.log(`${screen}: audit ${Date.now() - t0} ms`);
     this.results[screen] = vs;
     expect.soft(vs, `${this.info.project.name} / ${screen}:\n${formatViolations(vs)}`).toEqual([]);
   }
@@ -99,11 +105,12 @@ test('mobile audit: every main screen', async ({ page }, info) => {
   await page.getByRole('radio', { name: 'Both' }).click();
   await a.check('12-scan-result-both');
 
-  await page.getByTestId('piece-item-1').click();
+  // A piece that has a suggested place (so the sheet shows its Placed / Not this one actions).
+  await page.locator('.piece-item').filter({ hasNotText: /No (reliable )?match/ }).first().click();
   await expect(page.getByRole('dialog')).toBeVisible();
   await a.check('13-piece-detail');
   await page.getByRole('dialog').getByTestId('mark-placed').click();
-  await expect(page.getByRole('button', { name: 'Undo' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeVisible();
   await a.check('14-piece-detail-placed-snackbar');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toBeHidden();

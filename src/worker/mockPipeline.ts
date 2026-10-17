@@ -283,9 +283,9 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
       quad: best,
       confidence,
       candidates: [
-        { quad: best, score: 0.82, label: 'Picture' },
-        { quad: lid, score: 0.61, label: 'Whole lid' },
-        { quad: inner, score: 0.38, label: 'Inner frame' },
+        { quad: best, score: 0.82, label: 'picture' },
+        { quad: lid, score: 0.61, label: 'lid' },
+        { quad: inner, score: 0.38, label: 'frame-inner' },
       ],
       quality: { score: reportScore(issues), issues, metrics: { brightness: mean, clipped } },
     };

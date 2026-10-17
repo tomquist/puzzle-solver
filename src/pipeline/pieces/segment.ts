@@ -10,13 +10,15 @@
  */
 import { componentMask, labelComponents, labelRuns, removeSmallComponents } from '../../cv/components';
 import { traceOuterContour } from '../../cv/contour';
+import { distanceTransform } from '../../cv/distance';
 import { solveLinear, type Point } from '../../cv/geometry';
 import { createGray, createMask, cropMask, cropRGBA, maskArea, maskBounds, type GrayImage, type Mask, type RGBAImage, type Rect } from '../../cv/image';
-import { close, fillHoles, open } from '../../cv/morphology';
+import { close, dilate, erode, fillHoles, open } from '../../cv/morphology';
+import { resizeMask, resizeRGBA } from '../../cv/resize';
 import { simplifyPolygon, smoothContour } from '../../cv/polygon';
 import { otsuThreshold, threshold } from '../../cv/threshold';
 import type { DetectedRegion, PieceShape, QualityIssue, RegionKind } from '../../model/types';
-import { fitBackground, foregroundScore } from './background';
+import { fitBackground, foregroundScore, textureEnergy } from './background';
 import { assessPhoto, assessRegions } from './quality';
 import { analyzePieceShape, bodyOrientation, orientationHistogram } from './shape';
 import type { BackgroundModel, SegmentOptions, Segmentation, SegmentedRegion } from './types';
@@ -41,6 +43,12 @@ const NECK_RADIUS = 0.2;
  * at different rotations (assembled patches share one grid: measured ≤ 0.31 vs. up to 0.95).
  */
 const TOUCHING_SECOND_PEAK = 0.42;
+/**
+ * Median foreground score just inside an outline (background sigmas) below which an unreliable
+ * region is reported as low contrast (well-segmented dark pieces on a dark table measure ≈ 3.5–5,
+ * so contrast alone is not a failure).
+ */
+const LOW_REGION_CONTRAST = 6;
 
 /** Gray-level noise sigma from which the score is computed on a 3×3 / 5×5 box-filtered photo. */
 const NOISE_SMOOTH_1 = 3;
@@ -67,6 +75,65 @@ function estimateNoise(photo: RGBAImage): number {
   return sum / n;
 }
 
+/** Texture score (table-normalised robust sigmas) above which a pixel counts as piece texture. */
+const TEXTURE_THRESHOLD = 6;
+/** Texture blobs covered by colour foreground to at least this fraction count as segmented pieces. */
+const TEXTURE_COVERED = 0.8;
+
+/**
+ * Texture foreground that colour missed: texture energy normalised by the table's own texture
+ * statistics (robust median / MAD over samples away from the colour foreground, so wood grain or
+ * patterned cloth stays background), thresholded and eroded by the window radius so that the
+ * window neither inflates outlines nor bridges gaps between pieces. Large photos are analysed at
+ * half resolution.
+ */
+function textureForeground(photo: RGBAImage, colourFg: Mask): Mask | null {
+  const { width: W, height: H } = photo;
+  const f = W * H > 2.5e6 ? 2 : 1;
+  const img = f > 1 ? resizeRGBA(photo, Math.round(W / f), Math.round(H / f)) : photo;
+  const fgS = f > 1 ? resizeMask(colourFg, img.width, img.height) : colourFg;
+  const { width: w, height: h } = img;
+  const r = Math.max(2, Math.round(Math.min(w, h) / 300));
+  if (w < 8 * r || h < 8 * r) return null;
+  const energy = textureEnergy(img, r);
+  // Robust statistics of the table's texture.
+  const near = dilate(fgS, r + 3);
+  const step = Math.max(1, Math.round(Math.sqrt((w * h) / 40000)));
+  const vals: number[] = [];
+  for (let y = r; y < h - r; y += step) {
+    for (let x = r; x < w - r; x += step) if (!near.data[y * w + x]) vals.push(energy.data[y * w + x]);
+  }
+  if (vals.length < 100) return null;
+  const m = median(vals);
+  const dev = vals.map((v) => Math.abs(v - m));
+  const sigma = Math.max(1.4826 * median(dev), 0.03 * m, 0.05);
+  const t = m + TEXTURE_THRESHOLD * sigma;
+  const mask = createMask(w, h);
+  for (let i = 0; i < mask.data.length; i++) mask.data[i] = energy.data[i] > t ? 1 : 0;
+  const core = erode(mask, r + 1);
+  // Texture blobs that colour already covers well are segmented pieces: there the texture window
+  // still sees the soft cast shadow, a thin band along the outline, so only thick uncovered parts
+  // are added. Blobs colour mostly missed (dark print on a dark table) are added whole.
+  const uncovered = createMask(w, h);
+  for (let i = 0; i < core.data.length; i++) uncovered.data[i] = core.data[i] && !fgS.data[i] ? 1 : 0;
+  const thick = open(uncovered, Math.max(2, Math.round(3 / f)));
+  const { count, y: ry, x0: rx0, x1: rx1, root } = labelRuns(core, 1, 8);
+  const area = new Float64Array(count), covered = new Float64Array(count);
+  for (let i = 0; i < count; i++) {
+    const row = ry[i] * w;
+    let c = 0;
+    for (let x = rx0[i]; x <= rx1[i]; x++) c += fgS.data[row + x];
+    area[root[i]] += rx1[i] - rx0[i] + 1;
+    covered[root[i]] += c;
+  }
+  const add = thick;
+  for (let i = 0; i < count; i++) {
+    const k = root[i];
+    if (covered[k] < TEXTURE_COVERED * area[k]) add.data.fill(1, ry[i] * w + rx0[i], ry[i] * w + rx1[i] + 1);
+  }
+  return f > 1 ? resizeMask(add, W, H) : add;
+}
+
 /** A region candidate: local mask (tight bbox) plus derived geometry. */
 interface Candidate {
   mask: Mask;
@@ -83,6 +150,81 @@ interface Candidate {
   secondPeak: number;
   /** Candidates split from the same touching cluster share a group number. */
   group?: number;
+  /** Number of separate fragments this candidate was reassembled from (low-contrast pieces). */
+  merged?: number;
+}
+
+/** Gap (px) between two rectangles; 0 when they overlap. */
+function rectGap(a: Rect, b: Rect): number {
+  const dx = Math.max(0, Math.max(a.x, b.x) - Math.min(a.x + a.width, b.x + b.width));
+  const dy = Math.max(0, Math.max(a.y, b.y) - Math.min(a.y + a.height, b.y + b.height));
+  return Math.hypot(dx, dy);
+}
+
+/**
+ * Reassemble pieces that fell apart because parts of their print match the table: a fragment
+ * (< half the expected piece area) is merged with its nearest neighbour within `gap` px when the
+ * union is still at most one piece in area and extent, and a closing bridges them into one blob.
+ */
+function mergeFragments(cands: Candidate[], refAreaAt: (c: Candidate) => number, refBody: number, W: number, H: number): Candidate[] {
+  const gap = Math.max(3, 0.12 * refBody);
+  let list = [...cands];
+  for (let guard = 0; guard < 200; guard++) {
+    let merged = false;
+    const order = list.map((_, i) => i).sort((i, j) => list[i].area - list[j].area);
+    for (const fi of order) {
+      const f = list[fi];
+      const ra = refAreaAt(f);
+      if (f.touchesBorder || f.area >= 0.5 * ra) continue;
+      let best = -1, bestGap = Infinity;
+      list.forEach((t, ti) => {
+        if (ti === fi || t.touchesBorder || t.area + f.area > 1.35 * ra) return;
+        const g = rectGap(f.bbox, t.bbox);
+        if (g <= gap && g < bestGap) { bestGap = g; best = ti; }
+      });
+      if (best < 0) continue;
+      const t = list[best];
+      const x0 = Math.min(f.bbox.x, t.bbox.x), y0 = Math.min(f.bbox.y, t.bbox.y);
+      const x1 = Math.max(f.bbox.x + f.bbox.width, t.bbox.x + t.bbox.width), y1 = Math.max(f.bbox.y + f.bbox.height, t.bbox.y + t.bbox.height);
+      const ext = 1.6 * Math.sqrt(ra);
+      if (x1 - x0 > ext || y1 - y0 > ext) continue;
+      const pad = Math.ceil(gap) + 2;
+      const U = createMask(x1 - x0 + 2 * pad, y1 - y0 + 2 * pad);
+      const notT = createMask(U.width, U.height);
+      notT.data.fill(1);
+      for (const c of [f, t]) {
+        for (let y = 0; y < c.bbox.height; y++) {
+          for (let x = 0; x < c.bbox.width; x++) {
+            if (!c.mask.data[y * c.bbox.width + x]) continue;
+            const i = (y + c.bbox.y - y0 + pad) * U.width + x + c.bbox.x - x0 + pad;
+            U.data[i] = 1;
+            if (c === t) notT.data[i] = 0;
+          }
+        }
+      }
+      // True pixel gap between the fragment and the target.
+      const dist = distanceTransform(notT).data;
+      let d = Infinity;
+      for (let y = 0; y < f.bbox.height; y++) {
+        for (let x = 0; x < f.bbox.width; x++) {
+          if (f.mask.data[y * f.bbox.width + x]) d = Math.min(d, dist[(y + f.bbox.y - y0 + pad) * U.width + x + f.bbox.x - x0 + pad]);
+        }
+      }
+      if (!(d <= gap)) continue;
+      const joined = fillHoles(close(U, Math.ceil(d / 2) + 1, 'disk'));
+      const { stats } = labelComponents(joined, 8);
+      if (stats.length !== 1) continue;
+      const b = maskBounds(joined)!;
+      const bbox = { x: b.x + x0 - pad, y: b.y + y0 - pad, width: b.width, height: b.height };
+      const m = { ...makeCandidate(cropMask(joined, b), bbox, W, H), merged: (f.merged ?? 1) + (t.merged ?? 1) };
+      list = list.filter((_, i) => i !== fi && i !== best);
+      list.push(m);
+      merged = true;
+      break;
+    }
+    if (!merged) break;
+  }
+  return list;
 }
 
 function makeCandidate(mask: Mask, bbox: Rect, photoW: number, photoH: number, area?: number): Candidate {
@@ -274,6 +416,9 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   const th = chooseThreshold(score);
   let fg = hysteresis(score, th.high, th.low);
   lap('threshold');
+  const tex = textureForeground(scored, fg);
+  if (tex) for (let i = 0; i < fg.data.length; i++) fg.data[i] |= tex.data[i];
+  lap('texture');
   fg = close(fg, 2);
   fg = fillHoles(fg);
   fg = removeSmallComponents(fg, minArea);
@@ -322,6 +467,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     }
     cands = out;
   }
+  if (refArea > 0) cands = mergeFragments(cands, refAreaAt, refBody, W, H);
   lap('split');
 
   // Classify and build regions.
@@ -376,6 +522,13 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     } else if (r.kind === 'patch' && c.secondPeak > TOUCHING_SECOND_PEAK) {
       issues.push({ code: 'touching_pieces', severity: 'warning', message: 'Several pieces seem to touch.', hint: 'Leave a small gap between loose pieces.', regionIds: [r.id], area: r.bbox });
     }
+    // Pieces that are hard to tell from the table and whose result is unreliable (fragments,
+    // reassembled or shapeless outlines): say so clearly.
+    const contrast = median(outlineScores(score, fg, regions[i]));
+    const unreliable = r.kind === 'unknown' || (c.merged ?? 1) > 1 || (r.kind === 'piece' && (!c.shape || c.shape.confidence < UNCERTAIN_CONFIDENCE));
+    if (!c.touchesBorder && unreliable && contrast < LOW_REGION_CONTRAST) {
+      issues.push({ code: 'low_contrast', severity: 'warning', message: 'This piece is hard to tell from the background; its outline may be wrong.', hint: 'Use a plain background that contrasts with the pieces.', regionIds: [r.id], area: r.bbox });
+    }
     if (r.kind === 'piece' && !c.touchesBorder && (!c.shape || c.shape.confidence < UNCERTAIN_CONFIDENCE)) {
       issues.push({ code: 'shape_uncertain', severity: 'info', message: 'Piece outline is unclear.', hint: 'Use a plain background and spread the pieces out.', regionIds: [r.id], area: r.bbox });
     }
@@ -405,6 +558,29 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     lap('quality');
   }
   return seg;
+}
+
+/**
+ * Foreground scores just inside a region outline (2–3 px in, ~40 samples): how clearly the region
+ * stands out from the background along its border.
+ */
+function outlineScores(score: GrayImage, fg: Mask, r: SegmentedRegion): number[] {
+  const vals: number[] = [];
+  const { width: w, height: h } = score;
+  const c = r.region.contour;
+  if (c.length < 3) return vals;
+  const step = Math.max(1, Math.floor(c.length / 40));
+  for (let i = 0; i < c.length; i += step) {
+    const a = c[(i - 1 + c.length) % c.length], b = c[(i + 1) % c.length];
+    const tx = b.x - a.x, ty = b.y - a.y;
+    const tl = Math.hypot(tx, ty);
+    if (tl < 1e-6) continue;
+    // Inward normal of a clockwise outline: (−ty, tx).
+    const x = Math.round(c[i].x - (2.5 * ty) / tl), y = Math.round(c[i].y + (2.5 * tx) / tl);
+    if (x < 0 || y < 0 || x >= w || y >= h || !fg.data[y * w + x]) continue;
+    vals.push(score.data[y * w + x]);
+  }
+  return vals;
 }
 
 /**

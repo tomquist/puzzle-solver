@@ -4,6 +4,7 @@
  */
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { Point, Quad } from '../../cv/geometry';
+import { drawImageClipped } from '../../platform/imageio';
 import { useElementSize } from '../hooks/useElementSize';
 import { polygonPath } from '../lib/overlay';
 
@@ -102,7 +103,7 @@ export function CornerEditor({
     ctx.fillStyle = '#111';
     ctx.fillRect(0, 0, c.width, c.height);
     ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(source, active.x - side / 2, active.y - side / 2, side, side, 0, 0, c.width, c.height);
+    drawImageClipped(ctx, source, active.x - side / 2, active.y - side / 2, side, side, 0, 0, c.width, c.height);
     // Quad edges through the active corner.
     const k = c.width / side;
     const toL = (p: Point) => ({ x: (p.x - active.x) * k + c.width / 2, y: (p.y - active.y) * k + c.height / 2 });

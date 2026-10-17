@@ -15,7 +15,7 @@ export function registerServiceWorker(buildId: string): void {
           .getEntriesByType('resource')
           .map((e) => e.name)
           .filter((u) => u.startsWith(location.origin));
-        reg.active?.postMessage({ type: 'cache-urls', urls: [location.href.split('#')[0], ...urls] });
+        reg.active?.postMessage({ type: 'cache-urls', urls });
       })
       .catch((e: unknown) => console.warn('Service worker registration failed', e));
   };
