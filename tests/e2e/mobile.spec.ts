@@ -163,14 +163,25 @@ test('mobile audit: every main screen', async ({ page }, info) => {
   await expect(page.getByTestId('send-feedback')).toBeVisible();
   const fbPhoto = page.getByTestId('fb-photo');
   await expect(fbPhoto).toBeVisible();
-  const fbBox = (await fbPhoto.boundingBox())!;
-  await fbPhoto.click({ position: { x: fbBox.width * 0.1, y: fbBox.height * 0.1 } });
   const hiddenRegion = await page.locator('[data-testid^="fb-region-"][data-hidden="true"]').first().getAttribute('data-testid');
   await page.getByTestId('fb-mode-not_a_piece').click();
   await page.getByTestId(hiddenRegion!.replace('fb-region-', 'fb-hit-')).click();
-  await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(2);
-  await page.evaluate(() => window.scrollTo(0, 0));
+  // "Missed piece" on a piece the app found → the inline note.
+  await page.getByTestId('fb-mode-missed').click();
+  const centre = await fbPhoto.evaluate((svg) => {
+    const vb = (svg as SVGSVGElement).viewBox.baseVal;
+    const pts = [...svg.querySelectorAll('[data-testid^="fb-region-"][data-hidden="false"]')].map((g) => ({
+      fx: Number(g.getAttribute('data-cx')) / vb.width,
+      fy: Number(g.getAttribute('data-cy')) / vb.height,
+    }));
+    return pts.find((p) => p.fx < 0.8 || p.fy < 0.75)!;
+  });
+  const fbBox = (await fbPhoto.boundingBox())!;
+  await fbPhoto.click({ position: { x: centre.fx * fbBox.width, y: centre.fy * fbBox.height } });
+  await expect(page.getByTestId('fb-found-note')).toBeVisible();
   await a.check('15d-feedback');
+  await page.getByTestId('fb-found-missed').click();
+  await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(2);
   const shownRegion = await page.locator('[data-testid^="fb-region-"][data-hidden="false"]').first().getAttribute('data-testid');
   await page.getByTestId('fb-mode-wrong_place').click();
   await page.getByTestId(shownRegion!.replace('fb-region-', 'fb-hit-')).click();

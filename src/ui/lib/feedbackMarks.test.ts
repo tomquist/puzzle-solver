@@ -1,6 +1,38 @@
 import { describe, expect, it } from 'vitest';
 import type { FeedbackMark } from '../../feedback/format';
-import { addMissed, areaName, markIndexForRegion, MARK_KINDS, removeMark, setCorrectCell, toggleRegionMark } from './feedbackMarks';
+import type { DetectedRegion, Placement, RegionMatch, ScanResult } from '../../model/types';
+import {
+  addMissed,
+  alternativesFor,
+  areaName,
+  detectionTones,
+  foundText,
+  markIndexForRegion,
+  MARK_KINDS,
+  regionAt,
+  removeMark,
+  setCorrectCell,
+  setRegionMark,
+  toggleRegionMark,
+} from './feedbackMarks';
+
+function square(id: number, x: number, y: number, size: number, kind: DetectedRegion['kind'] = 'piece'): DetectedRegion {
+  return {
+    id,
+    kind,
+    bbox: { x, y, width: size, height: size },
+    contour: [{ x, y }, { x: x + size, y }, { x: x + size, y: y + size }, { x, y: y + size }],
+    area: size * size,
+    touchesBorder: false,
+    orientationDeg: 0,
+    issues: [],
+  };
+}
+const place = (row: number, col: number, confidence = 0.9): Placement => ({ row, col, x: col * 10, y: row * 10, rotationDeg: 0, score: 0, confidence });
+const match = (regionId: number, status: RegionMatch['status'], candidates: Placement[]): RegionMatch => ({ regionId, status, candidates });
+function scan(partial: Partial<ScanResult>): ScanResult {
+  return { width: 1000, height: 500, regions: [], matches: [], fits: [], quality: { score: 1, issues: [], metrics: {} }, timings: {}, ...partial };
+}
 
 describe('feedback marks', () => {
   it('toggles, replaces and removes region marks (one per region)', () => {
@@ -55,3 +87,45 @@ describe('feedback marks', () => {
     for (const k of MARK_KINDS) expect(k.label && k.help).toBeTruthy();
   });
 });
+
+describe('detections on the feedback photo', () => {
+  const result = scan({
+    regions: [square(1, 0, 0, 100), square(2, 200, 0, 100), square(3, 400, 0, 100), square(4, 600, 0, 100, 'unknown'), square(5, 800, 0, 100), square(6, 820, 20, 30)],
+    matches: [
+      match(1, 'confident', [place(1, 1)]),
+      match(2, 'ambiguous', [place(2, 2, 0.4)]),
+      match(3, 'unmatched', []),
+      match(5, 'confident', [place(5, 5)]),
+      match(6, 'confident', [place(6, 6)]),
+    ],
+    groups: [{ id: 1, kind: 'assembled', regionIds: [5], cells: [{ row: 5, col: 5 }, { row: 5, col: 6 }], bounds: { row0: 5, col0: 5, row1: 5, col1: 6 }, x: 55, y: 50, confidence: 0.9 }],
+  });
+
+  it('colours regions like the result screen; everything not shown is "hidden"', () => {
+    const tones = detectionTones(result, { rows: 10, cols: 10 });
+    expect(Object.fromEntries(tones)).toEqual({ 1: 'confident', 2: 'ambiguous', 3: 'hidden', 4: 'hidden', 5: 'patch', 6: 'confident' });
+  });
+
+  it('finds the region under a point (the smallest when nested)', () => {
+    expect(regionAt(result, 50, 50)?.id).toBe(1);
+    expect(regionAt(result, 150, 50)).toBeUndefined();
+    expect(regionAt(result, 830, 30)?.id).toBe(6);
+    expect(regionAt(result, 890, 90)?.id).toBe(5);
+    expect(regionAt(result, 50, 400)).toBeUndefined();
+  });
+
+  it('describes found pieces and offers better marks', () => {
+    expect(`This piece was ${foundText('ambiguous')}`).toBe('This piece was found (unsure)');
+    expect(foundText('hidden')).toBe('found but not shown');
+    expect(alternativesFor('ambiguous')).toEqual(['wrong_place', 'bad_outline', 'merged']);
+    expect(alternativesFor('hidden')).not.toContain('wrong_place');
+  });
+
+  it('sets a region mark without ever removing it', () => {
+    let marks: FeedbackMark[] = setRegionMark([], 'bad_outline', 2);
+    marks = setRegionMark(marks, 'bad_outline', 2);
+    expect(marks).toEqual([{ kind: 'bad_outline', regionId: 2 }]);
+    expect(setRegionMark(marks, 'wrong_place', 2)).toEqual([{ kind: 'wrong_place', regionId: 2 }]);
+  });
+});
+

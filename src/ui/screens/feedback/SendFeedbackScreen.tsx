@@ -3,7 +3,7 @@
  * user's corrections into one JSON file they can share or download and send to the developer.
  * Nothing leaves the device unless the user sends the file themselves.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { APP_VERSION } from '../../../appVersion';
 import { buildFeedbackBundle, type ImageBytes } from '../../../feedback/build';
 import { feedbackFileName, serializeFeedback, type FeedbackBundle, type FeedbackMark, type FeedbackMarkKind } from '../../../feedback/format';
@@ -22,8 +22,21 @@ import { useRepo } from '../../context/RepositoryContext';
 import { useAsync } from '../../hooks/useAsync';
 import { useObjectUrl, useStoredBlob, useStoredBlobUrl } from '../../hooks/useObjectUrl';
 import { formatBytes, formatDate, plural } from '../../lib/format';
-import { addMissed, areaName, MARK_KINDS, markInfo, removeMark, setCorrectCell, toggleRegionMark } from '../../lib/feedbackMarks';
-import { buildScanItems } from '../../lib/items';
+import {
+  addMissed,
+  alternativesFor,
+  areaName,
+  detectionTones,
+  foundText,
+  MARK_KINDS,
+  markInfo,
+  regionAt,
+  removeMark,
+  setCorrectCell,
+  setRegionMark,
+  toggleRegionMark,
+  type DetectionTone,
+} from '../../lib/feedbackMarks';
 import { cellAt, regionCenter } from '../../lib/overlay';
 import { href } from '../../lib/routes';
 import { FeedbackOverlay } from './FeedbackOverlay';
@@ -344,21 +357,40 @@ function ScanMarking({
   const result = scan.result;
   const { blob } = useStoredBlob(scan.photoBlobId);
   const photoUrl = useObjectUrl(blob);
-  const hidden = useMemo(() => new Set(buildScanItems(result, puzzle.grid).hiddenRegionIds), [result, puzzle.grid]);
+  const tones = useMemo(() => detectionTones(result, puzzle.grid), [result, puzzle.grid]);
+  const toneOf = (id: number): DetectionTone => tones.get(id) ?? 'hidden';
   const regions = useMemo(() => new Map(result.regions.map((r) => [r.id, r])), [result]);
+  // A "missed piece" tap inside a region the app did find: ask before adding it.
+  const [pending, setPending] = useState<{ regionId: number; x: number; y: number }>();
+  const note = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (pending) note.current?.scrollIntoView({ block: 'nearest' });
+  }, [pending]);
+  const chooseMode = (m: FeedbackMarkKind) => {
+    setPending(undefined);
+    setMode(m);
+  };
+  const tapPoint = (x: number, y: number) => {
+    const reg = regionAt(result, x, y);
+    if (reg) setPending({ regionId: reg.id, x, y });
+    else {
+      setPending(undefined);
+      setMarks((m) => addMissed(m, x, y));
+    }
+  };
 
   const describe = (m: FeedbackMark): string => {
     if (m.kind === 'missed') return areaName(m.x, m.y, result.width, result.height);
     const reg = regions.get(m.regionId);
     const where = reg ? areaName(regionCenter(reg).x, regionCenter(reg).y, result.width, result.height) : '';
-    const what = hidden.has(m.regionId) ? 'outline not shown in results' : `#${m.regionId}`;
+    const what = toneOf(m.regionId) === 'hidden' ? 'found but not shown' : `#${m.regionId}`;
     const right = m.kind === 'wrong_place' && m.correct ? ` · goes to ${describeCell(m.correct, puzzle.grid)}` : '';
     return `${where} · ${what}${right}`;
   };
 
   return (
     <>
-      <p className="muted small">Mark what the app got wrong on your photo – every mark helps improve piece detection. All optional.</p>
+      <p className="muted small">Mark what the app got wrong – every mark helps improve piece detection. All optional.</p>
 
       <section className="stack-sm">
         <div className="fb-modes" role="radiogroup" aria-label="What’s wrong?">
@@ -369,7 +401,7 @@ function ScanMarking({
               role="radio"
               aria-checked={mode === k.kind}
               className={`fb-mode mk-${k.kind}${mode === k.kind ? ' active' : ''}`}
-              onClick={() => setMode(k.kind)}
+              onClick={() => chooseMode(k.kind)}
               data-testid={`fb-mode-${k.kind}`}
             >
               <span className="mk-dot" aria-hidden="true" />
@@ -380,6 +412,9 @@ function ScanMarking({
         <p className="small fb-help" aria-live="polite">
           {markInfo(mode).help}
         </p>
+        <p className="xsmall fb-photo-hint" data-testid="fb-photo-hint">
+          Coloured = found by the app. Tap Missed piece and then any piece without colour.
+        </p>
         <div className="viewer-frame tall fb-viewer" style={{ aspectRatio: `${result.width} / ${result.height}` }}>
           {photoUrl ? (
             <ZoomPanView contentWidth={result.width} contentHeight={result.height} label="Your photo with all detected outlines" margin={6}>
@@ -388,15 +423,19 @@ function ScanMarking({
                   <img src={photoUrl} alt="" className="fill" draggable={false} />
                   <FeedbackOverlay
                     result={result}
-                    hidden={hidden}
+                    tones={tones}
                     marks={marks}
                     mode={mode}
+                    pendingRegionId={pending?.regionId}
                     scale={scale}
                     onRegion={(id) => {
                       if (mode !== 'missed') setMarks((m) => toggleRegionMark(m, mode, id));
                     }}
-                    onPoint={(p) => setMarks((m) => addMissed(m, p.x, p.y))}
-                    onRemove={(i) => setMarks((m) => removeMark(m, i))}
+                    onPoint={(p) => tapPoint(p.x, p.y)}
+                    onRemove={(i) => {
+                      setPending(undefined);
+                      setMarks((m) => removeMark(m, i));
+                    }}
                   />
                 </>
               )}
@@ -405,18 +444,67 @@ function ScanMarking({
             <Spinner label="Loading photo…" />
           )}
         </div>
-        <p className="xsmall muted fb-key">
+        {pending && (
+          <div className="fb-found-note" ref={note} role="status" data-testid="fb-found-note">
+            <div className="fb-found-head">
+              <p className="small">
+                This piece was {foundText(toneOf(pending.regionId))} – use{' '}
+                {alternativesFor(toneOf(pending.regionId))
+                  .slice(0, 2)
+                  .map((k) => markInfo(k).label)
+                  .join(' or ')}{' '}
+                instead?
+              </p>
+              <button type="button" className="icon-btn small" onClick={() => setPending(undefined)} aria-label="Dismiss" data-testid="fb-found-dismiss">
+                <IconClose size={16} />
+              </button>
+            </div>
+            <div className="fb-found-actions">
+              {alternativesFor(toneOf(pending.regionId)).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  className={`btn btn-sm fb-found-kind mk-${k}`}
+                  onClick={() => {
+                    setMarks((m) => setRegionMark(m, k, pending.regionId));
+                    setPending(undefined);
+                  }}
+                  data-testid={`fb-found-${k}`}
+                >
+                  <span className="mk-dot" aria-hidden="true" />
+                  {markInfo(k).label}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="btn btn-sm btn-quiet"
+                onClick={() => {
+                  setMarks((m) => addMissed(m, pending.x, pending.y));
+                  setPending(undefined);
+                }}
+                data-testid="fb-found-missed"
+              >
+                Add as missed anyway
+              </button>
+            </div>
+          </div>
+        )}
+        <p className="xsmall muted fb-key" data-testid="fb-key">
           <span className="fb-key-item">
-            <svg width="22" height="10" aria-hidden="true">
-              <line x1="1" y1="5" x2="21" y2="5" className="solid" />
-            </svg>
-            shown in results
+            <span className="fb-swatch st-confident" aria-hidden="true" />
+            Found
           </span>
           <span className="fb-key-item">
-            <svg width="22" height="10" aria-hidden="true">
-              <line x1="1" y1="5" x2="21" y2="5" className="dashed" />
-            </svg>
-            found, but not shown
+            <span className="fb-swatch st-ambiguous" aria-hidden="true" />
+            Unsure
+          </span>
+          <span className="fb-key-item">
+            <span className="fb-swatch st-patch" aria-hidden="true" />
+            Assembled
+          </span>
+          <span className="fb-key-item">
+            <span className="fb-swatch is-hidden" aria-hidden="true" />
+            Found but not shown
           </span>
         </p>
       </section>
