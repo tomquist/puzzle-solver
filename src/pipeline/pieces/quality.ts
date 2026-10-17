@@ -7,6 +7,7 @@
  * background model and the spatial trend of piece sizes (perspective).
  */
 import { rgbaToGray, rgbToLab } from '../../cv/color';
+import { labelComponents } from '../../cv/components';
 import { findOuterContours } from '../../cv/contour';
 import { convexHull, polygonArea, polygonPerimeter } from '../../cv/polygon';
 import { createMask, createRGBA, type Mask, type RGBAImage } from '../../cv/image';
@@ -66,6 +67,8 @@ const T = QUALITY_THRESHOLDS;
 const COLOURED_BELOW = 190;
 /** Minimum solidity (area / convex hull) of a blown blob to count as specular glare. */
 const GLARE_SOLIDITY = 0.88;
+/** Minimum size of a single glare blob as a fraction of the piece. */
+const GLARE_MIN_BLOB = 0.02;
 
 function issue(code: QualityCode, severity: Severity, message: string, hint?: string, regionIds?: number[]): QualityIssue {
   const out: QualityIssue = { code, severity, message };
@@ -230,8 +233,9 @@ export interface ClipAnalysis {
 /**
  * Clipping analysis of a region (interior `inner`). Clipping of coloured print loses hue and
  * texture. Near-white blown areas are ambiguous (white paper or sky that crossed the clip level
- * loses nothing); only compact convex blown blobs — the image of a lamp or window on a glossy
- * surface — count as glare, while blown white print follows the print's irregular shapes.
+ * loses nothing); only sizeable (≥ 2 % of the piece), compact, convex blown blobs — the image of a
+ * lamp or window on a glossy surface — count as glare, while blown white print follows the print's
+ * irregular shapes or forms many small dots.
  */
 export function clipAnalysis(sr: SegmentedRegion, inner: Mask): ClipAnalysis {
   const { width: w, height: h, data: d } = sr.image;
@@ -246,15 +250,24 @@ export function clipAnalysis(sr: SegmentedRegion, inner: Mask): ClipAnalysis {
     else if (r >= 253 && g >= 253 && b >= 253) out.blown++;
   }
   if (out.blown < 12) return out;
-  // Compact blown-out blobs (opening scaled to the piece removes thin white print structures).
+  // Glare: sizeable, compact (mostly survives an opening scaled to the piece) and convex blown
+  // components; solidity is judged on the whole component, not on pieces an opening may cut off.
   const gm = glareMask(sr.image, { minValue: 0.98, maxSaturation: 0.025 });
   for (let i = 0; i < gm.data.length; i++) gm.data[i] &= inner.data[i];
-  const blobs = open(gm, Math.max(1, Math.round(0.05 * Math.sqrt(out.pixels))));
-  for (const { contour, stats } of findOuterContours(blobs, 12)) {
-    const hull = polygonArea(convexHull(contour));
-    // Solidity of the blob (traced pixel-centre outlines lose ≈ half a pixel all around).
-    const solidity = hull > 0 ? Math.min(1, stats.area / (hull + 0.5 * polygonPerimeter(convexHull(contour)) + 1)) : 0;
-    if (solidity >= GLARE_SOLIDITY) out.glare += stats.area;
+  const opened = open(gm, Math.max(1, Math.round(0.05 * Math.sqrt(out.pixels))));
+  const { labels } = labelComponents(gm, 8);
+  for (const { contour, stats } of findOuterContours(gm, Math.max(12, GLARE_MIN_BLOB * out.pixels))) {
+    let core = 0;
+    for (let y = stats.bbox.y; y < stats.bbox.y + stats.bbox.height; y++) {
+      for (let x = stats.bbox.x; x < stats.bbox.x + stats.bbox.width; x++) {
+        const k = y * w + x;
+        if (labels[k] === stats.label && opened.data[k]) core++;
+      }
+    }
+    const hull = convexHull(contour);
+    // Traced pixel-centre outlines lose ≈ half a pixel all around: compare with the hull grown by that.
+    const solidity = Math.min(1, stats.area / (polygonArea(hull) + 0.5 * polygonPerimeter(hull) + 1));
+    if (solidity >= GLARE_SOLIDITY && core >= 0.5 * stats.area) out.glare += stats.area;
   }
   return out;
 }

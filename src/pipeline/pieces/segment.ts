@@ -558,8 +558,8 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     const texFrac = maskFraction(texOnly, c.mask, c.bbox);
     const reassembled = (c.merged ?? 1) > 1;
     const unreliable = r.kind === 'unknown' || reassembled || (r.kind === 'piece' && (!c.shape || c.shape.confidence < UNCERTAIN_CONFIDENCE)) ||
-      (r.kind === 'patch' && texFrac > TEXTURE_ASSISTED);
-    const hardToSee = reassembled || texFrac > TEXTURE_ASSISTED || contrast < LOW_REGION_CONTRAST;
+      (r.kind === 'patch' && texFrac > 3 * TEXTURE_ASSISTED);
+    const hardToSee = reassembled || contrast < LOW_REGION_CONTRAST || (texFrac > TEXTURE_ASSISTED && contrast < 2.5 * LOW_REGION_CONTRAST);
     if (!c.touchesBorder && unreliable && hardToSee) {
       issues.push({ code: 'low_contrast', severity: 'warning', message: 'This piece is hard to tell from the background; its outline may be wrong.', hint: 'Use a plain background that contrasts with the pieces.', regionIds: [r.id], area: r.bbox });
     }

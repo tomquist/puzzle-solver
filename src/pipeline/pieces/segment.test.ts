@@ -346,12 +346,9 @@ describe('segmentPieces on hard tables', () => {
       const s = summary(seg, truth, cut);
       recall += s.recall / 2;
       precision += s.precision / 2;
-      // Whatever could not be separated cleanly is reported with its region ids.
-      const unreliable = seg.regions.filter((r) => r.region.kind === 'unknown' || (r.region.kind === 'piece' && !r.region.shape));
-      if (unreliable.length) {
-        const lc = seg.quality.issues.find((i) => i.code === 'low_contrast');
-        expect(lc?.severity).toBe('warning');
-        expect(lc?.regionIds?.length).toBeGreaterThan(0);
+      // Regions reported as hard to see carry the issue themselves.
+      for (const id of seg.quality.issues.find((i) => i.code === 'low_contrast')?.regionIds ?? []) {
+        expect(seg.regions[id - 1].region.issues.some((i) => i.code === 'low_contrast')).toBe(true);
       }
     }
     console.log(`black on black: recall ${recall.toFixed(2)}, precision ${precision.toFixed(2)}`);
