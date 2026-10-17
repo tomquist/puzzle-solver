@@ -6,6 +6,7 @@ import type { Id, ProgressRecord, PuzzleRecord, ScanRecord } from '../model/type
  * used by tests and as a fallback when IndexedDB is unavailable (e.g. some private modes).
  */
 export interface PuzzleRepository {
+  /** All puzzles, most recently updated first. */
   listPuzzles(): Promise<PuzzleRecord[]>;
   getPuzzle(id: Id): Promise<PuzzleRecord | undefined>;
   /** Insert or update. */
@@ -29,9 +30,16 @@ export interface PuzzleRepository {
   getProgress(puzzleId: Id): Promise<ProgressRecord>;
   saveProgress(progress: ProgressRecord): Promise<void>;
 
-  /** Serialize a puzzle (record, blobs, scans, progress) into a single downloadable file. */
+  /**
+   * Serialize a puzzle (record, blobs, scans, progress) into a single downloadable file
+   * (`application/json`; see `exportFileName`). Rejects with `PuzzleNotFoundError` for unknown ids.
+   */
   exportPuzzle(id: Id): Promise<Blob>;
-  /** Import a file produced by exportPuzzle. Always creates a new puzzle id. */
+  /**
+   * Import a file produced by exportPuzzle. Always creates new ids (puzzle, scans, blobs); appends
+   * " (imported)" to the name when it is already taken. Rejects with `PuzzleImportError` (with a
+   * user-presentable message) for invalid files, without writing anything.
+   */
   importPuzzle(file: Blob): Promise<PuzzleRecord>;
 
   /** Approximate bytes used, if the platform can tell. */
