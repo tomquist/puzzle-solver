@@ -108,7 +108,7 @@ function analyseStructure(ranked: QuadCandidate[], work: WorkImage, f: GradientF
   let outerScore = -1;
   for (const c of ranked) {
     if (c === top || c.support < Math.max(0.45, 0.7 * top.support) || c.score < 0.3 * top.score) continue;
-    const nb = nestedBands(c.quad, top.quad);
+    const nb = nestedBands(c.quad, top.quad, c.onBorder);
     if (!nb || !isBand(nb.bands)) continue;
     if (c.score > outerScore) {
       outer = c;
@@ -124,8 +124,11 @@ function analyseStructure(ranked: QuadCandidate[], work: WorkImage, f: GradientF
     let bestWeak: { c: QuadCandidate; v: number } | null = null;
     for (const c of ranked) {
       if (c === cur || c.support < Math.max(0.4, 0.6 * cur.support)) continue;
-      const nb = nestedBands(cur.quad, c.quad);
+      const nb = nestedBands(cur.quad, c.quad, cur.onBorder);
       if (!nb || !isBand(nb.bands)) continue;
+      // Where the outer quad runs along the photo border nothing beyond is visible: the nested quad
+      // must stay on the border there (a "band" against the border is just cut-off picture).
+      if (cur.onBorder.some((b, k) => b && !c.onBorder[k])) continue;
       const ev = frameEvidence(work.rgba, f, cur.quad, nb.bands);
       const need = ev.bandSides >= 3 ? 0.35 : 0.55;
       // A narrow band (< 2.5 %) on only one or two sides is a shadow or the lid's side wall, not a frame.

@@ -21,9 +21,14 @@ export interface QuadCandidate {
   /** Geometric plausibility 0..1. */
   geom: number;
   areaFrac: number;
+  /** Which sides (top, right, bottom, left) lie on the photo border. */
+  onBorder: boolean[];
   borderSides: number;
   score: number;
 }
+
+/** Support credited to a photo-border side whose adjacent sides run into the border (× their end support). */
+const BORDER_RUN_IN = 0.8;
 
 export interface EvalContext {
   width: number;
@@ -103,23 +108,42 @@ export function evaluateQuad(ctx: EvalContext, sideLines: number[], cornersIn: P
   const areaFrac = quadArea(quad) / (W * H);
   if (areaFrac < 0.02) return null;
   let borderSides = 0;
-  const sides: number[] = [], ends: number[] = [];
+  const sides: number[] = [], ends: number[] = [], onBorder: boolean[] = [];
   for (let k = 0; k < 4; k++) {
     const l = lines[lineIdx[k]];
+    onBorder.push(l.border !== undefined);
     if (l.border !== undefined) borderSides++;
     const e = sideEval(l, quad[k], quad[(k + 1) % 4]);
     sides.push(e.s);
     ends.push(e.ea, e.eb);
   }
   if (borderSides > maxBorderSides) return null;
+  // A side on the photo border has no edge of its own. Besides texture at the border, the evidence
+  // that the picture continues beyond it is that the adjacent sides stay supported right up to the
+  // border; corners on the border are judged by the adjacent side alone.
+  if (borderSides > 0 && borderSides < 4) {
+    for (let k = 0; k < 4; k++) {
+      if (!onBorder[k]) continue;
+      const runIn: number[] = [];
+      if (!onBorder[(k + 3) % 4]) runIn.push(ends[2 * ((k + 3) % 4) + 1]);
+      if (!onBorder[(k + 1) % 4]) runIn.push(ends[2 * ((k + 1) % 4)]);
+      if (runIn.length) sides[k] = Math.max(sides[k], BORDER_RUN_IN * Math.min(...runIn));
+    }
+  }
   // Corner k joins the end of side k-1 and the start of side k.
-  const cornerSup = [0, 1, 2, 3].map((k) => Math.min(ends[2 * ((k + 3) % 4) + 1], ends[2 * k]));
+  const cornerSup = [0, 1, 2, 3].map((k) => {
+    const a = ends[2 * ((k + 3) % 4) + 1], b = ends[2 * k];
+    const pb = onBorder[(k + 3) % 4], nb = onBorder[k];
+    if (pb && !nb) return b;
+    if (nb && !pb) return a;
+    return Math.min(a, b);
+  });
   const mean = (sides[0] + sides[1] + sides[2] + sides[3]) / 4;
   const min = Math.min(...sides);
   const E = (cornerSup[0] + cornerSup[1] + cornerSup[2] + cornerSup[3]) / 4;
   const support = (0.5 * mean + 0.5 * min) * (0.55 + 0.45 * E);
   const score = support * geom * Math.pow(areaFrac, 0.25) * Math.pow(0.92, borderSides);
-  return { quad, lines: lineIdx, sides, corners: cornerSup, support, geom, areaFrac, borderSides, score };
+  return { quad, lines: lineIdx, sides, corners: cornerSup, support, geom, areaFrac, onBorder, borderSides, score };
 }
 
 /** Enumerate quads from all compatible pairs of line pairs; best first after duplicate suppression. */

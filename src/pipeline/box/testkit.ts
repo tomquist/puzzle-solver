@@ -295,3 +295,51 @@ export function runSweep(
   console.log(`\n${title}\nscene                    corner err  lid err  aspect conf  time   candidates  issues\n${lines.join('\n')}`);
   return rows;
 }
+
+/** The part of polygon `q` inside the photo [-0.5, w-0.5] × [-0.5, h-0.5] (Sutherland–Hodgman). */
+export function clipToPhoto(q: Point[], w: number, h: number): Point[] {
+  let poly: Point[] = [...q];
+  const planes: [(p: Point) => boolean, (a: Point, b: Point) => Point][] = [
+    [(p) => p.x >= -0.5, (a, b) => ({ x: -0.5, y: a.y + ((b.y - a.y) * (-0.5 - a.x)) / (b.x - a.x) })],
+    [(p) => p.x <= w - 0.5, (a, b) => ({ x: w - 0.5, y: a.y + ((b.y - a.y) * (w - 0.5 - a.x)) / (b.x - a.x) })],
+    [(p) => p.y >= -0.5, (a, b) => ({ x: a.x + ((b.x - a.x) * (-0.5 - a.y)) / (b.y - a.y), y: -0.5 })],
+    [(p) => p.y <= h - 0.5, (a, b) => ({ x: a.x + ((b.x - a.x) * (h - 0.5 - a.y)) / (b.y - a.y), y: h - 0.5 })],
+  ];
+  for (const [inside, cut] of planes) {
+    const out: Point[] = [];
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      if (inside(b)) {
+        if (!inside(a)) out.push(cut(a, b));
+        out.push(b);
+      } else if (inside(a)) out.push(cut(a, b));
+    }
+    poly = out;
+  }
+  return poly;
+}
+
+/**
+ * Crop a box photo so that `frac` (of the picture's extent) of the picture beyond side `side`
+ * (0 top, 1 right, 2 bottom, 3 left) is cut away – the whole side, not just a corner. Returns the
+ * cropped photo, the (now partly outside) picture quad and its visible part.
+ */
+export function cropPictureSide(photo: RGBAImage, picture: Quad, side: number, frac: number): { photo: RGBAImage; pictureQuad: Quad; visible: Point[] } {
+  const xs = picture.map((p) => p.x), ys = picture.map((p) => p.y);
+  const bw = Math.max(...xs) - Math.min(...xs), bh = Math.max(...ys) - Math.min(...ys);
+  let r = { x: 0, y: 0, width: photo.width, height: photo.height };
+  if (side === 0) {
+    const y0 = Math.ceil(Math.max(picture[0].y, picture[1].y) + frac * bh);
+    r = { x: 0, y: y0, width: photo.width, height: photo.height - y0 };
+  } else if (side === 1) {
+    r = { x: 0, y: 0, width: Math.floor(Math.min(picture[1].x, picture[2].x) - frac * bw), height: photo.height };
+  } else if (side === 2) {
+    r = { x: 0, y: 0, width: photo.width, height: Math.floor(Math.min(picture[2].y, picture[3].y) - frac * bh) };
+  } else {
+    const x0 = Math.ceil(Math.max(picture[0].x, picture[3].x) + frac * bw);
+    r = { x: x0, y: 0, width: photo.width - x0, height: photo.height };
+  }
+  const cropped = cropRGBA(photo, r);
+  const pictureQuad = picture.map((p) => ({ x: p.x - r.x, y: p.y - r.y })) as Quad;
+  return { photo: cropped, pictureQuad, visible: clipToPhoto(pictureQuad, cropped.width, cropped.height) };
+}

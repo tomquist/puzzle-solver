@@ -231,9 +231,11 @@ export interface NestedBands {
 
 /**
  * When `inner` lies inside `outer` with sides parallel in the outer's rectified frame, return the
- * band widths; null otherwise.
+ * band widths; null otherwise. `outerOnBorder` marks outer sides on the photo border: the outer
+ * quad is then not the real lid outline, so its rectified frame only approximately makes the
+ * opposite side parallel (looser tolerance there).
  */
-export function nestedBands(outer: Quad, inner: Quad, maxBand = 0.32, parTol = 0.025): NestedBands | null {
+export function nestedBands(outer: Quad, inner: Quad, outerOnBorder: boolean[] = [], maxBand = 0.32, parTol = 0.025): NestedBands | null {
   const H = unitSquareToQuad(outer);
   if (!H) return null;
   let Hi: Mat3;
@@ -244,8 +246,9 @@ export function nestedBands(outer: Quad, inner: Quad, maxBand = 0.32, parTol = 0
   }
   const u = inner.map((p) => applyMat3(Hi, p));
   const [tl, tr, br, bl] = u;
-  if (Math.abs(tl.y - tr.y) > parTol || Math.abs(bl.y - br.y) > parTol) return null;
-  if (Math.abs(tl.x - bl.x) > parTol || Math.abs(tr.x - br.x) > parTol) return null;
+  const tol = (side: number) => (outerOnBorder[(side + 2) % 4] ? 3 * parTol : parTol);
+  if (Math.abs(tl.y - tr.y) > tol(0) || Math.abs(bl.y - br.y) > tol(2)) return null;
+  if (Math.abs(tl.x - bl.x) > tol(3) || Math.abs(tr.x - br.x) > tol(1)) return null;
   const bands: [number, number, number, number] = [
     (tl.y + tr.y) / 2,
     1 - (tr.x + br.x) / 2,

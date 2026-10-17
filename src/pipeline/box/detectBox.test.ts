@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { polygonSignedArea, type Point, type Quad } from '../../cv/geometry';
+import { polygonSignedArea, type Quad } from '../../cv/geometry';
 import { createRGBA, type RGBAImage } from '../../cv/image';
 import { resizeRGBA } from '../../cv/resize';
 import { rectifyQuad } from '../../cv/warp';
 import { DEBUG_IMAGES } from '../../testing/nodeImageIO';
 import { Rng } from '../../testing/synth';
 import { detectBox, detectBoxDebug } from './detectBox';
-import { cornerErrorPct, renderScene, saveOverlay, type SceneSpec } from './testkit';
+import { clipToPhoto, cornerErrorPct, renderScene, saveOverlay, type SceneSpec } from './testkit';
 
 function meanAbsDiff(a: RGBAImage, b: RGBAImage, inset = 4): number {
   let s = 0, n = 0;
@@ -18,29 +18,6 @@ function meanAbsDiff(a: RGBAImage, b: RGBAImage, inset = 4): number {
     }
   }
   return s / n;
-}
-
-/** The part of `q` inside the photo, as a quad (valid when the photo border cuts off whole sides). */
-function clipToPhoto(q: Quad, w: number, h: number): Point[] {
-  let poly: Point[] = [...q];
-  const planes: [(p: Point) => boolean, (a: Point, b: Point) => Point][] = [
-    [(p) => p.x >= -0.5, (a, b) => ({ x: -0.5, y: a.y + ((b.y - a.y) * (-0.5 - a.x)) / (b.x - a.x) })],
-    [(p) => p.x <= w - 0.5, (a, b) => ({ x: w - 0.5, y: a.y + ((b.y - a.y) * (w - 0.5 - a.x)) / (b.x - a.x) })],
-    [(p) => p.y >= -0.5, (a, b) => ({ x: a.x + ((b.x - a.x) * (-0.5 - a.y)) / (b.y - a.y), y: -0.5 })],
-    [(p) => p.y <= h - 0.5, (a, b) => ({ x: a.x + ((b.x - a.x) * (h - 0.5 - a.y)) / (b.y - a.y), y: h - 0.5 })],
-  ];
-  for (const [inside, cut] of planes) {
-    const out: Point[] = [];
-    for (let i = 0; i < poly.length; i++) {
-      const a = poly[i], b = poly[(i + 1) % poly.length];
-      if (inside(b)) {
-        if (!inside(a)) out.push(cut(a, b));
-        out.push(b);
-      } else if (inside(a)) out.push(cut(a, b));
-    }
-    poly = out;
-  }
-  return poly;
 }
 
 const frameScene: SceneSpec = { name: 'unit-frame', painting: 'starry-night', opts: { seed: 41, width: 1200, height: 900, frameWidth: 0.06 } };
