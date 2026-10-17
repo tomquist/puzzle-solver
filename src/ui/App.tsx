@@ -8,6 +8,7 @@ import { href } from './lib/routes';
 import { HomeScreen } from './screens/HomeScreen';
 import { NewPuzzleWizard } from './screens/wizard/NewPuzzleWizard';
 import { PuzzleWorkspace } from './screens/workspace/PuzzleWorkspace';
+import { PlacingScreen } from './screens/scan/PlacingScreen';
 import { ScanResultScreen } from './screens/scan/ScanResultScreen';
 import type { PipelineApi } from '../worker/api';
 
@@ -38,6 +39,12 @@ function Router() {
       return (
         <PuzzleProvider key={route.id} id={route.id}>
           <ScanResultScreen key={route.scanId} scanId={route.scanId} />
+        </PuzzleProvider>
+      );
+    case 'place':
+      return (
+        <PuzzleProvider key={route.id} id={route.id}>
+          <PlacingScreen key={route.scanId} scanId={route.scanId} />
         </PuzzleProvider>
       );
     case 'notFound':

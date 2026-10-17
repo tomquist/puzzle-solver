@@ -11,6 +11,7 @@ import { ConfirmSheet } from '../../components/Sheet';
 import { usePuzzle } from '../../context/PuzzleContext';
 import { useRepository } from '../../context/RepositoryContext';
 import { useAsync } from '../../hooks/useAsync';
+import { usePrefs } from '../../hooks/usePrefs';
 import { navigate } from '../../hooks/useHashRoute';
 import { formatBytes, parsePositive } from '../../lib/format';
 import { emptyProgress, placedCount } from '../../lib/progress';
@@ -29,6 +30,7 @@ export function SettingsTab() {
   const [confirm, setConfirm] = useState<'delete' | 'reset'>();
   const [exporting, setExporting] = useState(false);
   const usage = useAsync(() => repo.estimateUsage(), [repo]);
+  const [prefs, updatePrefs] = usePrefs();
 
   const aspect = puzzle.physicalSize ? puzzle.physicalSize.width / puzzle.physicalSize.height : puzzle.reference.width / puzzle.reference.height;
   const pieceCount = parsePositive(pieces);
@@ -143,6 +145,25 @@ export function SettingsTab() {
             Save changes
           </button>
         </div>
+      </section>
+
+      <section className="card stack-sm">
+        <h2 className="h3">While placing</h2>
+        <label className="switch toggle-row">
+          <span className="toggle-text">
+            <span>Keep screen on while placing</span>
+            <span className="muted xsmall">The screen stays on while results or the placing guide are shown.</span>
+          </span>
+          <input
+            type="checkbox"
+            checked={prefs.keepScreenOn}
+            onChange={(e) => {
+              const v = e.target.checked;
+              updatePrefs((p) => ({ ...p, keepScreenOn: v }));
+            }}
+            data-testid="keep-screen-on"
+          />
+        </label>
       </section>
 
       <section className="card stack-sm">

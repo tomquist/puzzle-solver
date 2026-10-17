@@ -455,6 +455,42 @@ const AGGREGATE_TEXT: Partial<Record<QualityCode, [string, string, string]>> = {
   low_contrast: ['A piece is hard to tell from the background; its outline may be wrong.', 'pieces are hard to tell from the background; their outlines may be wrong.', 'Use a plain background that contrasts with the pieces.'],
 };
 
+/**
+ * Withdraw region-level issues of the given codes for `regionIds` (e.g. 'low_contrast' for regions
+ * that were placed confidently, so their outline evidently was good enough) and update the photo
+ * report accordingly. Photo-wide issues of those codes are kept.
+ */
+export function resolveRegionIssues(seg: Segmentation, regionIds: ReadonlySet<number>, codes: readonly QualityCode[]): void {
+  let changed = false;
+  for (const sr of seg.regions) {
+    const r = sr.region;
+    const keep = r.issues.filter((i) => !(codes.includes(i.code) && regionIds.has(r.id)));
+    if (keep.length !== r.issues.length) {
+      r.issues = keep;
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  const regional = aggregateRegionIssues(seg.regions);
+  const issues: QualityIssue[] = [];
+  for (const is of seg.quality.issues) {
+    if (!codes.includes(is.code) || !is.regionIds) {
+      issues.push(is);
+      continue;
+    }
+    const text = AGGREGATE_TEXT[is.code];
+    const regionalOnly = !!text && (is.message === text[0] || is.message.endsWith(text[1]));
+    const agg = regional.find((r) => r.code === is.code);
+    if (regionalOnly) {
+      if (agg) issues.push(agg);
+    } else {
+      issues.push({ ...is, regionIds: is.regionIds.filter((id) => !regionIds.has(id)) });
+    }
+  }
+  seg.quality.issues = issues;
+  seg.quality.score = scoreOf(issues);
+}
+
 function aggregateRegionIssues(regions: SegmentedRegion[]): QualityIssue[] {
   const by = new Map<QualityCode, { ids: Set<number>; severity: Severity }>();
   const rank: Record<Severity, number> = { info: 0, warning: 1, error: 2 };

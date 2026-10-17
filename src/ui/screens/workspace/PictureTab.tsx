@@ -8,7 +8,10 @@ import { useRepo } from '../../context/RepositoryContext';
 import { useAsync } from '../../hooks/useAsync';
 import { navigate } from '../../hooks/useHashRoute';
 import { formatDate } from '../../lib/format';
-import { cellsForPlacement, displayStatus } from '../../lib/pieces';
+import { itemTone } from '../../components/ScanOverlay';
+import { usePrefs } from '../../hooks/usePrefs';
+import { buildScanItems } from '../../lib/items';
+import { visibleByView } from '../scan/useScanModel';
 import { placedCells } from '../../lib/progress';
 import { href } from '../../lib/routes';
 import { Legend } from '../scan/Legend';
@@ -21,18 +24,20 @@ export function PictureTab() {
   const latest = useAsync(() => repo.listScans(puzzle.id).then((s) => s[0]), [repo, puzzle.id, scansVersion]);
   const placed = useMemo(() => placedCells(progress, puzzle.grid), [progress, puzzle.grid]);
 
-  const markers = useMemo<RefMarker[]>(() => {
+  const [prefs] = usePrefs();
+  const scanModel = useMemo(() => {
     const scan = latest.data;
-    if (!scan) return [];
-    const out: RefMarker[] = [];
-    for (const m of scan.result.matches) {
-      const region = scan.result.regions.find((r) => r.id === m.regionId);
-      const best = m.candidates[0];
-      if (!region || !best) continue;
-      out.push({ id: region.id, x: best.x, y: best.y, status: displayStatus(region, m), cells: m.coveredCells ? cellsForPlacement(m, best) : undefined });
-    }
-    return out;
-  }, [latest.data]);
+    if (!scan) return { markers: [] as RefMarker[], links: [] as { a: string; b: string }[] };
+    const { items, links } = buildScanItems(scan.result, puzzle.grid);
+    const visible = visibleByView(items, prefs.view);
+    const keys = new Set(visible.map((i) => i.key));
+    const markers: RefMarker[] = visible.map((item) => {
+      const p = item.candidates[0];
+      return { key: item.key, label: item.label, x: p.x, y: p.y, tone: itemTone(item), bounds: item.kind === 'assembled' ? p.bounds : undefined };
+    });
+    return { markers, links: prefs.view.connections ? links.filter((l) => keys.has(l.a) && keys.has(l.b)) : [] };
+  }, [latest.data, puzzle.grid, prefs.view]);
+  const markers = scanModel.markers;
 
   if (!reference) return <Spinner label="Loading the picture…" />;
   return (
@@ -49,6 +54,7 @@ export function PictureTab() {
                 showGrid={showGrid}
                 placed={placed}
                 markers={showMarkers ? markers : []}
+                links={showMarkers ? scanModel.links : []}
                 scale={scale}
                 onMarker={latest.data ? () => navigate(href.scan(puzzle.id, latest.data!.id)) : undefined}
               />

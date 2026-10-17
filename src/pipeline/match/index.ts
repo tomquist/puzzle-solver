@@ -3,10 +3,12 @@
  *
  * Typical use per scan: `buildReferenceIndex` once per puzzle (cache it), then
  * `matchRegions(index, inputs, opts)` for all regions of a scan (two passes with a scan-level colour
- * correction; `matchRegion` matches a single region), then `findFits(regions, matches, grid)`.
+ * correction; `matchRegion` matches a single region), then `findFits(regions, matches, grid)` and
+ * `buildGroups(...)` (assembled grids, loose neighbours; may place weak members of assembled grids).
  */
 export { buildReferenceIndex } from './referenceIndex';
 export { matchRegion, cellAt, matchConfidence, CONFIDENT_THRESHOLD } from './matchRegion';
 export { matchRegions, estimateColorCorrection } from './colorCorrection';
 export { findFits, puzzleSideOf, profileMismatch } from './fits';
+export { buildGroups, type GroupOptions } from './groups';
 export type { MatchInput, MatchOptions, ReferenceIndex, RefLevel } from './types';

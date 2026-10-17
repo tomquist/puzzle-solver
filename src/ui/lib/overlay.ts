@@ -175,3 +175,30 @@ export function clampPan(t: ViewTransform, cw: number, ch: number, vw: number, v
 export function centerOn(p: Point, scale: number, vw: number, vh: number): ViewTransform {
   return { scale, x: vw / 2 - p.x * scale, y: vh / 2 - p.y * scale };
 }
+
+/**
+ * Segment from `a` to `b` shortened by `trimA` / `trimB` at its ends (so a connection line starts
+ * at the edge of a badge instead of its centre). Null when the badges overlap.
+ */
+export function trimmedSegment(a: Point, b: Point, trimA: number, trimB = trimA): { from: Point; to: Point } | null {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  if (len <= trimA + trimB) return null;
+  const ux = dx / len;
+  const uy = dy / len;
+  return { from: { x: a.x + ux * trimA, y: a.y + uy * trimA }, to: { x: b.x - ux * trimB, y: b.y - uy * trimB } };
+}
+
+/**
+ * A small notch on the ring of a number badge (centre `c`, radius `r`) pointing at the piece's
+ * "up" direction in the photo: a subtle turn hint instead of a big arrow.
+ */
+export function badgeNotch(c: Point, r: number, rotationDeg: number): [Point, Point, Point] {
+  const u = upVector(rotationDeg);
+  const n = { x: -u.y, y: u.x };
+  const tip = { x: c.x + u.x * r * 1.55, y: c.y + u.y * r * 1.55 };
+  const base = { x: c.x + u.x * r * 0.8, y: c.y + u.y * r * 0.8 };
+  const hw = r * 0.5;
+  return [tip, { x: base.x + n.x * hw, y: base.y + n.y * hw }, { x: base.x - n.x * hw, y: base.y - n.y * hw }];
+}

@@ -32,6 +32,7 @@ import type {
   Placement,
   QualityIssue,
   QualityReport,
+  RegionGroup,
   RegionMatch,
   SideKind,
   SideShape,
@@ -234,10 +235,14 @@ interface LoadedReference {
 interface Slot {
   id: number;
   body: Body;
-  kind: 'piece' | 'patch';
+  kind: 'piece' | 'patch' | 'unknown';
   /** For pieces: local index of the (first) flat side, or -1. */
   firstFlat: number;
   pieceKind: PieceKind;
+  /** Two touching, interlocking pieces (an assembled pair): 0 = left, 1 = right. */
+  pair?: 0 | 1;
+  /** Force a match status (to exercise the UI's hide rules). */
+  force?: MatchStatus;
 }
 
 export function createMockPipeline(options: MockPipelineOptions = {}): PipelineApi {
@@ -379,8 +384,11 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
     const chh = h / ny;
     const s = 0.4 * Math.min(cw, chh);
     const patchAt = nx + 1; // second row, second slot: a 2-wide patch spanning two slots
+    const pairAt = landscape ? 2 * nx + 2 : 3 * nx + 1; // two touching pieces (assembled pair)
+    const fragmentAt = landscape ? nx - 1 : 2 * nx; // a tiny fragment (kind 'unknown')
+    const unmatchedAt = new Set([landscape ? 2 * nx : 4 * nx, landscape ? nx + 4 : 4 * nx + 2]);
     const skip = new Set<number>([patchAt + 1, Math.floor(rnd() * nx * ny)]);
-    skip.delete(patchAt);
+    for (const k of [patchAt, pairAt, fragmentAt, ...unmatchedAt]) skip.delete(k);
     const slots: Slot[] = [];
     let id = 1;
     for (let gy = 0; gy < ny; gy++) {
@@ -388,6 +396,35 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
         const i = gy * nx + gx;
         if (skip.has(i)) continue;
         const jitter = () => (rnd() - 0.5) * 0.18;
+        if (i === fragmentAt) {
+          const c = { x: (gx + 0.5) * cw, y: (gy + 0.5) * chh };
+          slots.push({ id: id++, kind: 'unknown', firstFlat: -1, pieceKind: 'unknown', body: { center: c, s: s * 0.22, unitsX: 1, unitsY: 1, angleDeg: 20, sides: [['flat'], ['flat'], ['flat'], ['flat']] } });
+          continue;
+        }
+        if (i === pairAt) {
+          // Two interlocking pieces side by side: the left one's tab sits in the right one's blank.
+          const angle = Math.round((rnd() - 0.5) * 24);
+          const ps = s * 0.82;
+          const ax = Math.cos((angle * Math.PI) / 180);
+          const ay = Math.sin((angle * Math.PI) / 180);
+          const c = { x: (gx + 0.5) * cw, y: (gy + 0.5) * chh };
+          const rk = (): SideKind => (rnd() < 0.5 ? 'tab' : 'blank');
+          const left: SideKind[] = [rk(), 'tab', rk(), rk()];
+          const right: SideKind[] = [rk(), rk(), rk(), 'blank'];
+          for (const [k, sides] of [[0, left], [1, right]] as const) {
+            const off = (k === 0 ? -0.5 : 0.5) * ps;
+            slots.push({
+              id: id++,
+              kind: 'piece',
+              firstFlat: -1,
+              pieceKind: 'interior',
+              pair: k,
+              force: 'confident',
+              body: { center: { x: c.x + ax * off, y: c.y + ay * off }, s: ps, unitsX: 1, unitsY: 1, angleDeg: angle, sides: sides.map((x) => [x]) },
+            });
+          }
+          continue;
+        }
         const isPatch = i === patchAt && gx + 1 < nx;
         const center = isPatch
           ? { x: (gx + 1) * cw, y: (gy + 0.5 + jitter() * 0.5) * chh }
@@ -401,13 +438,15 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
             [randomKind(), randomKind()],
             [randomKind()],
           ];
-          slots.push({ id: id++, kind: 'patch', firstFlat: -1, pieceKind: 'unknown', body: { center, s: s * 0.9, unitsX: 2, unitsY: 1, angleDeg: Math.round(angleDeg / 4), sides } });
+          slots.push({ id: id++, kind: 'patch', firstFlat: -1, pieceKind: 'unknown', force: 'confident', body: { center, s: s * 0.9, unitsX: 2, unitsY: 1, angleDeg: Math.round(angleDeg / 4), sides } });
           continue;
         }
         const sides: SideKind[] = [randomKind(), randomKind(), randomKind(), randomKind()];
         let firstFlat = -1;
         const r = rnd();
-        if (i % 6 === 0 || r < 0.12) {
+        if (unmatchedAt.has(i)) {
+          // stays interior; forced unmatched below
+        } else if (i % 6 === 0 || r < 0.12) {
           firstFlat = Math.floor(rnd() * 4);
           sides[firstFlat] = 'flat';
           sides[(firstFlat + 1) % 4] = 'flat';
@@ -420,6 +459,7 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
           kind: 'piece',
           firstFlat,
           pieceKind: pieceKindOf(sides),
+          force: unmatchedAt.has(i) ? 'unmatched' : undefined,
           body: { center, s, unitsX: 1, unitsY: 1, angleDeg, sides: sides.map((k) => [k]) },
         });
       }
@@ -508,7 +548,8 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
     rnd: () => number,
   ): RegionMatch {
     const r = rnd();
-    const status: MatchStatus = r < 0.55 ? 'confident' : r < 0.85 ? 'ambiguous' : 'unmatched';
+    if (slot.kind === 'unknown') return { regionId: region.id, candidates: [], status: 'unmatched' };
+    const status: MatchStatus = slot.force ?? (r < 0.6 ? 'confident' : 'ambiguous');
     const count = status === 'unmatched' ? (rnd() < 0.4 ? 0 : 2) : 3 + Math.floor(rnd() * 3);
     const seen = new Set<string>();
     const candidates: Placement[] = [];
@@ -543,11 +584,11 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
   }
 
   /** Make a few regions neighbours on purpose and describe them as fit hints. */
-  function addFits(regions: DetectedRegion[], matches: RegionMatch[], ref: LoadedReference): FitHint[] {
+  function addFits(regions: DetectedRegion[], matches: RegionMatch[], ref: LoadedReference, pairIds: Set<number>): FitHint[] {
     const fits: FitHint[] = [];
     const interior = matches.filter((m) => {
       const reg = regions.find((r) => r.id === m.regionId);
-      return reg?.kind === 'piece' && reg.shape?.kind === 'interior' && m.candidates.length > 0;
+      return reg?.kind === 'piece' && reg.shape?.kind === 'interior' && m.candidates.length > 0 && m.status !== 'unmatched' && !pairIds.has(m.regionId);
     });
     const patch = matches.find((m) => regions.find((r) => r.id === m.regionId)?.kind === 'patch' && m.candidates.length > 0);
     const cw = ref.width / ref.grid.cols;
@@ -580,6 +621,77 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
       fits.push({ a: interior[3].regionId, b: interior[4].regionId, sideA: 'top', sideB: 'bottom', confidence: 0.41, reason: 'shape' });
     }
     return fits;
+  }
+
+  /** The touching pair goes into two horizontally adjacent interior cells, upright-consistent. */
+  function placePair(pair: Slot[], matches: RegionMatch[], ref: LoadedReference, rnd: () => number): void {
+    if (pair.length !== 2 || ref.grid.cols < 4 || ref.grid.rows < 3) return;
+    const { rows, cols } = ref.grid;
+    const row = 1 + Math.floor(rnd() * (rows - 2));
+    const col = 1 + Math.floor(rnd() * (cols - 3));
+    const cw = ref.width / cols;
+    const ch = ref.height / rows;
+    pair.forEach((sl, k) => {
+      const m = matches.find((x) => x.regionId === sl.id);
+      const best = m?.candidates[0];
+      if (!m || !best) return;
+      best.row = row;
+      best.col = col + k;
+      best.x = (col + k + 0.5) * cw;
+      best.y = (row + 0.5) * ch;
+      best.rotationDeg = mod(-sl.body.angleDeg, 360); // no quarter turn: left stays left
+    });
+  }
+
+  function makeGroups(regions: DetectedRegion[], matches: RegionMatch[], fits: FitHint[], pair: Slot[], ref: LoadedReference): RegionGroup[] {
+    const groups: RegionGroup[] = [];
+    const best = (id: number) => matches.find((m) => m.regionId === id)?.candidates[0];
+    const boundsOf = (cells: CellRef[]) => ({
+      row0: Math.min(...cells.map((c) => c.row)),
+      col0: Math.min(...cells.map((c) => c.col)),
+      row1: Math.max(...cells.map((c) => c.row)),
+      col1: Math.max(...cells.map((c) => c.col)),
+    });
+    const cw = ref.width / ref.grid.cols;
+    const ch = ref.height / ref.grid.rows;
+    const centre = (cells: CellRef[]) => {
+      const b = boundsOf(cells);
+      return { x: ((b.col0 + b.col1 + 1) / 2) * cw, y: ((b.row0 + b.row1 + 1) / 2) * ch };
+    };
+    // 1. The patch region.
+    const patch = regions.find((r) => r.kind === 'patch');
+    const pm = patch && matches.find((m) => m.regionId === patch.id);
+    if (patch && pm?.coveredCells && pm.candidates[0]) {
+      groups.push({ id: groups.length + 1, kind: 'assembled', regionIds: [patch.id], cells: pm.coveredCells, bounds: boundsOf(pm.coveredCells), rotationDeg: pm.candidates[0].rotationDeg, ...centre(pm.coveredCells), confidence: pm.candidates[0].confidence });
+    }
+    // 2. Two touching pieces.
+    const pa = pair[0] && best(pair[0].id);
+    const pb = pair[1] && best(pair[1].id);
+    if (pa && pb) {
+      const cells = [{ row: pa.row, col: pa.col }, { row: pb.row, col: pb.col }];
+      groups.push({ id: groups.length + 1, kind: 'assembled', regionIds: [pair[0].id, pair[1].id], cells, bounds: boundsOf(cells), rotationDeg: pa.rotationDeg, ...centre(cells), confidence: Math.min(pa.confidence, pb.confidence) });
+    }
+    // 3. Loose pieces that end up next to each other (from the location fits).
+    for (const f of fits) {
+      if (f.reason === 'shape') continue;
+      const a = best(f.a);
+      const b = best(f.b);
+      if (!a || !b) continue;
+      const ca = regions.find((r) => r.id === f.a)?.kind === 'patch' ? (matches.find((m) => m.regionId === f.a)?.coveredCells ?? []) : [{ row: a.row, col: a.col }];
+      const cb = regions.find((r) => r.id === f.b)?.kind === 'patch' ? (matches.find((m) => m.regionId === f.b)?.coveredCells ?? []) : [{ row: b.row, col: b.col }];
+      const cells = [...ca, ...cb];
+      groups.push({
+        id: groups.length + 1,
+        kind: 'neighbors',
+        regionIds: [f.a, f.b],
+        cells,
+        bounds: boundsOf(cells),
+        rotationDeg: a.rotationDeg === b.rotationDeg ? a.rotationDeg : undefined,
+        ...centre(cells),
+        confidence: f.confidence,
+      });
+    }
+    return groups;
   }
 
   async function analyzeScan(
@@ -620,7 +732,11 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
       }
     }
     await step('fits', 0.94, 'Looking for pieces that fit together…', 120);
-    const fits = addFits(regions, matches, ref);
+    const pairSlots = slots.filter((sl) => sl.pair !== undefined);
+    const pairIds = new Set(pairSlots.map((sl) => sl.id));
+    placePair(pairSlots, matches, ref, rnd);
+    const fits = addFits(regions, matches, ref, pairIds);
+    const groups = makeGroups(regions, matches, fits, pairSlots, ref);
 
     // Quality issues: exposure (real), plus a few simulated ones to exercise the UI.
     const issues = exposureIssues(mean, clipped);
@@ -652,7 +768,7 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
     await step('done', 1, 'Done', 0);
     timings.total = Date.now() - t0;
     return {
-      result: { width: w, height: h, regions, matches, fits, quality, timings },
+      result: { width: w, height: h, regions, matches, fits, groups, quality, timings },
       analysedImage: image,
     };
   }

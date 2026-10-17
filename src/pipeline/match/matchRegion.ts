@@ -335,8 +335,9 @@ export function matchConfidence(score: number, margin: number): number {
  *   sharp (it scores clearly worse a quarter cell away), it is a corner piece with a clear margin,
  *   or its colour occurs only at the best place (after colour correction). Textured pieces keep the
  *   plain score/margin confidence.
- *   A featureless piece is also capped by `share`, its likelihood share among all distinct places
- *   (softmax of the scores), so a plateau of similar places keeps it ambiguous.
+ *   Every piece is also capped by `share`, its likelihood share among all distinct places (softmax
+ *   of the scores; cube root for textured pieces), so a plateau of similar places (plain areas,
+ *   repetitive texture) keeps it ambiguous.
  * - A textured piece whose content correlates poorly at the best place (score well below what a
  *   correct match of a textured piece reaches) is suspicious: wrong flat sides, bad segmentation.
  * - Single pieces without a detected shape whose area does not look like one piece (fragments of a
@@ -355,7 +356,9 @@ export function informedConfidence(
   const byColour = sigmoid((1.5 - f.colourArea) / 0.3);
   let conf = base * (1 - (1 - textured) * (1 - sharp) * (1 - byCorner) * (1 - byColour));
   conf *= 1 - textured * (1 - sigmoid((f.score - 0.45) / 0.04));
-  if (opts.share !== undefined) conf = Math.min(conf, opts.share + textured * (1 - opts.share));
+  // Many similar places (repetitive texture, plain areas) cap the confidence: fully for featureless
+  // pieces, softly (cube root of the share) for textured ones.
+  if (opts.share !== undefined) conf = Math.min(conf, Math.pow(opts.share, 1 - (2 / 3) * textured));
   if (!opts.hasShape && !opts.isPatch) {
     const r = f.areaRatio;
     const out = r < AREA_RATIO_RANGE[0] ? AREA_RATIO_RANGE[0] - r : r > AREA_RATIO_RANGE[1] ? r - AREA_RATIO_RANGE[1] : 0;
@@ -378,7 +381,7 @@ const CANDIDATE_TAU = 0.04;
 
 /** Confidence at or above which a match is reported as 'confident'. */
 export const CONFIDENT_THRESHOLD = 0.7;
-/** Best scores below this are reported as 'unmatched'. */
+/** Best scores below this are reported as 'unmatched' (textured regions only). */
 export const UNMATCHED_SCORE = 0.15;
 
 /** Internal knobs of one matching run. */
@@ -406,6 +409,8 @@ export interface MatchFeatures {
   plateau10: number;
   /** Number of known flat sides (shape). */
   flats: number;
+  /** Likelihood share of the best place among all distinct places (softmax of the scores). */
+  share: number;
   /** Region area / expected body area (single pieces: ≈ 0.8–1.3; fragments and merged pieces fall outside). */
   areaRatio: number;
   /**
@@ -476,7 +481,9 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   // Body size estimate for the erosion radius.
   const roughBody = input.shape?.bodySize ?? input.expectedBodySize ?? Math.sqrt(Math.max(1, input.mask.data.reduce((s, v) => s + v, 0)));
   const erode = Math.max(2, Math.round(roughBody * 0.045));
-  const src = makePhotoSource(input.image, input.mask, input.origin, erode, index.channelWeights, ctx.correction);
+  // Assembled patches: ignore the seams and gaps between their pieces (not in the printed picture).
+  const seams = isPatch ? { radius: Math.max(2, Math.round(roughBody * 0.035)), angleDeg: input.orientationDeg, body: roughBody } : undefined;
+  const src = makePhotoSource(input.image, input.mask, input.origin, erode, index.channelWeights, ctx.correction, seams);
   if (src.area < 50) return empty;
   const { hyps } = makeHypotheses(index, input, src);
   if (hyps.length === 0) return empty;
@@ -547,6 +554,7 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   const q = places.map((c) => Math.exp((c.score - best.score) / CANDIDATE_TAU));
   const qsum = q.reduce((a, v) => a + v, 0);
   for (let i = 0; i < q.length; i++) q[i] /= qsum;
+  features.share = q[0];
   const conf = informedConfidence(features, { hasShape: !!input.shape, isPatch, share: q[0] });
   const confidences = chosen.map((_, i) => {
     if (i === 0) return conf;
@@ -581,7 +589,10 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
       }
     });
   }
-  const status: MatchStatus = best.score < UNMATCHED_SCORE ? 'unmatched' : conf >= CONFIDENT_THRESHOLD ? 'confident' : 'ambiguous';
+  // 'unmatched' (hidden in the UI) only when textured content clearly matches nowhere; a featureless
+  // region's score is noise, so it stays a (low-confidence) ambiguous match with alternatives.
+  const status: MatchStatus =
+    best.score < UNMATCHED_SCORE && features.detail >= TEXTURE_DETAIL ? 'unmatched' : conf >= CONFIDENT_THRESHOLD ? 'confident' : 'ambiguous';
   return { match: { regionId: input.regionId, candidates, coveredCells, status }, best: { map: best.map, ref: best.ref }, src, features };
 }
 
@@ -600,6 +611,7 @@ function informationFeatures(
   const f: MatchFeatures = {
     score: best.score, margin: 0, detail: 0, rawStd: 0, drop25: 0, drop50: 0, plateau05: 0, plateau10: 0,
     flats: input.shape ? input.shape.sides.filter((x) => x.kind === 'flat').length : 0,
+    share: 1,
     areaRatio: 1,
     colourArea: Infinity,
   };

@@ -113,7 +113,9 @@ export function findFits(regions: DetectedRegion[], matches: RegionMatch[], grid
       if (sa && sb) {
         const fit = sideFit(sa, localSideAt(sa, A.rotationDeg, side), sb, localSideAt(sb, B.rotationDeg, opposite(side)));
         if (fit !== null) {
-          if (fit < 0.3) conf *= 0.3;
+          // Contradicting sides: either a placement or the side classification is wrong; two very
+          // confident placements make a misread side more likely.
+          if (fit < 0.3) conf *= Math.min(A.confidence, B.confidence) >= 0.9 ? 0.6 : 0.3;
           else if (fit > 0.7) {
             conf = 1 - (1 - conf) * (1 - 0.5 * fit);
             reason = 'location+shape';

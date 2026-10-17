@@ -78,9 +78,44 @@ const SCENARIOS: Scenario[] = [
     painting: 'great-wave', grid: { rows: 20, cols: 30 }, items: { singles: 20 }, seeds: [10],
     render: standard, viaBoxPhoto: true,
   },
+  // Assembled grids (seams, small gaps, slightly misaligned pieces) mixed with loose pieces.
+  {
+    name: 'starry-grids-dark',
+    painting: 'starry-night', grid: { rows: 16, cols: 20 }, items: { singles: 8, patches: [[2, 2], [3, 3], [4, 5]] }, seeds: [11, 12],
+    render: standard,
+  },
+  {
+    name: 'starry-grids-light',
+    painting: 'starry-night', grid: { rows: 16, cols: 20 }, items: { singles: 8, patches: [[2, 3], [3, 4], [1, 3]] }, seeds: [13],
+    render: (rng) => ({ ...standard(rng), background: [226, 222, 214], illumination: 0.15 }),
+  },
+  {
+    name: 'wave-grids-wood',
+    painting: 'great-wave', grid: { rows: 25, cols: 40 }, items: { singles: 8, patches: [[2, 3], [3, 3], [4, 5]] }, seeds: [14, 15],
+    render: (rng) => ({ ...standard(rng), background: [150, 108, 70], backgroundTexture: 16, illumination: 0.2 }),
+  },
+  {
+    name: 'wave-grids-dark',
+    painting: 'great-wave', grid: { rows: 20, cols: 30 }, items: { singles: 6, patches: [[2, 2], [3, 4], [4, 5]] }, seeds: [16],
+    render: standard,
+  },
+  // Loose pieces of neighbouring cells photographed together.
+  {
+    name: 'starry-neighbors',
+    painting: 'starry-night', grid: { rows: 16, cols: 20 }, items: { singles: 8, neighborRuns: [2, 2, 3, 2] }, seeds: [17, 18],
+    render: standard,
+  },
+  {
+    name: 'wave-neighbors-wood',
+    painting: 'great-wave', grid: { rows: 20, cols: 30 }, items: { singles: 8, neighborRuns: [2, 3, 2, 2] }, seeds: [19],
+    render: (rng) => ({ ...standard(rng), background: [150, 108, 70], backgroundTexture: 16, illumination: 0.2 }),
+  },
 ];
 
-const COLUMNS = ['segRecall', 'segPrecision', 'shapeRate', 'kindAccuracy', 'top1', 'top3', 'rotationOk', 'confidentPrecision', 'confidentRate', 'fitPrecision', 'fitRecall', 'warnings', 'ms'];
+const COLUMNS = [
+  'segRecall', 'segPrecision', 'shapeRate', 'kindAccuracy', 'top1', 'top3', 'rotationOk', 'confidentPrecision', 'confidentRate',
+  'fitPrecision', 'fitRecall', 'assembledRecall', 'assembledPrecision', 'neighborPrecision', 'neighborRecall', 'hiddenRate', 'warnings', 'ms',
+];
 const results: Record<string, MetricRecord> = {};
 const paintings = new Map<string, RGBAImage>();
 const painting = (name: Scenario['painting']) => {

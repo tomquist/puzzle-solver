@@ -5,6 +5,11 @@ import { drawPolygon } from '../cv/raster';
 import { resizeRGBA } from '../cv/resize';
 import { rectifyQuad } from '../cv/warp';
 import { DEBUG_IMAGES, loadTestAsset, savePng } from './nodeImageIO';
+
+function angleError(a: number, b: number): number {
+  const d = Math.abs((((a - b) % 360) + 360) % 360);
+  return Math.min(d, 360 - d);
+}
 import {
   cellCenter,
   generateJigsaw,
@@ -99,7 +104,8 @@ describe('renderPiecesPhoto', () => {
       const R = rotation((t.rotationDeg * Math.PI) / 180);
       const d = applyMat3(R, { x: t.corners[1].x - t.corners[0].x, y: t.corners[1].y - t.corners[0].y });
       const e = { x: piece.corners[1].x - piece.corners[0].x, y: piece.corners[1].y - piece.corners[0].y };
-      expect(Math.abs(Math.atan2(d.y, d.x) - Math.atan2(e.y, e.x))).toBeLessThan(1e-6);
+      // Patches: the anchor piece itself may be misaligned by up to 1.5° within the patch.
+      expect(Math.abs(Math.atan2(d.y, d.x) - Math.atan2(e.y, e.x))).toBeLessThan(t.members ? (1.6 * Math.PI) / 180 : 1e-6);
       // The body center shows the reference colour of the cell center.
       const c = cellCenter(cut, piece.row, piece.col);
       const cc = { x: Math.round(t.center.x), y: Math.round(t.center.y) };
@@ -146,6 +152,52 @@ describe('renderPiecesPhoto', () => {
       }
       expect(err / n).toBeLessThan(30);
     }
+  });
+
+  it('renders assembled patches piece by piece with seams, gaps and misalignment', () => {
+    const grid: number[] = [];
+    for (let r = 2; r < 6; r++) for (let c = 3; c < 8; c++) grid.push(r * cut.cols + c);
+    const opts = { seed: 4, scale: 1.4, shadow: 0, rotation: 30 };
+    const { photo, truth } = renderPiecesPhoto(ref, cut, [grid, 0], { ...opts, patch: { gap: [0, 0], jitterDeg: 1.5, jitterPx: 2 } });
+    const t = truth[0];
+    expect(t.members!.length).toBe(20);
+    expect(t.members![0].piece).toBe(grid[0]);
+    expect(truth[1].members).toBeUndefined();
+    for (const m of t.members!) {
+      // Each piece: slightly turned and shifted, never more than the jitter.
+      expect(angleError(m.rotationDeg, t.rotationDeg)).toBeLessThanOrEqual(1.5 + 1e-6);
+      const c = cut.pieces[m.piece].corners;
+      const rigid = applyMat3(t.transform, { x: (c[0].x + c[1].x + c[2].x + c[3].x) / 4, y: (c[0].y + c[1].y + c[2].y + c[3].y) / 4 });
+      expect(Math.hypot(rigid.x - m.center.x, rigid.y - m.center.y)).toBeLessThanOrEqual(2 * Math.SQRT2 + 1e-6);
+      const back = applyMat3(m.transform, { x: (c[0].x + c[1].x + c[2].x + c[3].x) / 4, y: (c[0].y + c[1].y + c[2].y + c[3].y) / 4 });
+      expect(Math.hypot(back.x - m.center.x, back.y - m.center.y)).toBeLessThan(1e-6);
+    }
+    // Gaps spread the grid: neighbouring body centres are further apart than one cell.
+    const spread = renderPiecesPhoto(ref, cut, [grid], { ...opts, patch: { gap: [6, 6], jitterDeg: 0, jitterPx: 0 } }).truth[0].members!;
+    const cellPx = 1.4 * (cut.width / cut.cols);
+    const d = Math.hypot(spread[1].center.x - spread[0].center.x, spread[1].center.y - spread[0].center.y);
+    const d0 = Math.hypot(cut.pieces[grid[1]].corners[0].x - cut.pieces[grid[0]].corners[0].x, cut.pieces[grid[1]].corners[0].y - cut.pieces[grid[0]].corners[0].y);
+    expect(d).toBeGreaterThan(d0 * 1.4 + 4);
+    expect(Math.abs(d - (d0 * 1.4 + 6))).toBeLessThan(0.15 * cellPx);
+    // Rigid (old) style: one body, no jitter.
+    const rigid = renderPiecesPhoto(ref, cut, [grid], { ...opts, patch: false }).truth[0];
+    for (const m of rigid.members!) expect(angleError(m.rotationDeg, rigid.rotationDeg)).toBeLessThan(1e-6);
+    // Seams are darker than the piece interiors next to them.
+    const lum = (img: typeof photo, p: { x: number; y: number }) => {
+      const i = (Math.round(p.y) * img.width + Math.round(p.x)) * 4;
+      return 0.3 * img.data[i] + 0.59 * img.data[i + 1] + 0.11 * img.data[i + 2];
+    };
+    const flat = renderPiecesPhoto(ref, cut, [grid], { ...opts, patch: { gap: [0, 0], jitterDeg: 0, jitterPx: 0, seam: 1 } });
+    let seam = 0, inner = 0;
+    for (const m of flat.truth[0].members!.slice(0, 4)) {
+      const c = m.corners;
+      // Corner 1 (top-right) and the middle of the right side lie on seams with the next piece.
+      const mid = { x: (c[1].x + c[2].x) / 2, y: (c[1].y + c[2].y) / 2 };
+      seam += lum(flat.photo, mid);
+      inner += lum(flat.photo, { x: 0.7 * mid.x + 0.3 * m.center.x, y: 0.7 * mid.y + 0.3 * m.center.y });
+    }
+    expect(seam).toBeLessThan(inner);
+    if (DEBUG_IMAGES) savePng('.debug/synth/patch-4x5.png', photo);
   });
 
   it('throws when the items cannot fit', () => {

@@ -6,8 +6,8 @@ import type { RGBAImage } from '../cv/image';
 import { limitSize } from '../cv/resize';
 import type { CellRef, RegionMatch, ScanResult } from '../model/types';
 import type { ProgressCallback } from '../worker/api';
-import { findFits, matchRegions, type MatchInput, type ReferenceIndex } from './match';
-import { segmentPieces } from './pieces';
+import { buildGroups, findFits, matchRegions, type MatchInput, type ReferenceIndex } from './match';
+import { resolveRegionIssues, segmentPieces } from './pieces';
 
 export interface AnalyzeScanOptions {
   placedCells?: CellRef[];
@@ -65,8 +65,16 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
 
   report({ stage: 'fits', progress: 0.94, message: 'Checking which pieces fit together' });
   t = now();
+  // Groups first (they may place weak members of assembled grids), then the fit hints.
+  const groups = buildGroups(regions, matches, findFits(regions, matches, index.grid), index.grid, {
+    cellW: index.cellW,
+    cellH: index.cellH,
+    bodySize: seg.medianBodySize,
+  });
   const fits = findFits(regions, matches, index.grid);
   timings.fits = now() - t;
+  // A region placed confidently was evidently segmented well enough: no low-contrast warning for it.
+  resolveRegionIssues(seg, new Set(matches.filter((m) => m.status === 'confident').map((m) => m.regionId)), ['low_contrast']);
   timings.total = now() - tStart;
 
   report({ stage: 'done', progress: 1 });
@@ -77,6 +85,7 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
       regions,
       matches,
       fits,
+      groups,
       quality: seg.quality,
       timings,
     },

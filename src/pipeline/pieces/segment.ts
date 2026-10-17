@@ -406,6 +406,33 @@ function isPlausibleSingle(c: Candidate): boolean {
   return r > 0.6 && r < 1.6;
 }
 
+/** Shape confidence of clean single pieces (assembled patches rarely exceed ≈ 0.8). */
+const STRONG_SINGLE = 0.85;
+
+/**
+ * The regions that define the single-piece size. Assembled patches sometimes get a plausible
+ * "piece" outline (four corners at the patch corners), so: prefer very clean shapes, and when the
+ * sizes are clearly multi-modal take the smallest well-supported size cluster (patches are multiples
+ * of a piece, never smaller).
+ */
+function referenceSingles(cands: Candidate[]): Candidate[] {
+  const plausible = cands.filter(isPlausibleSingle);
+  const strong = plausible.filter((c) => c.shape!.confidence >= STRONG_SINGLE);
+  const pool = strong.length >= 2 ? strong : plausible;
+  if (pool.length < 2) return pool;
+  const size = (c: Candidate) => Math.sqrt(c.area);
+  const sorted = [...pool].sort((a, b) => size(a) - size(b));
+  if (size(sorted[sorted.length - 1]) < 1.35 * size(sorted[0])) return pool;
+  const need = Math.max(2, Math.ceil(0.25 * pool.length));
+  for (const c of sorted) {
+    const cluster = sorted.filter((d) => size(d) >= size(c) && size(d) <= 1.3 * size(c));
+    if (cluster.length >= need) return cluster;
+  }
+  // No supported cluster (e.g. two very different sizes): trust the cleanest shape.
+  const best = sorted.reduce((a, b) => (b.shape!.confidence > a.shape!.confidence ? b : a));
+  return sorted.filter((d) => size(d) <= 1.3 * size(best) && size(d) >= size(best) / 1.3);
+}
+
 /**
  * Find every piece / patch in a scan photo. Regions get ids 1..n in reading order, a kind
  * ('piece' | 'patch' | 'unknown'), outline, shape (single pieces), orientation and issues; the
@@ -460,7 +487,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   lap('shapes');
 
   // Single-piece reference size.
-  const singles = cands.filter(isPlausibleSingle);
+  const singles = referenceSingles(cands);
   const others = cands.filter((c) => !c.touchesBorder);
   const refArea = singles.length > 0 ? median(singles.map((c) => c.area)) : others.length > 0 ? median(others.map((c) => c.area)) : 0;
   const refBody = singles.length > 0 ? median(singles.map((c) => c.shape!.bodySize)) : Math.sqrt(refArea);

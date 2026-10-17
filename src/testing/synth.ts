@@ -3,7 +3,7 @@
  * patches with ground truth, and photos of a puzzle box. Pure TypeScript, no DOM, deterministic for
  * a given seed. Used by the tests of several pipeline packages.
  */
-import { applyMat3, findHomography, rotation, similarityAbout, type Mat3, type Point, type Quad } from '../cv/geometry';
+import { applyMat3, composeTransforms, findHomography, mat3Invert, rotation, similarityAbout, translation, type Mat3, type Point, type Quad } from '../cv/geometry';
 import { createFloat, createMask, createRGBA, type FloatImage, type Mask, type RGBAImage, type Rect } from '../cv/image';
 import { gaussianBlurFloat } from '../cv/filter';
 import { fillPolygon } from '../cv/raster';
@@ -309,7 +309,42 @@ export interface RenderOptions {
   shadow?: number;
   /** Supersampling per axis for anti-aliased borders (default 4). */
   supersample?: number;
+  /**
+   * How assembled patches look. Default: every piece is drawn separately with dark seams along the
+   * internal cut lines, small gaps and a slight per-piece misalignment (like a real assembled grid).
+   * `false` renders a patch as one rigid body with faint seams (the old behaviour).
+   */
+  patch?: PatchStyle | false;
   seed?: number;
+}
+
+/** Appearance of assembled patches (see {@link RenderOptions.patch}). */
+export interface PatchStyle {
+  /** Darkening of internal seams relative to `edgeDarkening` (default 0.8). */
+  seam?: number;
+  /** Gap between neighbouring pieces in photo px, random per patch in [min, max] (default [0, 2]). */
+  gap?: [number, number];
+  /** Maximum random rotation of each piece in degrees (default 1.5). */
+  jitterDeg?: number;
+  /** Maximum random shift of each piece in photo px (default 2). */
+  jitterPx?: number;
+}
+
+/** Ground truth of one piece of an assembled patch, as it lies in the photo. */
+export interface PatchMemberTruth {
+  piece: number;
+  row: number;
+  col: number;
+  /** Body center in photo coordinates. */
+  center: Point;
+  /** Body corners in reference TL, TR, BR, BL order (photo coordinates). */
+  corners: Quad;
+  /** Outline in photo coordinates. */
+  outline: Point[];
+  /** Clockwise rotation (deg, [0, 360)) that turns this piece upright. */
+  rotationDeg: number;
+  /** Reference → photo mapping of this piece. */
+  transform: Mat3;
 }
 
 export interface PieceTruth {
@@ -331,6 +366,8 @@ export interface PieceTruth {
   transform: Mat3;
   /** Photo px per reference px. */
   scale: number;
+  /** Patches: every piece as it lies in the photo (with gaps and misalignment); first = anchor. */
+  members?: PatchMemberTruth[];
 }
 
 function toRGB(v: number | RGB | undefined, def: number): RGB {
@@ -432,7 +469,8 @@ function finishPhoto(scene: FloatImage, rng: Rng, opts: RenderOptions): RGBAImag
 
 /**
  * Render a photo of loose pieces / assembled patches lying on a table. Each entry of `pieces` is a
- * piece index or an array of adjacent piece indices (rendered as one rigid patch; first = anchor).
+ * piece index or an array of adjacent piece indices forming an assembled patch (first = anchor;
+ * drawn piece by piece with seams, gaps and misalignment unless `opts.patch === false`).
  * Items never overlap; throws when they cannot be placed.
  */
 export function renderPiecesPhoto(
@@ -527,20 +565,43 @@ export function renderPiecesPhoto(
   const shadowStrength = opts.shadow ?? 0.3;
   const edgeDark = opts.edgeDarkening ?? 0.45;
   const edgeW = opts.edgeWidth ?? 1.4;
+  const style = opts.patch === false ? null : opts.patch ?? {};
+  const seamDark = (style?.seam ?? 0.8) * edgeDark;
   const px = [0, 0, 0, 0];
-  const renders: { bx: number; by: number; bw: number; bh: number; cov: Float32Array; label: Int32Array; T: Mat3; Tinv: Mat3 }[] = [];
+  const renders: { bx: number; by: number; bw: number; bh: number; cov: Float32Array; label: Int32Array; owner: Int32Array; Tinv: Mat3[]; seamDark: number; seamW: number }[] = [];
+  const norm = (deg: number) => (((deg % 360) + 360) % 360) % 360;
 
+  // Patch details draw from their own random stream, so placements match the rigid style.
+  const prng = new Rng(((opts.seed ?? 1) * 7919 + 17) >>> 0);
   for (const it of items) {
     const pos = it.pos!;
     const T = similarityAbout(it.pivot, pos, it.theta, it.scale);
-    const Tinv = similarityAbout(pos, it.pivot, -it.theta, 1 / it.scale);
-    const photoOutlines = it.refOutlines.map((o) => o.map((p) => applyMat3(T, p)));
+    // Per-piece transforms: a real assembled patch has small gaps and misaligned pieces.
+    const multi = it.indices.length > 1 && style !== null;
+    const gap = multi ? prng.uniform(style!.gap?.[0] ?? 0, style!.gap?.[1] ?? 2) : 0;
+    const jDeg = multi ? style!.jitterDeg ?? 1.5 : 0, jPx = multi ? style!.jitterPx ?? 2 : 0;
+    const meanRow = it.indices.reduce((a, i) => a + cut.pieces[i].row, 0) / it.indices.length;
+    const meanCol = it.indices.reduce((a, i) => a + cut.pieces[i].col, 0) / it.indices.length;
+    const memberT: Mat3[] = it.indices.map((i) => {
+      if (!multi) return T;
+      const piece = cut.pieces[i];
+      const c = piece.corners;
+      const center = applyMat3(T, { x: (c[0].x + c[1].x + c[2].x + c[3].x) / 4, y: (c[0].y + c[1].y + c[2].y + c[3].y) / 4 });
+      const spread = applyMat3(rotation(it.theta), { x: gap * (piece.col - meanCol), y: gap * (piece.row - meanRow) });
+      const d = (prng.uniform(-jDeg, jDeg) * Math.PI) / 180;
+      const shift = { x: spread.x + prng.uniform(-jPx, jPx), y: spread.y + prng.uniform(-jPx, jPx) };
+      return composeTransforms(T, translation(-center.x, -center.y), rotation(d), translation(center.x + shift.x, center.y + shift.y));
+    });
+    const Tinv = memberT.map((m) => mat3Invert(m));
+    const photoOutlines = it.refOutlines.map((o, k) => o.map((p) => applyMat3(memberT[k], p)));
     const ub = boundsOf(photoOutlines.flat());
     const bx = Math.max(0, Math.floor(ub.x0) - 4), by = Math.max(0, Math.floor(ub.y0) - 4);
     const bw = Math.min(PW, Math.ceil(ub.x1) + 5) - bx, bh = Math.min(PH, Math.ceil(ub.y1) + 5) - by;
-    // Supersampled coverage and per-pixel piece label.
+    // Supersampled coverage, per-pixel piece label (centre inside) and owner (most coverage).
     const cov = new Float32Array(bw * bh);
     const label = new Int32Array(bw * bh).fill(-1);
+    const owner = new Int32Array(bw * bh).fill(-1);
+    const best = new Float32Array(bw * bh);
     const ssMask: Mask = createMask(bw * ss, bh * ss);
     photoOutlines.forEach((o, k) => {
       ssMask.data.fill(0);
@@ -554,30 +615,47 @@ export function renderPiecesPhoto(
           }
           if (n === 0) continue;
           const i = y * bw + x;
-          cov[i] = Math.min(1, cov[i] + n / (ss * ss));
-          if (n * 2 >= ss * ss) label[i] = k;
+          const f = n / (ss * ss);
+          cov[i] = Math.min(1, cov[i] + f);
+          if (f > best[i]) { best[i] = f; owner[i] = k; }
+          if (n * 2 >= ss * ss && (label[i] < 0 || f >= best[i])) label[i] = k;
         }
       }
     });
-    renders.push({ bx, by, bw, bh, cov, label, T, Tinv });
+    renders.push({ bx, by, bw, bh, cov, label, owner, Tinv, seamDark: multi ? seamDark : 0.5 * edgeDark, seamW: multi ? 1.0 : 0.8 });
 
-    const anchor = cut.pieces[it.indices[0]];
-    const corners = anchor.corners.map((p) => applyMat3(T, p)) as Quad;
-    const center = { x: (corners[0].x + corners[1].x + corners[2].x + corners[3].x) / 4, y: (corners[0].y + corners[1].y + corners[2].y + corners[3].y) / 4 };
-    const outline = it.union.map((p) => applyMat3(T, p));
-    const ob = boundsOf(outline);
     const deg = (it.theta * 180) / Math.PI;
+    const members: PatchMemberTruth[] = it.indices.map((i, k) => {
+      const piece = cut.pieces[i];
+      const corners = piece.corners.map((p) => applyMat3(memberT[k], p)) as Quad;
+      const a = memberT[k];
+      const mdeg = (Math.atan2(a[3], a[0]) * 180) / Math.PI;
+      return {
+        piece: i,
+        row: piece.row,
+        col: piece.col,
+        center: { x: (corners[0].x + corners[1].x + corners[2].x + corners[3].x) / 4, y: (corners[0].y + corners[1].y + corners[2].y + corners[3].y) / 4 },
+        corners,
+        outline: photoOutlines[k],
+        rotationDeg: norm(-mdeg),
+        transform: memberT[k],
+      };
+    });
+    const anchor = cut.pieces[it.indices[0]];
+    const outline = it.union.map((p) => applyMat3(T, p));
+    const ob = boundsOf([...outline, ...photoOutlines.flat()]);
     truth.push({
       pieces: [...it.indices],
       row: anchor.row,
       col: anchor.col,
-      center,
-      rotationDeg: (((-deg % 360) + 360) % 360) % 360,
-      corners,
+      center: members[0].center,
+      rotationDeg: norm(-deg),
+      corners: members[0].corners,
       outline,
       bbox: { x: Math.floor(ob.x0), y: Math.floor(ob.y0), width: Math.ceil(ob.x1) - Math.floor(ob.x0) + 1, height: Math.ceil(ob.y1) - Math.floor(ob.y0) + 1 },
       transform: T,
       scale: it.scale,
+      ...(it.indices.length > 1 ? { members } : {}),
     });
   }
 
@@ -604,7 +682,7 @@ export function renderPiecesPhoto(
 
   // Pieces.
   for (const r of renders) {
-    const { bw, bh, cov, label } = r;
+    const { bw, bh, cov, label, owner } = r;
     // Distance to the outer boundary and to seams between pieces of a patch.
     const dOut = chamfer(bw, bh, (i) => label[i] < 0);
     const dSeam = chamfer(bw, bh, (i) => {
@@ -618,7 +696,7 @@ export function renderPiecesPhoto(
         const a = cov[i];
         if (a <= 0) continue;
         const X = r.bx + x, Y = r.by + y;
-        const p = applyMat3(r.Tinv, { x: X, y: Y });
+        const p = applyMat3(r.Tinv[Math.max(0, owner[i])], { x: X, y: Y });
         if (!sampleRGBA(reference, (p.x + 0.5) * refScaleX - 0.5, (p.y + 0.5) * refScaleY - 0.5, px)) {
           const cx = Math.min(reference.width - 1, Math.max(0, p.x)), cy = Math.min(reference.height - 1, Math.max(0, p.y));
           sampleRGBA(reference, cx, cy, px);
@@ -626,7 +704,7 @@ export function renderPiecesPhoto(
         const de = Math.max(0, dOut[i] - 0.5);
         const ds = dSeam[i];
         let f = 1 - edgeDark * Math.exp(-(de * de) / (2 * edgeW * edgeW));
-        if (ds < 1e8) f *= 1 - 0.5 * edgeDark * Math.exp(-(ds * ds) / (2 * 0.8 * 0.8));
+        if (ds < 1e8) f *= 1 - r.seamDark * Math.exp(-(ds * ds) / (2 * r.seamW * r.seamW));
         const o = (Y * PW + X) * 3;
         for (let c = 0; c < 3; c++) scene.data[o + c] = scene.data[o + c] * (1 - a) + a * px[c] * f;
       }
