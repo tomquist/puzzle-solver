@@ -31,7 +31,13 @@ export interface PuzzleContextValue {
   puzzle: PuzzleRecord;
   savePuzzle(p: PuzzleRecord): Promise<void>;
   progress: ProgressRecord;
+  /** Replace the whole progress record (e.g. "clear progress"). */
   saveProgress(p: ProgressRecord): Promise<void>;
+  /**
+   * Change progress based on its LATEST value. Use this for placing/unplacing: computing from the
+   * `progress` captured at render time loses updates when the user taps faster than React re-renders.
+   */
+  updateProgress(fn: (current: ProgressRecord) => ProgressRecord): Promise<void>;
   reference: ReferenceImage | undefined;
   matcher: MatcherStatus;
   /** Resolves once the pipeline has this puzzle's reference loaded (loads it if needed). */
@@ -94,7 +100,8 @@ export function PuzzleProvider({ id, children }: { id: string; children: ReactNo
     Promise.all([repo.getPuzzle(id), repo.getProgress(id)]).then(
       ([puzzle, progress]) => {
         if (!alive) return;
-        setState(puzzle ? { kind: 'ready', puzzle, progress: progress ?? emptyProgress(id) } : { kind: 'missing' });
+        progressRef.current = puzzle ? (progress ?? emptyProgress(id)) : undefined;
+        setState(puzzle ? { kind: 'ready', puzzle, progress: progressRef.current! } : { kind: 'missing' });
       },
       (error: unknown) => alive && setState({ kind: 'error', error }),
     );
@@ -140,12 +147,28 @@ export function PuzzleProvider({ id, children }: { id: string; children: ReactNo
     [repo],
   );
 
-  const saveProgress = useCallback(
-    async (p: ProgressRecord) => {
+  // The latest progress (ahead of React state between an update and the next render) and a queue
+  // that keeps storage writes in order.
+  const progressRef = useRef<ProgressRecord | undefined>(undefined);
+  const writes = useRef<Promise<unknown>>(Promise.resolve());
+  const commitProgress = useCallback(
+    (p: ProgressRecord): Promise<void> => {
+      progressRef.current = p;
       setState((s) => (s.kind === 'ready' ? { ...s, progress: p } : s));
-      await repo.saveProgress(p);
+      const write = writes.current.then(() => repo.saveProgress(p));
+      writes.current = write.catch(() => undefined);
+      return write;
     },
     [repo],
+  );
+  const saveProgress = useCallback((p: ProgressRecord) => commitProgress(p), [commitProgress]);
+  const updateProgress = useCallback(
+    async (fn: (current: ProgressRecord) => ProgressRecord) => {
+      const current = progressRef.current;
+      if (!current) return;
+      await commitProgress(fn(current));
+    },
+    [commitProgress],
   );
 
   const scansChanged = useCallback(() => setScansVersion((v) => v + 1), []);
@@ -165,6 +188,7 @@ export function PuzzleProvider({ id, children }: { id: string; children: ReactNo
       savePuzzle,
       progress: state.progress,
       saveProgress,
+      updateProgress,
       reference: refUrl ? { url: refUrl, bitmap: refBitmap, width: state.puzzle.reference.width, height: state.puzzle.reference.height } : undefined,
       matcher: refMissing ? { kind: 'error', message: 'The puzzle picture is missing from storage.' } : matcher,
       ensureMatcher,
@@ -174,7 +198,7 @@ export function PuzzleProvider({ id, children }: { id: string; children: ReactNo
       startScan: scan.start,
       cancelScan: scan.cancel,
     };
-  }, [state, savePuzzle, saveProgress, refUrl, refBitmap, refMissing, matcher, ensureMatcher, scansVersion, scansChanged, scan.job, scan.start, scan.cancel]);
+  }, [state, savePuzzle, saveProgress, updateProgress, refUrl, refBitmap, refMissing, matcher, ensureMatcher, scansVersion, scansChanged, scan.job, scan.start, scan.cancel]);
 
   if (state.kind === 'loading') {
     return (

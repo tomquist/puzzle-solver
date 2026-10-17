@@ -1,7 +1,7 @@
 /** Geometry for SVG overlays on photos and the reference picture (pure). */
 import type { Point } from '../../cv/geometry';
 import type { Rect } from '../../cv/image';
-import type { CellRef, DetectedRegion, GridSpec } from '../../model/types';
+import type { CellRef, DetectedRegion, GridSpec, PuzzleSide } from '../../model/types';
 import { upVector } from './rotation';
 
 /** SVG path data for a closed polygon. */
@@ -201,4 +201,57 @@ export function badgeNotch(c: Point, r: number, rotationDeg: number): [Point, Po
   const base = { x: c.x + u.x * r * 0.8, y: c.y + u.y * r * 0.8 };
   const hw = r * 0.5;
   return [tip, { x: base.x + n.x * hw, y: base.y + n.y * hw }, { x: base.x - n.x * hw, y: base.y - n.y * hw }];
+}
+
+/**
+ * Unit vector, in photo coordinates, pointing out of the given side of a piece – the side as it
+ * will be in the finished puzzle – for a piece that needs `rotationDeg` to become upright.
+ */
+export function sideVector(side: PuzzleSide, rotationDeg: number): Point {
+  const up = upVector(rotationDeg);
+  // Clockwise quarter turn on screen (y down): (x, y) -> (-y, x).
+  const right = { x: -up.y, y: up.x };
+  switch (side) {
+    case 'top':
+      return up;
+    case 'right':
+      return right;
+    case 'bottom':
+      return { x: -up.x, y: -up.y };
+    case 'left':
+      return { x: -right.x, y: -right.y };
+  }
+}
+
+export interface CurveEnd {
+  center: Point;
+  /** Distance from `center` to where the curve attaches (half the body size for a piece edge). */
+  reach: number;
+  /** Outward unit normal of the joining edge; omitted = straight towards the other end. */
+  dir?: Point;
+}
+
+/**
+ * A connection between two pieces as a cubic Bézier curve that leaves `a` through the edge that
+ * will touch `b` and arrives at the matching edge of `b`, so it shows which edges go together.
+ */
+export function connectionCurve(a: CurveEnd, b: CurveEnd): { d: string; from: Point; to: Point } | null {
+  const dx = b.center.x - a.center.x;
+  const dy = b.center.y - a.center.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1e-6) return null;
+  const towardB = { x: dx / dist, y: dy / dist };
+  const dirA = a.dir ?? towardB;
+  const dirB = b.dir ?? { x: -towardB.x, y: -towardB.y };
+  const from = { x: a.center.x + dirA.x * a.reach, y: a.center.y + dirA.y * a.reach };
+  const to = { x: b.center.x + dirB.x * b.reach, y: b.center.y + dirB.y * b.reach };
+  const gap = Math.hypot(to.x - from.x, to.y - from.y);
+  const avgReach = (a.reach + b.reach) / 2;
+  // Leave/enter each edge for about one piece half-size: enough to show which edge, without
+  // big loops across the photo when an edge faces away from the other piece.
+  const k = Math.min(Math.max(gap * 0.3, avgReach * 0.8), avgReach * 2);
+  const c1 = { x: from.x + dirA.x * k, y: from.y + dirA.y * k };
+  const c2 = { x: to.x + dirB.x * k, y: to.y + dirB.y * k };
+  const f = (n: number) => Math.round(n * 10) / 10;
+  return { d: `M${f(from.x)},${f(from.y)} C${f(c1.x)},${f(c1.y)} ${f(c2.x)},${f(c2.y)} ${f(to.x)},${f(to.y)}`, from, to };
 }

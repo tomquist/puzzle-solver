@@ -70,7 +70,7 @@ export function ScanResultScreen({ scanId }: { scanId: string }) {
 }
 
 function ScanResultView({ scan }: { scan: ScanRecord }) {
-  const { puzzle, progress, saveProgress, reference } = usePuzzle();
+  const { puzzle, progress, updateProgress, reference } = usePuzzle();
   const [prefs, updatePrefs] = usePrefs();
   useWakeLock(prefs.keepScreenOn);
   const result = scan.result;
@@ -118,19 +118,21 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
 
   const place = async (item: ScanItem, p: ItemPlacement) => {
     haptic();
-    const before = progress;
-    await saveProgress(placeCells(progress, p.cells, { scanId: scan.id, regionId: item.label }));
-    setSnack({ id: Date.now(), text: `#${item.label} placed`, actionLabel: 'Undo', onAction: () => void saveProgress(before) });
+    await updateProgress((current) => placeCells(current, p.cells, { scanId: scan.id, regionId: item.label }));
+    setSnack({ id: Date.now(), text: `#${item.label} placed`, actionLabel: 'Undo', onAction: () => void updateProgress((current) => unplaceCells(current, p.cells)) });
   };
 
   const confidentToPlace = toPlace.filter((i) => i.status === 'confident' && (rejected[i.key] ?? 0) === 0);
   const placeAllConfident = async () => {
     haptic();
-    const before = progress;
-    let next = progress;
-    for (const item of confidentToPlace) next = placeCells(next, placementOf(item)!.cells, { scanId: scan.id, regionId: item.label });
-    await saveProgress(next);
-    setSnack({ id: Date.now(), text: `${plural(confidentToPlace.length, 'item')} marked as placed`, actionLabel: 'Undo', onAction: () => void saveProgress(before) });
+    const placements = confidentToPlace.map((item) => ({ item, cells: placementOf(item)!.cells }));
+    await updateProgress((current) => placements.reduce((acc, { item, cells }) => placeCells(acc, cells, { scanId: scan.id, regionId: item.label }), current));
+    setSnack({
+      id: Date.now(),
+      text: `${plural(confidentToPlace.length, 'item')} marked as placed`,
+      actionLabel: 'Undo',
+      onAction: () => void updateProgress((current) => placements.reduce((acc, { cells }) => unplaceCells(acc, cells), current)),
+    });
   };
 
   const selectIssue = (i: QualityIssue | undefined) => {
@@ -344,7 +346,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
           onReject={() => setRejected((r) => ({ ...r, [openItem.key]: (r[openItem.key] ?? 0) + 1 }))}
           onChoose={(i) => setRejected((r) => ({ ...r, [openItem.key]: i }))}
           onPlace={(p) => void place(openItem, p)}
-          onUnplace={(p) => void saveProgress(unplaceCells(progress, p.cells))}
+          onUnplace={(p) => void updateProgress((current) => unplaceCells(current, p.cells))}
           onOpen={(key) => {
             focusItem(key);
             setOpenKey(key);
