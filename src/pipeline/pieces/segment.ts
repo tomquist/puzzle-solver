@@ -585,6 +585,8 @@ function peelSoft(c: Candidate, img: RGBAImage, ra: number, W: number, H: number
   if (parts.length === 0) return null;
   const before = c.shape?.confidence ?? 0;
   const ok = Math.max(...parts.map((p) => p.shape?.confidence ?? 0)) >= Math.max(0.6, before + 0.2);
+  if (process.env.SEGDBG) console.log('PEEL', c.bbox.x, c.bbox.y, 'area', c.area, 'removed', removed, (removed / c.area).toFixed(2), 'before', before.toFixed(2), 'after', parts.map((p) => (p.shape?.confidence ?? 0).toFixed(2) + '/' + p.area).join(' '), 'ok', ok);
+  if (process.env.PEELALL && !ok && parts.length === 1 && removed >= 0.08 * c.area && (parts[0].shape?.confidence ?? 0) >= before - 0.05 && parts[0].area >= 0.6 * ra) return parts;
   return ok ? parts : null;
 }
 
@@ -897,7 +899,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     const out: Candidate[] = [];
     for (const c of cands) {
       const ra = refAreaAt(c);
-      const doubtful = !c.touchesBorder && c.area >= 0.6 * ra && (c.area > 1.3 * ra || !c.shape || c.shape.confidence < 0.7);
+      const doubtful = !c.touchesBorder && c.area >= 0.6 * ra && (process.env.PEELALL ? true : (c.area > 1.3 * ra || !c.shape || c.shape.confidence < 0.7));
       out.push(...((doubtful ? peelSoft(c, scored, ra, W, H) : null) ?? [c]));
     }
     cands = out;
