@@ -200,6 +200,39 @@ export interface FitHint {
   reason: 'location' | 'shape' | 'location+shape';
 }
 
+/**
+ * Regions that belong together in the finished puzzle.
+ * - 'assembled': physically joined in the photo (an assembled grid/patch). Either one 'patch'
+ *   region or several touching piece regions whose placements are mutually consistent. The user
+ *   places it as one unit.
+ * - 'neighbors': loose pieces (not touching in the photo) whose placements are adjacent cells, i.e.
+ *   they will connect once placed.
+ */
+export type GroupKind = 'assembled' | 'neighbors';
+
+export interface RegionGroup {
+  /** 1-based, stable within the scan. */
+  id: number;
+  kind: GroupKind;
+  /** Member regions (an assembled patch may be a single 'patch' region). */
+  regionIds: number[];
+  /** Grid cells the group occupies in the finished puzzle. */
+  cells: CellRef[];
+  /** Cell bounding box of `cells`. */
+  bounds: { row0: number; col0: number; row1: number; col1: number };
+  /**
+   * Clockwise rotation in degrees [0, 360) that turns the group from how it lies in the photo into
+   * its upright orientation (assembled groups move as one rigid unit). Omitted when the members'
+   * rotations disagree (only possible for 'neighbors').
+   */
+  rotationDeg?: number;
+  /** Center of the group in reference-image pixels. */
+  x: number;
+  y: number;
+  /** 0..1 confidence that the whole group placement is right. */
+  confidence: number;
+}
+
 export type QualityCode =
   | 'blurry'
   | 'motion_blur'
@@ -247,6 +280,8 @@ export interface ScanResult {
   regions: DetectedRegion[];
   matches: RegionMatch[];
   fits: FitHint[];
+  /** Assembled grids and neighbouring loose pieces (absent in scans saved by older versions). */
+  groups?: RegionGroup[];
   quality: QualityReport;
   /** Milliseconds per pipeline stage. */
   timings: Record<string, number>;
