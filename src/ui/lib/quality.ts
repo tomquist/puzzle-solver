@@ -1,5 +1,6 @@
 /** Quality-report helpers for display (pure). */
 import type { GridSpec, QualityIssue, Severity } from '../../model/types';
+import { MAX_CANVAS_AREA } from '../../platform/imageSize';
 
 const RANK: Record<Severity, number> = { error: 0, warning: 1, info: 2 };
 
@@ -57,11 +58,16 @@ export function referenceResolution(width: number, height: number, grid: GridSpe
   return { pxPerCell, level: 'good' };
 }
 
-/** Upscale factor for "Build sharper picture" from the close-ups' resolution gains. */
-export function composeScale(gains: number[], refLongSide: number, maxSide = 6000): number {
+/**
+ * Upscale factor for "Build sharper picture" from the close-ups' resolution gains: the median
+ * gain, at most 3×, and small enough that the result stays within `maxSide` and `maxArea` (the
+ * iOS canvas limit, so the picture can still be encoded and decoded on phones).
+ */
+export function composeScale(gains: number[], width: number, height: number, maxSide = 6000, maxArea = MAX_CANVAS_AREA): number {
   if (gains.length === 0) return 1;
   const sorted = [...gains].sort((a, b) => a - b);
   const median = sorted[Math.floor(sorted.length / 2)];
-  const limit = maxSide / Math.max(1, refLongSide);
-  return Math.max(1, Math.min(3, median, limit));
+  const sideLimit = maxSide / Math.max(1, width, height);
+  const areaLimit = Math.sqrt(maxArea / Math.max(1, width * height));
+  return Math.max(1, Math.min(3, median, sideLimit, areaLimit));
 }

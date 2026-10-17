@@ -165,11 +165,11 @@ export function NewPuzzleWizard() {
     setComposing(true);
     setError(undefined);
     try {
-      const scale = composeScale(ok.map((c) => c.registration!.scaleGain), Math.max(base.width, base.height));
+      const scale = composeScale(ok.map((c) => c.registration!.scaleGain), base.width, base.height);
       const rgba = await pipeline.composeHighRes(
         cloneRGBA(base.pixels.image),
         ok.map((c) => ({ image: cloneRGBA(c.pixels!.image), registration: c.registration! })),
-        { scale },
+        { scale, maxSide: Math.floor(Math.max(base.width, base.height) * scale) },
       );
       setComposed({ image: await encodeImage(rgba), ids: ok.map((c) => c.id).join(',') });
     } catch (e) {

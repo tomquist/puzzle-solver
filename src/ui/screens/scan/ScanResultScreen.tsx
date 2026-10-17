@@ -5,6 +5,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { CellRef, Placement, QualityIssue, ScanRecord } from '../../../model/types';
 import { describeCell } from '../../../pipeline/grid';
+import { haptic } from '../../../platform/device';
 import { EmptyState, ErrorState, Snackbar, Spinner, type SnackbarMessage } from '../../components/Feedback';
 import { IconCheck, IconScan } from '../../components/Icons';
 import { PieceDetail } from '../../components/PieceDetail';
@@ -140,6 +141,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
   };
 
   const place = async (id: number, p: Placement) => {
+    haptic();
     const before = progress;
     await saveProgress(placeCells(progress, cellsOf(id, p), { scanId: scan.id, regionId: id }));
     setSnack({ id: Date.now(), text: `Piece #${id} placed`, actionLabel: 'Undo', onAction: () => void saveProgress(before) });
@@ -152,6 +154,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
   });
 
   const placeAllConfident = async () => {
+    haptic();
     const before = progress;
     let next = progress;
     for (const r of confidentToPlace) {

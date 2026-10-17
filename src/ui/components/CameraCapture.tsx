@@ -1,12 +1,17 @@
 /**
- * Camera + upload capture: live preview with a quality meter (pipeline.assessFrame every ~400 ms),
- * full-resolution shutter, torch, context tips, and file upload (gallery and native camera app)
- * that is always available as a fallback.
+ * Camera + upload capture: live preview with a quality meter (pipeline.assessFrame every ~400 ms,
+ * never more than one request in flight), full-resolution shutter, torch, context tips, and file
+ * input (photo library and the native camera app) that is always available.
+ *
+ * On iOS the native camera (`<input capture>`) is the primary action: Safari's getUserMedia stills
+ * are much lower resolution than the Camera app's photos.
  */
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 import type { FrameQuality } from '../../model/types';
 import { CAMERA_ERROR_TEXT, cameraPermission, CameraError, isCameraSupported, openCamera, type CameraSession } from '../../platform/camera';
+import { haptic, isCoarsePointer, isIOS } from '../../platform/device';
 import { usePipeline } from '../context/PipelineContext';
+import { startFrameLoop } from '../lib/frameLoop';
 import { Banner } from './Feedback';
 import { IconCamera, IconCheck, IconClose, IconImage, IconInfo, IconTorch, IconUpload } from './Icons';
 
@@ -29,9 +34,48 @@ const TIPS: Record<CaptureContext, { title: string; tips: string[] }> = {
 
 type CamState = { kind: 'off' } | { kind: 'starting' } | { kind: 'live'; session: CameraSession } | { kind: 'error'; message: string };
 
-function useCoarsePointer(): boolean {
-  const [coarse] = useState(() => typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches);
-  return coarse;
+function usePlatform(): { ios: boolean; coarse: boolean } {
+  const [p] = useState(() => ({ ios: isIOS(), coarse: isCoarsePointer() }));
+  return p;
+}
+
+function FileButton({
+  label,
+  icon,
+  primary,
+  capture,
+  disabled,
+  testId,
+  onFiles,
+  className = '',
+}: {
+  label: string;
+  icon: React.ReactNode;
+  primary?: boolean;
+  capture?: boolean;
+  disabled?: boolean;
+  testId: string;
+  onFiles: (files: FileList | null) => void;
+  className?: string;
+}) {
+  return (
+    <label className={`btn btn-lg${primary ? ' btn-primary' : ''}${disabled ? ' disabled' : ''} ${className}`}>
+      {icon}
+      <span>{label}</span>
+      <input
+        type="file"
+        accept="image/*"
+        capture={capture ? 'environment' : undefined}
+        className="visually-hidden"
+        data-testid={testId}
+        disabled={disabled}
+        onChange={(e) => {
+          onFiles(e.currentTarget.files);
+          e.currentTarget.value = '';
+        }}
+      />
+    </label>
+  );
 }
 
 export function CameraCapture({
@@ -44,7 +88,7 @@ export function CameraCapture({
   context: CaptureContext;
   onCapture: (photo: Blob) => void;
   disabled?: boolean;
-  /** Start the camera immediately when permission was already granted. */
+  /** Start the camera immediately when permission was already granted (not on iOS). */
   autoStart?: boolean;
   uploadLabel?: string;
 }) {
@@ -57,7 +101,7 @@ export function CameraCapture({
   const [flash, setFlash] = useState(false);
   const [busy, setBusy] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const coarse = useCoarsePointer();
+  const { ios, coarse } = usePlatform();
   const tips = TIPS[context];
   const sessionRef = useRef<CameraSession | undefined>(undefined);
 
@@ -85,9 +129,10 @@ export function CameraCapture({
   // Stop the tracks when leaving the screen.
   useEffect(() => () => sessionRef.current?.stop(), []);
 
-  // Auto-start only when the user already allowed the camera (never prompt unexpectedly).
+  // Auto-start only when the user already allowed the camera (never prompt unexpectedly), and not
+  // on iOS where the native camera gives better photos.
   useEffect(() => {
-    if (!autoStart || !isCameraSupported()) return;
+    if (!autoStart || ios || !isCameraSupported()) return;
     let alive = true;
     cameraPermission().then((state) => {
       if (alive && state === 'granted') void start();
@@ -95,7 +140,7 @@ export function CameraCapture({
     return () => {
       alive = false;
     };
-  }, [autoStart, start]);
+  }, [autoStart, ios, start]);
 
   // Attach the stream to the <video>.
   useEffect(() => {
@@ -108,29 +153,16 @@ export function CameraCapture({
     };
   }, [cam]);
 
-  // Live quality meter.
+  // Live quality meter (skips frames while an assessment is still running).
   useEffect(() => {
     if (cam.kind !== 'live') return;
-    let pending = false;
-    let alive = true;
-    const id = setInterval(() => {
-      const v = video.current;
-      if (pending || !v) return;
-      const frame = cam.session.grabFrame(v, 320);
-      if (!frame) return;
-      pending = true;
-      pipeline
-        .assessFrame(frame)
-        .then((q) => alive && setQuality(q))
-        .catch(() => undefined)
-        .finally(() => {
-          pending = false;
-        });
-    }, 400);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
+    const loop = startFrameLoop({
+      grab: () => (video.current ? cam.session.grabFrame(video.current, 320) : null),
+      assess: (frame) => pipeline.assessFrame(frame),
+      onResult: setQuality,
+      intervalMs: 400,
+    });
+    return () => loop.stop();
   }, [cam, pipeline]);
 
   const shoot = async () => {
@@ -138,6 +170,7 @@ export function CameraCapture({
     if (cam.kind !== 'live' || !v || busy) return;
     setBusy(true);
     setFlash(true);
+    haptic();
     setTimeout(() => setFlash(false), 180);
     try {
       const blob = await cam.session.takePhoto(v);
@@ -162,41 +195,30 @@ export function CameraCapture({
     if (!disabled) onFiles(e.dataTransfer.files);
   };
 
-  const uploadPrimary = cam.kind !== 'live' && (!isCameraSupported() || cam.kind === 'error');
-  const uploadButtons = (
-    <>
-      <label className={`btn ${uploadPrimary ? 'btn-primary' : ''} btn-lg${disabled ? ' disabled' : ''}`}>
-        <IconUpload />
-        <span>{uploadLabel}</span>
-        <input
-          type="file"
-          accept="image/*"
-          className="visually-hidden"
-          data-testid="photo-upload"
-          disabled={disabled}
-          onChange={(e) => {
-            onFiles(e.currentTarget.files);
-            e.currentTarget.value = '';
-          }}
-        />
-      </label>
-      <label className={`btn btn-lg${disabled ? ' disabled' : ''}${coarse ? '' : ' hide-fine'}`}>
-        <IconImage />
-        <span>Camera app</span>
-        <input
-          type="file"
-          accept="image/*"
-          capture="environment"
-          className="visually-hidden"
-          data-testid="photo-capture"
-          disabled={disabled}
-          onChange={(e) => {
-            onFiles(e.currentTarget.files);
-            e.currentTarget.value = '';
-          }}
-        />
-      </label>
-    </>
+  const cameraSupported = isCameraSupported();
+  // Native camera app: primary on iOS, offered on other touch devices, hidden on desktop.
+  const nativeCamera = (primary: boolean) => (
+    <FileButton
+      label={ios && cam.kind !== 'live' ? 'Take photo' : 'Camera app'}
+      icon={ios ? <IconCamera /> : <IconImage />}
+      primary={primary}
+      capture
+      disabled={disabled}
+      testId="photo-capture"
+      onFiles={onFiles}
+      className={ios || coarse ? '' : 'hide-fine'}
+    />
+  );
+  const uploadPrimary = !ios && (!cameraSupported || cam.kind === 'error');
+  const upload = (
+    <FileButton
+      label={ios ? 'Choose from library' : uploadLabel}
+      icon={<IconUpload />}
+      primary={uploadPrimary && cam.kind !== 'live'}
+      disabled={disabled}
+      testId="photo-upload"
+      onFiles={onFiles}
+    />
   );
 
   if (cam.kind === 'live') {
@@ -229,6 +251,7 @@ export function CameraCapture({
                   <li key={t}>{t}</li>
                 ))}
               </ul>
+              {ios && <span className="small">For the sharpest photo use “Take photo” below.</span>}
               <button className="btn btn-sm btn-on-dark" onClick={() => setShowTips(false)}>
                 Got it
               </button>
@@ -257,10 +280,20 @@ export function CameraCapture({
             )}
           </div>
         </div>
-        <div className="capture-actions">{uploadButtons}</div>
+        <div className="capture-actions">
+          {upload}
+          {nativeCamera(false)}
+        </div>
       </div>
     );
   }
+
+  const liveButton = cameraSupported && (
+    <button className={`btn btn-lg${ios ? '' : ' btn-primary'}`} onClick={start} disabled={disabled || cam.kind === 'starting'}>
+      <IconCamera />
+      <span>{cam.kind === 'starting' ? 'Starting camera…' : cam.kind === 'error' ? 'Try camera again' : ios ? 'Live camera' : 'Use camera'}</span>
+    </button>
+  );
 
   return (
     <div
@@ -286,13 +319,19 @@ export function CameraCapture({
       </ul>
       {cam.kind === 'error' && <Banner tone="warning">{cam.message}</Banner>}
       <div className="capture-actions">
-        {isCameraSupported() && (
-          <button className="btn btn-primary btn-lg" onClick={start} disabled={disabled || cam.kind === 'starting'}>
-            <IconCamera />
-            <span>{cam.kind === 'starting' ? 'Starting camera…' : cam.kind === 'error' ? 'Try camera again' : 'Use camera'}</span>
-          </button>
+        {ios ? (
+          <>
+            {nativeCamera(true)}
+            {upload}
+            {liveButton}
+          </>
+        ) : (
+          <>
+            {liveButton}
+            {upload}
+            {nativeCamera(false)}
+          </>
         )}
-        {uploadButtons}
       </div>
       <p className="muted small hide-coarse">You can also drop a photo here.</p>
     </div>

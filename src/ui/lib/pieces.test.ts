@@ -97,9 +97,13 @@ describe('quality helpers', () => {
     expect(referenceResolution(3000, 2000, { rows: 10, cols: 15 })).toEqual({ pxPerCell: 200, level: 'good' });
   });
   it('picks a compose scale', () => {
-    expect(composeScale([], 1000)).toBe(1);
-    expect(composeScale([2, 2.5, 5], 1000)).toBe(2.5);
-    expect(composeScale([5, 6], 1000)).toBe(3);
-    expect(composeScale([2.5], 4000)).toBe(1.5);
+    expect(composeScale([], 1000, 700)).toBe(1);
+    expect(composeScale([2, 2.5, 5], 1000, 700)).toBe(2.5);
+    expect(composeScale([5, 6], 1000, 700)).toBe(3);
+    expect(composeScale([2.5], 4000, 1000)).toBe(1.5);
+    // Area cap: 3000 × 2000 may grow to at most 16.7 MP.
+    const s = composeScale([3], 3000, 2000);
+    expect(3000 * s * 2000 * s).toBeLessThanOrEqual(16_777_216 + 1);
+    expect(s).toBeCloseTo(Math.sqrt(16_777_216 / 6_000_000), 5);
   });
 });

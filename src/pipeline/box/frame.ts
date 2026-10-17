@@ -276,8 +276,8 @@ export interface FrameEvidence {
 /**
  * How much the band between `outer` and the nested quad (given by its band widths) looks like a
  * printed frame. Thin strips are sampled on both sides of every inner side that has a band: just
- * outside (frame: uniform colour, untextured; logos and text usually keep some distance from the
- * picture) and just inside (picture: different from the frame colour on every side).
+ * outside (frame: uniform colour, untextured) and just inside (picture: different from the frame
+ * colour on every side).
  */
 export function frameEvidence(img: RGBAImage, f: GradientField, outer: Quad, bands: [number, number, number, number]): FrameEvidence {
   const H = unitSquareToQuad(outer);
@@ -285,63 +285,87 @@ export function frameEvidence(img: RGBAImage, f: GradientField, outer: Quad, ban
   if (!H) return none;
   const sides = quadSides(outer);
   const [bt, br, bb, bl] = bands;
-  interface SideSamples { out: number[][]; flat: number; ins: number[][]; beyond: number[][] }
+  type RGB = [number, number, number];
+  /** Per side: samples (colour, flat) at each outside depth, inside samples, samples beyond the outer quad. */
+  interface SideSamples { depths: number[]; out: RGB[][]; flat: boolean[][]; ins: RGB[]; beyond: RGB[] }
   const per: SideSamples[] = [];
   let minBand = Infinity;
-  const read = (u: number, v: number, into: number[][]): number => {
+  const read = (u: number, v: number): { c: RGB; m: number } | null => {
     const p = applyMat3(H, { x: u, y: v });
     const x = Math.round(p.x), y = Math.round(p.y);
-    if (x < 0 || y < 0 || x >= img.width || y >= img.height) return -1;
+    if (x < 0 || y < 0 || x >= img.width || y >= img.height) return null;
     const o = (y * img.width + x) * 4;
-    into.push([img.data[o], img.data[o + 1], img.data[o + 2]]);
-    return f.mag[y * img.width + x];
+    return { c: [img.data[o], img.data[o + 1], img.data[o + 2]], m: f.mag[y * img.width + x] };
   };
+  // Outside depths (px from the inner side towards the outer quad); only the inner ~45 % of the
+  // band is used so that a strip of frame next to the picture is found even when logos or text
+  // fill the rest of the band.
+  const DEPTHS = [1.5, 2.5, 4, 6];
   for (let s = 0; s < 4; s++) {
     const b = bands[s];
     const perp = s % 2 === 0 ? (sides[1] + sides[3]) / 2 : (sides[0] + sides[2]) / 2;
     const bandPx = b * perp;
     if (bandPx < 4) continue;
+    const depths = DEPTHS.filter((d, i) => i < 2 || d <= 0.45 * bandPx);
     const a0 = s % 2 === 0 ? bl : bt, a1 = s % 2 === 0 ? 1 - br : 1 - bb;
-    // Depths in pixels from the inner side: outside (towards the outer quad) and inside.
-    const outD = [2.5, Math.min(4, bandPx - 1.5)];
-    const inD = [2.5, 4.5, 7];
-    const ss: SideSamples = { out: [], flat: 0, ins: [], beyond: [] };
+    const ss: SideSamples = { depths, out: depths.map(() => []), flat: depths.map(() => []), ins: [], beyond: [] };
     for (let k = 0; k < 48; k++) {
       const a = a0 + ((k + 0.5) / 48) * (a1 - a0);
-      for (const dp of outD) {
-        const m = read(...uvAt(s, a, b - dp / perp), ss.out);
-        if (m >= 0 && m < 2.5 * f.lo) ss.flat++;
+      depths.forEach((dp, di) => {
+        const r = read(...uvAt(s, a, b - dp / perp));
+        if (r) {
+          ss.out[di].push(r.c);
+          ss.flat[di].push(r.m < 2.5 * f.lo);
+        }
+      });
+      for (const dp of [2.5, 4.5, 7]) {
+        const r = read(...uvAt(s, a, b + dp / perp));
+        if (r) ss.ins.push(r.c);
       }
-      for (const dp of inD) read(...uvAt(s, a, b + dp / perp), ss.ins);
-      for (const dp of [2.5, 4]) read(...uvAt(s, a, -dp / perp), ss.beyond);
+      for (const dp of [2.5, 4]) {
+        const r = read(...uvAt(s, a, -dp / perp));
+        if (r) ss.beyond.push(r.c);
+      }
     }
-    if (ss.out.length >= 8) {
+    if (ss.out[0].length >= 8) {
       per.push(ss);
       minBand = Math.min(minBand, b);
     }
   }
   if (!per.length) return none;
-  const all = per.flatMap((p) => p.out);
+  // Frame colour: median of the samples 2.5 px outside the inner quad on all band sides.
+  const ref = per.flatMap((p) => p.out[1]);
   const med = [0, 1, 2].map((c) => {
-    const v = all.map((p) => p[c]).sort((x, y) => x - y);
+    const v = ref.map((p) => p[c]).sort((x, y) => x - y);
     return v[Math.floor(v.length / 2)];
   });
-  const close = (p: number[]) => Math.hypot(p[0] - med[0], p[1] - med[1], p[2] - med[2]) < 32;
-  let uSum = 0, fSum = 0, minSide = 1, innerSimilarity = 0;
-  const beyond = per.flatMap((p) => p.beyond);
-  const outerSimilarity = beyond.length ? beyond.filter(close).length / beyond.length : 0;
+  const close = (p: RGB) => Math.hypot(p[0] - med[0], p[1] - med[1], p[2] - med[2]) < 32;
+  const frac = <T,>(v: T[], pred: (t: T) => boolean) => (v.length ? v.filter(pred).length / v.length : 0);
+  let innerSimilarity = 0;
+  const sideStats: { u: number; fl: number; score: number }[] = [];
   for (const p of per) {
-    const u = p.out.filter(close).length / p.out.length;
-    const fl = p.flat / p.out.length;
-    uSum += u;
-    fSum += fl;
-    minSide = Math.min(minSide, u, fl);
-    if (p.ins.length) innerSimilarity = Math.max(innerSimilarity, p.ins.filter(close).length / p.ins.length);
+    // Best window of two adjacent depths (flatness from the deeper one, away from the edge itself).
+    let best = { u: 0, fl: 0, score: -1 };
+    for (let i = 0; i + 1 < p.depths.length; i++) {
+      const u = frac([...p.out[i], ...p.out[i + 1]], close);
+      const fl = frac(p.flat[i + 1], (x) => x);
+      const score = Math.min(u, fl);
+      if (score > best.score) best = { u, fl, score };
+    }
+    sideStats.push(best);
+    innerSimilarity = Math.max(innerSimilarity, frac(p.ins, close));
   }
-  const uniformity = uSum / per.length, flatness = fSum / per.length;
-  // Every band side must look like frame; the picture just inside must differ on every side; a band
-  // that simply continues outside the outer quad is more likely table (or shadow) than frame.
-  const evidence = minSide < 0.4 ? 0 : Math.min(uniformity, flatness) * (1 - innerSimilarity) * (1 - 0.6 * outerSimilarity);
+  const beyond = per.flatMap((p) => p.beyond);
+  const outerSimilarity = frac(beyond, close);
+  // Every band side must look like frame – except one when the frame surrounds the picture (the
+  // label strip with logo and text often comes close to the picture); that side is then left out.
+  // The picture just inside must differ on every side; a band that simply continues outside the
+  // outer quad is more likely table (or shadow) than frame.
+  sideStats.sort((a, b) => a.score - b.score);
+  const used = sideStats.length >= 4 ? sideStats.slice(1) : sideStats;
+  const uniformity = used.reduce((a, x) => a + x.u, 0) / used.length;
+  const flatness = used.reduce((a, x) => a + x.fl, 0) / used.length;
+  const evidence = used[0].score < 0.4 ? 0 : Math.min(uniformity, flatness) * (1 - innerSimilarity) * (1 - 0.6 * outerSimilarity);
   return { uniformity, flatness, innerSimilarity, outerSimilarity, evidence, bandSides: per.length, minBand };
 }
 

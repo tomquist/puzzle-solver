@@ -5,6 +5,7 @@
  */
 import { createContext, use, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ProgressRecord, PuzzleRecord } from '../../model/types';
+import { resizeRGBA } from '../../cv/resize';
 import { blobToRGBA } from '../../platform/imageio';
 import type { PipelineApi } from '../../worker/api';
 import { EmptyState, ErrorState, Spinner } from '../components/Feedback';
@@ -57,7 +58,13 @@ async function loadIntoPipeline(pipeline: PipelineApi, puzzle: PuzzleRecord, blo
   if (!p) {
     p = (async () => {
       // Full resolution; the buffer may be transferred to the worker, so it is not kept here.
-      const rgba = await blobToRGBA(blob, 16384);
+      let rgba = await blobToRGBA(blob, 16384);
+      const { width, height } = puzzle.reference;
+      if (rgba.width !== width || rgba.height !== height) {
+        // Larger than the phone canvas limit (older or imported puzzle): match the stored size so
+        // placements are in reference coordinates.
+        rgba = resizeRGBA(rgba, width, height);
+      }
       await pipeline.loadReference(puzzle.id, rgba, puzzle.grid, puzzle.cut);
       loadedKeys.set(puzzle.id, key);
     })().finally(() => inflight.delete(flightKey));

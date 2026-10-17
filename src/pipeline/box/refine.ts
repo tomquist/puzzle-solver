@@ -102,7 +102,7 @@ export function refineQuad(photo: RGBAImage, quad: Quad, opts: RefineOptions): R
     if (cand.length >= 8) {
       const sorted = [...strengths].sort((a, b) => a - b);
       const ref = sorted[Math.floor(sorted.length * 0.75)];
-      // Edge must be reasonably strong compared with the side's typical edge (≥ 8 levels absolute).
+      // Edge must be reasonably strong compared with the side's typical edge (≥ 14 levels absolute).
       const minV = Math.max(14, 0.35 * ref);
       for (const c of cand) if (c.v >= minV) pts.push(c.p);
     }
