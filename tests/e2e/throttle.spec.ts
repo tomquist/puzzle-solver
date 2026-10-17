@@ -152,7 +152,8 @@ test('slow phone: progress updates, UI stays responsive, scan finishes', async (
   await page.waitForTimeout(300);
   // The worker is not CPU-throttled, so on some machines the scan finishes while we are on the
   // Picture tab; the app then opens the result by itself and the tab bar is gone.
-  const scanTab = page.getByRole('link', { name: 'Scan' });
+  // Only the tab bar's Scan link: the result screen has a "Scan more" link that must not be hit.
+  const scanTab = page.getByRole('navigation', { name: 'Puzzle sections' }).getByRole('link', { name: /Scan/ });
   if (await scanTab.isVisible()) await scanTab.click({ timeout: 10_000 }).catch(() => {});
 
   // The analysis continues in the worker and opens the result when done.
