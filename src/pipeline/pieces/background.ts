@@ -23,6 +23,11 @@ const W_L = 0.5;
 const RHO_MIN = 0.8;
 /** Cost (in sigmas) of explaining a pixel as the deepest accepted shadow; shallower shadows cost less. */
 const SHADOW_PENALTY = 2.5;
+/**
+ * Further cost (sigmas per unit of ρ) of darkening beyond RHO_MIN: cast shadows next to pieces
+ * hardly get that deep (large shadow zones are left to the local table model), dark pieces do.
+ */
+const DEEP_SHADOW_SLOPE = Number(globalThis.process?.env?.DSS ?? 25);
 /** Modelled table lightness from which saturated pixels are compared by lightness only (over-exposure). */
 const CLIP_TABLE_L = 85;
 /** Floors for the per-channel noise sigma (Lab units), so noise-free backgrounds stay sane. */
@@ -64,7 +69,7 @@ export function backgroundAt(model: Pick<BackgroundModel, 'coefficients' | 'widt
 
 /** Bilinear interpolation of the local residual grid at photo pixel (x, y). */
 export function localAt(g: LocalTableGrid, x: number, y: number): [number, number, number] {
-  const fx = Math.max(0, Math.min(g.cols - 1, (x + 0.5) / g.cellW - 0.5)), fy = Math.max(0, Math.min(g.rows - 1, (y + 0.5) / g.cellH - 0.5));
+  const fx = Math.max(0, Math.min(g.cols - 1, (x + 0.5) / g.cellW)), fy = Math.max(0, Math.min(g.rows - 1, (y + 0.5) / g.cellH));
   const j0 = Math.min(g.cols - 2, Math.floor(fx)), i0 = Math.min(g.rows - 2, Math.floor(fy));
   if (g.cols < 2 || g.rows < 2) {
     const j = Math.round(fx), i = Math.round(fy), o = (i * g.cols + j) * 3;
@@ -82,7 +87,7 @@ export function localAt(g: LocalTableGrid, x: number, y: number): [number, numbe
 
 /** Local residual grid interpolated along one photo row: 3 values per node column. */
 function localRow(g: LocalTableGrid, y: number): Float32Array {
-  const fy = Math.max(0, Math.min(g.rows - 1, (y + 0.5) / g.cellH - 0.5));
+  const fy = Math.max(0, Math.min(g.rows - 1, (y + 0.5) / g.cellH));
   const i0 = Math.min(Math.max(0, g.rows - 2), Math.floor(fy)), i1 = Math.min(g.rows - 1, i0 + 1), ty = fy - i0;
   const row = new Float32Array(g.cols * 3);
   for (let j = 0; j < g.cols; j++) {
@@ -95,13 +100,14 @@ function localRow(g: LocalTableGrid, y: number): Float32Array {
  * Local table-colour corrections: the median Lab residual (photo minus smooth model) of the table
  * pixels (`exclude` = clear objects) in a `cell`-sized window around each node of a grid with half
  * that spacing, so shadow zones and local lighting the quadratic surface cannot follow become
- * table. Nodes with too little table are filled from their neighbours. Returns null when the
+ * table. The outer nodes sit on the photo border (half windows there), so a shadow reaching in from
+ * the edge is followed up to the edge. Nodes with too little table are filled from their neighbours. Returns null when the
  * residuals are negligible everywhere (< LOCAL_MIN_RESIDUAL sigmas).
  */
 export function fitLocalTable(photo: RGBAImage, fit: BackgroundFit, exclude: Mask, cell: number): LocalTableGrid | null {
   const { width: w, height: h, data } = photo;
-  const cols = Math.max(1, Math.round((2 * w) / cell)), rows = Math.max(1, Math.round((2 * h) / cell));
-  const cellW = w / cols, cellH = h / rows;
+  const cols = Math.max(2, Math.round((2 * w) / cell) + 1), rows = Math.max(2, Math.round((2 * h) / cell) + 1);
+  const cellW = w / (cols - 1), cellH = h / (rows - 1);
   const step = Math.max(2, Math.round(cell / 18));
   const res = new Float32Array(cols * rows * 3);
   const valid = new Uint8Array(cols * rows);
@@ -110,7 +116,7 @@ export function fitLocalTable(photo: RGBAImage, fit: BackgroundFit, exclude: Mas
   for (let i = 0; i < rows; i++) {
     for (let j = 0; j < cols; j++) {
       vals[0].length = vals[1].length = vals[2].length = 0;
-      const cx = (j + 0.5) * cellW, cy = (i + 0.5) * cellH;
+      const cx = j * cellW, cy = i * cellH;
       const x0 = Math.max(0, Math.round(cx - cell / 2)), x1 = Math.min(w, Math.round(cx + cell / 2));
       const y0 = Math.max(0, Math.round(cy - cell / 2)), y1 = Math.min(h, Math.round(cy + cell / 2));
       let n = 0;
@@ -180,17 +186,20 @@ export function lightingRatio(model: Pick<BackgroundModel, 'coefficients'>): num
 
 /**
  * Noise-normalised colour distance of a Lab pixel to the background colour (bL, ba, bb), tolerant
- * to cast shadows. `is*` are inverse sigmas. Shared by the model fit and the per-pixel score.
+ * to cast shadows. `is*` are inverse sigmas. Shared by the model fit and the per-pixel score; the
+ * fit leaves out the cost of darkening beyond RHO_MIN (`deep` = 0), so shadow zones stay table
+ * there and are left to the local model rather than becoming a further table colour.
  */
-function distance(L: number, a: number, b: number, bL: number, ba: number, bb: number, isL: number, isa: number, isb: number): number {
+function distance(L: number, a: number, b: number, bL: number, ba: number, bb: number, isL: number, isa: number, isb: number, deep = 0): number {
   const dL = (L - bL) * isL, da = (a - ba) * isa, db = (b - bb) * isb;
   let d2 = W_L * dL * dL + da * da + db * db;
   if (L < bL) {
     // Shadow hypothesis: Lab of an RGB-scaled colour ≈ (ρ(bL + 16) − 16, ρ·ba, ρ·bb).
     const ref = bL + 16;
-    const rho = ref > 1 ? Math.max(RHO_MIN, (L + 16) / ref) : 1;
+    const raw = ref > 1 ? (L + 16) / ref : 1;
+    const rho = Math.max(RHO_MIN, raw);
     const sL = (L + 16 - rho * ref) * isL, sa = (a - rho * ba) * isa, sb = (b - rho * bb) * isb;
-    const pen = (SHADOW_PENALTY * (1 - rho)) / (1 - RHO_MIN);
+    const pen = (SHADOW_PENALTY * (1 - rho)) / (1 - RHO_MIN) + deep * (rho - raw);
     const s2 = W_L * sL * sL + sa * sa + sb * sb + pen * pen;
     if (s2 < d2) d2 = s2;
   }
@@ -648,11 +657,11 @@ export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayIma
   const us = new Float32Array(w);
   for (let x = 0; x < w; x++) us[x] = norm(x, w);
   const lut = F_LUT, lin = LIN;
-  const wl = W_L, rhoMin = RHO_MIN, pen0 = SHADOW_PENALTY / (1 - RHO_MIN);
+  const wl = W_L, rhoMin = RHO_MIN, pen0 = SHADOW_PENALTY / (1 - RHO_MIN), deep = DEEP_SHADOW_SLOPE;
   // Local corrections per pixel column for the current row (bilinear in the grid).
   const g = model.local;
   const corr = g ? new Float32Array(w * 3) : null;
-  const colPos = g ? Float32Array.from({ length: w }, (_, x) => Math.max(0, Math.min(g.cols - 1, (x + 0.5) / g.cellW - 0.5))) : null;
+  const colPos = g ? Float32Array.from({ length: w }, (_, x) => Math.max(0, Math.min(g.cols - 1, (x + 0.5) / g.cellW))) : null;
   for (let y = 0; y < h; y++) {
     const v = norm(y, h);
     // c(u) = A + B·u + k3·u² per channel for this row.
@@ -695,10 +704,10 @@ export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayIma
         d2 = Math.min(d2, wl * dL * dL);
       } else if (L < bL) {
         const ref = bL + 16;
-        let rho = ref > 1 ? (L + 16) / ref : 1;
-        if (rho < rhoMin) rho = rhoMin;
+        const raw = ref > 1 ? (L + 16) / ref : 1;
+        const rho = raw < rhoMin ? rhoMin : raw;
         const sL = (L + 16 - rho * ref) * isL, sa = (A - rho * ba) * isa, sb = (B - rho * bb) * isb;
-        const pen = pen0 * (1 - rho);
+        const pen = pen0 * (1 - rho) + deep * (rho - raw);
         const s2 = wl * sL * sL + sa * sa + sb * sb + pen * pen;
         if (s2 < d2) d2 = s2;
       }

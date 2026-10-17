@@ -61,7 +61,7 @@ export interface BackgroundModel {
 export interface LocalTableGrid {
   cols: number;
   rows: number;
-  /** Cell size in photo px; node (i, j) sits at the centre of cell (i, j). */
+  /** Node spacing in photo px; node (i, j) sits at (j·cellW, i·cellH), the outer nodes on the photo border. */
   cellW: number;
   cellH: number;
   /** Lab residual per node, 3 values per node, row-major. */
