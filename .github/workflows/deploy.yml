@@ -82,8 +82,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
+      - name: Install browsers (Chromium + WebKit for Mobile Safari)
+        run: npx playwright install --with-deps chromium webkit
 
       - name: Run Playwright tests
         run: npm run test:e2e
