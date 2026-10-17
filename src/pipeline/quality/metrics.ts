@@ -3,7 +3,6 @@
  * live camera frames). This module only MEASURES; deciding what counts as a problem (thresholds,
  * messages) is up to the caller.
  */
-import { saturationValue } from '../../cv/color';
 import { createMask, type GrayImage, type Mask, type RGBAImage } from '../../cv/image';
 
 /**
@@ -76,15 +75,20 @@ export interface ExposureStats {
   mean: number;
   /** Fraction of pixels with luminance <= 6 (crushed blacks). */
   clippedLow: number;
-  /** Fraction of pixels with any channel >= 250 (blown highlights). */
+  /** Fraction of pixels with any channel >= `highThreshold` (blown highlights; default 250). */
   clippedHigh: number;
   /** 5th and 95th luminance percentiles, 0..1. */
   p05: number;
   p95: number;
 }
 
-/** Exposure statistics of an RGBA image, optionally restricted to a mask. */
-export function exposureStats(img: RGBAImage, mask?: Mask): ExposureStats {
+/**
+ * Exposure statistics of an RGBA image, optionally restricted to a mask. `highThreshold` is the
+ * channel value counted as clipped (use 254 when bright-but-valid content such as white print or a
+ * light table should not count).
+ */
+export function exposureStats(img: RGBAImage, mask?: Mask, opts: { highThreshold?: number } = {}): ExposureStats {
+  const highT = opts.highThreshold ?? 250;
   const hist = new Uint32Array(256);
   let n = 0, low = 0, high = 0, sum = 0;
   const d = img.data;
@@ -96,7 +100,7 @@ export function exposureStats(img: RGBAImage, mask?: Mask): ExposureStats {
     sum += y;
     n++;
     if (y <= 6) low++;
-    if (r >= 250 || g >= 250 || b >= 250) high++;
+    if (r >= highT || g >= highT || b >= highT) high++;
   }
   if (n === 0) return { mean: 0, clippedLow: 0, clippedHigh: 0, p05: 0, p95: 0 };
   const pct = (q: number) => {
@@ -120,9 +124,13 @@ export function glareMask(img: RGBAImage, opts: { minValue?: number; maxSaturati
   const maxSat = opts.maxSaturation ?? 0.12;
   const out = createMask(img.width, img.height);
   const d = img.data;
+  const minMax = minValue * 255;
   for (let i = 0, p = 0; i < out.data.length; i++, p += 4) {
-    const [s, v] = saturationValue(d[p], d[p + 1], d[p + 2]);
-    if (v >= minValue && s <= maxSat) out.data[i] = 1;
+    const r = d[p], g = d[p + 1], b = d[p + 2];
+    const max = r > g ? (r > b ? r : b) : g > b ? g : b;
+    if (max < minMax) continue;
+    const min = r < g ? (r < b ? r : b) : g < b ? g : b;
+    if ((max - min) / max <= maxSat) out.data[i] = 1;
   }
   return out;
 }

@@ -35,6 +35,24 @@ function labF(t: number): number {
   return t > 0.008856451679035631 ? Math.cbrt(t) : t * 7.787037037037037 + 16 / 116;
 }
 
+// Lookup table for labF over [0, LAB_F_MAX] (XYZ components of sRGB colours stay below ~1.0001).
+// Linear interpolation keeps the error below 1e-5 while avoiding millions of Math.cbrt calls.
+const LAB_F_STEPS = 8192;
+const LAB_F_MAX = 1.01;
+const LAB_F_TABLE = (() => {
+  const t = new Float32Array(LAB_F_STEPS + 2);
+  for (let i = 0; i <= LAB_F_STEPS + 1; i++) t[i] = labF((i / LAB_F_STEPS) * LAB_F_MAX);
+  return t;
+})();
+
+function labFFast(v: number): number {
+  if (v <= 0.008856451679035631 || v >= LAB_F_MAX) return labF(v);
+  const x = (v / LAB_F_MAX) * LAB_F_STEPS;
+  const i = x | 0;
+  const f = x - i;
+  return LAB_F_TABLE[i] + (LAB_F_TABLE[i + 1] - LAB_F_TABLE[i]) * f;
+}
+
 /** Convert one sRGB triple (0..255) to CIE L*a*b* (D65). L in 0..100, a/b roughly -128..127. */
 export function rgbToLab(r: number, g: number, b: number): [number, number, number] {
   const rl = SRGB_TO_LINEAR[Math.max(0, Math.min(255, Math.round(r)))];
@@ -59,7 +77,7 @@ export function rgbaToLab(img: RGBAImage): FloatImage {
     const x = (0.4124564 * rl + 0.3575761 * gl + 0.1804375 * bl) / 0.95047;
     const y = 0.2126729 * rl + 0.7151522 * gl + 0.072175 * bl;
     const z = (0.0193339 * rl + 0.119192 * gl + 0.9503041 * bl) / 1.08883;
-    const fx = labF(x), fy = labF(y), fz = labF(z);
+    const fx = labFFast(x), fy = labFFast(y), fz = labFFast(z);
     o[q] = 116 * fy - 16;
     o[q + 1] = 500 * (fx - fy);
     o[q + 2] = 200 * (fy - fz);
