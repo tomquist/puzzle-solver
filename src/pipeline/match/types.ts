@@ -12,8 +12,6 @@ export interface RefLevel {
   /** Unpadded level size. */
   width: number;
   height: number;
-  /** Extra Gaussian blur (level px) applied to this level and to templates built for it. */
-  blur: number;
   /** Padding on every side, in level px. */
   pad: number;
   /** Padded width (row stride in pixels). */

@@ -5,7 +5,6 @@
 import { rgbaToLab } from '../../cv/color';
 import type { Point } from '../../cv/geometry';
 import { createFloat, createMask, type FloatImage, type Mask, type RGBAImage } from '../../cv/image';
-import { gaussianKernel } from '../../cv/filter';
 import { resizeFloat } from '../../cv/resize';
 import type { RefLevel } from './types';
 
@@ -136,7 +135,7 @@ export interface Mapping {
   s: number;
 }
 
-/** A template in a pyramid level: valid (fully inside the eroded mask) pixels only. */
+/** A template in a pyramid level: only pixels whose footprint lies (mostly) inside the eroded mask. */
 export interface Template {
   n: number;
   /** Tight size of the valid pixels. */
@@ -228,16 +227,6 @@ export function buildTemplate(src: PhotoSource, m: Mapping, level: RefLevel, min
     }
   }
   if (n < minPixels) return null;
-  if (level.blur > 0) {
-    blurValid(vals, ok, gw, gh, level.blur);
-    mu0 = mu1 = mu2 = 0;
-    for (let k = 0; k < gw * gh; k++) {
-      if (!ok[k]) continue;
-      mu0 += vals[k * 3];
-      mu1 += vals[k * 3 + 1];
-      mu2 += vals[k * 3 + 2];
-    }
-  }
   mu0 /= n;
   mu1 /= n;
   mu2 /= n;
@@ -269,37 +258,6 @@ export function buildTemplate(src: PhotoSource, m: Mapping, level: RefLevel, min
     energy: e,
     variance: e / n,
   };
-}
-
-/** Separable Gaussian blur of a 3-channel grid restricted to valid cells (normalised convolution). */
-function blurValid(vals: Float32Array, ok: Uint8Array, w: number, h: number, sigma: number): void {
-  const k = gaussianKernel(sigma, Math.max(1, Math.ceil(2 * sigma)));
-  const r = (k.length - 1) >> 1;
-  const tmp = new Float32Array(vals.length);
-  for (let pass = 0; pass < 2; pass++) {
-    const src = pass === 0 ? vals : tmp, dst = pass === 0 ? tmp : vals;
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const i = y * w + x;
-        if (!ok[i]) continue;
-        let a0 = 0, a1 = 0, a2 = 0, ws = 0;
-        for (let t = -r; t <= r; t++) {
-          const xx = pass === 0 ? x + t : x, yy = pass === 0 ? y : y + t;
-          if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
-          const j = yy * w + xx;
-          if (!ok[j]) continue;
-          const wt = k[t + r];
-          a0 += src[j * 3] * wt;
-          a1 += src[j * 3 + 1] * wt;
-          a2 += src[j * 3 + 2] * wt;
-          ws += wt;
-        }
-        dst[i * 3] = a0 / ws;
-        dst[i * 3 + 1] = a1 / ws;
-        dst[i * 3 + 2] = a2 / ws;
-      }
-    }
-  }
 }
 
 /** Scoring constants (weighted-Lab units). */

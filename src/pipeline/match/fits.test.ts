@@ -1,0 +1,125 @@
+import { beforeAll, describe, expect, it } from 'vitest';
+import type { RGBAImage } from '../../cv/image';
+import type { DetectedRegion, FitHint, RegionMatch } from '../../model/types';
+import { loadTestAsset } from '../../testing/nodeImageIO';
+import { generateJigsaw, perturbReference, truthPieceShape, type JigsawCut, type PieceTruth } from '../../testing/synth';
+import { puzzleSideOf, profileMismatch } from './fits';
+import { buildReferenceIndex, findFits, matchRegions, type ReferenceIndex } from './index';
+import { inputFromTruth, renderScenario } from './testkit';
+
+function regionFromTruth(cut: JigsawCut, t: PieceTruth, id: number, orientationDeg: number): DetectedRegion {
+  const single = t.pieces.length === 1;
+  return {
+    id,
+    kind: single ? 'piece' : 'patch',
+    bbox: t.bbox,
+    contour: t.outline,
+    area: t.bbox.width * t.bbox.height,
+    touchesBorder: false,
+    shape: single ? truthPieceShape(cut, t) : undefined,
+    orientationDeg,
+    issues: [],
+  };
+}
+
+function find(hints: FitHint[], a: number, b: number): FitHint | undefined {
+  return hints.find((h) => (h.a === a && h.b === b) || (h.a === b && h.b === a));
+}
+
+/** Side of region `id` in hint `h`. */
+function sideOf(h: FitHint, id: number): string {
+  return h.a === id ? h.sideA : h.sideB;
+}
+
+describe('findFits', () => {
+  const rows = 16, cols = 20;
+  let ref: RGBAImage;
+  let index: ReferenceIndex;
+  let cut: JigsawCut;
+  let regions: DetectedRegion[];
+  let matches: RegionMatch[];
+  let truth: PieceTruth[];
+  const at = (r: number, c: number) => r * cols + c;
+
+  beforeAll(() => {
+    ref = loadTestAsset('starry-night');
+    index = buildReferenceIndex(perturbReference(ref, { seed: 5 }), { rows, cols }, 'grid');
+    cut = generateJigsaw(rows, cols, ref.width, ref.height, 33);
+    const items = [
+      at(5, 5), at(5, 6), // horizontal neighbours
+      at(9, 10), at(10, 10), // vertical neighbours
+      [at(2, 14), at(2, 15), at(3, 14), at(3, 15)], // patch
+      at(4, 15), // below the patch
+      at(12, 3), at(7, 17), // unrelated
+    ];
+    const scene = renderScenario(ref, cut, { seed: 8, items, scale: [1.25, 1.25] });
+    truth = scene.truth;
+    const inputs = truth.map((t, i) => inputFromTruth(scene.photo, cut, t, i + 1, { withShape: true }));
+    regions = truth.map((t, i) => regionFromTruth(cut, t, i + 1, inputs[i].orientationDeg));
+    matches = matchRegions(index, inputs);
+  });
+
+  it('maps local sides to puzzle sides consistently with the placement rotation', () => {
+    for (let i = 0; i < truth.length; i++) {
+      const shape = regions[i].shape;
+      if (!shape) continue;
+      const piece = cut.pieces[truth[i].pieces[0]];
+      for (let s = 0; s < 4; s++) {
+        const side = puzzleSideOf(shape, truth[i].rotationDeg, s);
+        expect(shape.sides[s].kind).toBe(piece.sides[side]);
+      }
+    }
+  });
+
+  it('finds location (+shape) hints for neighbouring pieces and a piece next to a patch', () => {
+    expect(matches.every((m) => m.status === 'confident')).toBe(true);
+    const hints = findFits(regions, matches, { rows, cols });
+    const h12 = find(hints, 1, 2)!;
+    expect(h12).toBeDefined();
+    expect(sideOf(h12, 1)).toBe('right');
+    expect(sideOf(h12, 2)).toBe('left');
+    expect(h12.reason).toBe('location+shape');
+    const h34 = find(hints, 3, 4)!;
+    expect(h34).toBeDefined();
+    expect(sideOf(h34, 3)).toBe('bottom');
+    expect(sideOf(h34, 4)).toBe('top');
+    const hp = find(hints, 5, 6)!;
+    expect(hp).toBeDefined();
+    expect(sideOf(hp, 6)).toBe('top');
+    expect(sideOf(hp, 5)).toBe('bottom');
+    expect(hp.reason).toBe('location');
+    // Nothing for the unrelated pieces, no flooding.
+    expect(hints.filter((h) => [7, 8].includes(h.a) || [7, 8].includes(h.b))).toEqual([]);
+    for (const h of hints) expect(h.confidence).toBeGreaterThan(0);
+    const perRegion = new Map<number, number>();
+    for (const h of hints) for (const id of [h.a, h.b]) perRegion.set(id, (perRegion.get(id) ?? 0) + 1);
+    expect(Math.max(...perRegion.values())).toBeLessThanOrEqual(3);
+  });
+
+  it('finds shape-only hints when the locations are ambiguous', () => {
+    // Pretend the image content was ambiguous: wrong, low-confidence locations, correct rotations.
+    const vague: RegionMatch[] = matches.map((m, i) => ({
+      regionId: m.regionId,
+      status: 'ambiguous',
+      candidates: [{ row: (i * 7) % rows, col: (i * 3) % cols, x: 0, y: 0, rotationDeg: truth[i].rotationDeg, score: 0.3, confidence: 0.2 }],
+    }));
+    const hints = findFits(regions, vague, { rows, cols });
+    const h12 = find(hints, 1, 2)!;
+    expect(h12?.reason).toBe('shape');
+    expect(sideOf(h12, 1)).toBe('right');
+    const h34 = find(hints, 3, 4)!;
+    expect(h34?.reason).toBe('shape');
+    expect(sideOf(h34, 4)).toBe('top');
+    // Only strong, mutually best fits: no hints between pieces that are not neighbours.
+    for (const h of hints) {
+      const ok = (find([h], 1, 2) ?? find([h], 3, 4)) !== undefined;
+      expect(ok).toBe(true);
+    }
+  });
+
+  it('measures profile mismatch of complementary sides', () => {
+    const a = [0, 0.1, 0.3, 0.1, 0];
+    expect(profileMismatch(a, a.map((v) => -v).reverse())).toBeCloseTo(0, 10);
+    expect(profileMismatch(a, a)).toBeGreaterThan(0.1);
+  });
+});

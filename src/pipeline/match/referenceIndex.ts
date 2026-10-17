@@ -1,18 +1,18 @@
 import { rgbaToLab } from '../../cv/color';
 import { gaussianBlurFloat } from '../../cv/filter';
 import type { FloatImage, RGBAImage } from '../../cv/image';
-import { resizeFloat } from '../../cv/resize';
+import { resizeFloat, resizeRGBA } from '../../cv/resize';
 import type { CutStyle, GridSpec } from '../../model/types';
 import type { RefLevel, ReferenceIndex } from './types';
 
 /** Lab channel weights: chroma counts more than lightness (prints differ mostly in tone). */
 export const CHANNEL_WEIGHTS: [number, number, number] = [1, 1.6, 1.6];
 
-/** Extra blur (px) of the coarsest level. */
-export const COARSE_BLUR = 0;
-
-/** Target pixels-per-cell of the pyramid levels (capped at the native resolution). */
-const LEVEL_PPC = process.env.PPC ? JSON.parse(process.env.PPC) as number[] : [4, 8, 16, 32];
+/**
+ * Target pixels-per-cell of the pyramid levels (capped at the native resolution): 4 = prefilter,
+ * 8 = dense coarse search, 16 / 32 = refinement.
+ */
+const LEVEL_PPC = [4, 8, 16, 32];
 
 function padLevel(img: FloatImage, pad: number): { data: Float32Array; sq: Float32Array; stride: number; rows: number } {
   const { width: w, height: h } = img;
@@ -75,30 +75,38 @@ function addPrefix(level: RefLevel): void {
 export function buildReferenceIndex(reference: RGBAImage, grid: GridSpec, cut: CutStyle): ReferenceIndex {
   const W = reference.width, H = reference.height;
   const cellW = W / grid.cols, cellH = H / grid.rows;
-  const lab = rgbaToLab(reference);
+  const ppcs: number[] = [];
+  for (const p of LEVEL_PPC) {
+    const v = Math.min(p, cellW);
+    if (!ppcs.some((q) => Math.abs(q - v) < 0.5)) ppcs.push(v);
+  }
+  const sizeOf = (ppc: number) => ({ w: Math.max(1, Math.round((W * ppc) / cellW)), h: Math.max(1, Math.round((H * ppc) / cellW)) });
+  // Lab of the finest level; a much larger reference (e.g. a high-res composite) is shrunk in RGB first.
+  const fine = sizeOf(ppcs[ppcs.length - 1]);
+  const src = fine.w * 2 < W ? resizeRGBA(reference, fine.w * 2, fine.h * 2) : reference;
+  const lab = rgbaToLab(src);
   const [wl, wa, wb] = CHANNEL_WEIGHTS;
   for (let i = 0; i < lab.data.length; i += 3) {
     lab.data[i] *= wl;
     lab.data[i + 1] *= wa;
     lab.data[i + 2] *= wb;
   }
-  const ppcs: number[] = [];
-  for (const p of LEVEL_PPC) {
-    const v = Math.min(p, cellW);
-    if (!ppcs.some((q) => Math.abs(q - v) < 0.5)) ppcs.push(v);
+  // Area-downsample fine to coarse, each level from the next finer one.
+  const raw: FloatImage[] = new Array(ppcs.length);
+  let prev: FloatImage = lab;
+  for (let li = ppcs.length - 1; li >= 0; li--) {
+    const { w, h } = sizeOf(ppcs[li]);
+    prev = prev.width === w && prev.height === h ? prev : resizeFloat(prev, w, h);
+    raw[li] = prev;
   }
   const levels: RefLevel[] = ppcs.map((ppc, li) => {
-    const scale = ppc / cellW;
-    let img: FloatImage = scale >= 0.999 ? lab : resizeFloat(lab, Math.round(W * scale), Math.round(H * scale));
-    // The coarsest level is searched with stride 2, so it is band-limited (wider correlation peaks);
-    // the template gets the same extra blur. A slight blur on every level makes the reference as soft
-    // as the resampled piece templates.
-    const blur = li === 0 && ppcs.length > 1 && COARSE_BLUR > 0 ? COARSE_BLUR : 0;
-    img = gaussianBlurFloat(img, Math.hypot(0.5, blur));
+    // A slight blur makes the reference as soft as the resampled piece templates.
+    const img = gaussianBlurFloat(raw[li], 0.5);
     const pad = Math.ceil(1.1 * ppc) + 3;
     const p = padLevel(img, pad);
-    const level: RefLevel = { ppc, scaleX: img.width / W, scaleY: img.height / H, width: img.width, height: img.height, blur, pad, ...p, center: [0, 0, 0] };
-    if (ppc < 12) addPrefix(level);
+    const level: RefLevel = { ppc, scaleX: img.width / W, scaleY: img.height / H, width: img.width, height: img.height, pad, ...p, center: [0, 0, 0] };
+    // Prefix sums for the levels searched densely (prefilter and coarse).
+    if (li <= 1 && ppc < 12) addPrefix(level);
     return level;
   });
   return { width: W, height: H, grid: { rows: grid.rows, cols: grid.cols }, cut, cellW, cellH, channelWeights: [wl, wa, wb], levels };

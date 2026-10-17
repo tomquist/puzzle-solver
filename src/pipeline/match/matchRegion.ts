@@ -1,10 +1,14 @@
 /**
  * Placement of one photographed region (single piece or assembled patch) in the reference.
  *
- * Pipeline: normalise the region into a few similarity hypotheses (4 orientations; scales) →
- * dense coarse search (masked multi-channel NCC + colour term) on the coarsest pyramid level →
- * keep the best ~30 distinct peaks → refine position on the finer levels → refine angle/scale on
- * the best few → rank, apply priors (flat sides at the border, placed cells) → confidence.
+ * Pipeline: normalise the region into a few similarity hypotheses (4 orientations from the corners
+ * or the dominant outline orientation; scale from the body size) → masked multi-channel NCC (+ a
+ * weak mean-colour term) at every position of the 4 px/cell prefilter level → stride-1 dense search
+ * on the 8 px/cell level around the best 10 % → keep the best ~30 distinct peaks → refine the
+ * position on the 16 and 32 px/cell levels → refine angle (±4°) / scale (±10 %) of the best few →
+ * rank with priors (flat sides must face the border, placed cells) → confidence from score and
+ * margin. The search is a sliding search for every cut style; grid cells only enter as priors and
+ * when reporting row/col.
  */
 import { findSimilarity, type Point } from '../../cv/geometry';
 import { cellKey, type CellRef, type MatchStatus, type Placement, type RegionMatch, type SideKind } from '../../model/types';
@@ -153,8 +157,9 @@ function topLeftFor(level: RefLevel, t: Template, ref: Point): { X: number; Y: n
 }
 
 /** Fraction of prefilter positions whose neighbourhoods are evaluated on the coarse level. */
-const PREFILTER_KEEP = +(process.env.PREKEEP ?? 0.1);
-const PRE_WIN = +(process.env.PREWIN ?? 1);
+const PREFILTER_KEEP = 0.1;
+/** Half-width (coarse px) of the neighbourhood evaluated around each kept prefilter position. */
+const PRE_WIN = 1;
 
 /** Range of top-left positions whose pivot lies inside the picture (± a small margin). */
 function searchBounds(level: RefLevel, t: Template): { x0: number; x1: number; y0: number; y1: number } | null {
@@ -313,12 +318,18 @@ function sigmoid(x: number): number {
 }
 
 /**
- * Calibrated confidence from the best score and the margin to the best distinct alternative
- * (fitted on synthetic scans; see match.test.ts).
+ * Confidence that the best placement is right, from its score and the margin over the best distinct
+ * alternative: a logistic fit on synthetic scans (Starry Night 20×16, Great Wave 40×25), made a bit
+ * more conservative because real photos are harder.
  */
 export function matchConfidence(score: number, margin: number): number {
-  return sigmoid(9 * (score - 0.42)) * (1 - Math.exp(-Math.max(0, margin) / 0.045));
+  return sigmoid(4.6 + 3 * score + 1.5 * Math.log(Math.max(1e-4, margin)));
 }
+
+/** Confidence at or above which a match is reported as 'confident'. */
+export const CONFIDENT_THRESHOLD = 0.7;
+/** Best scores below this are reported as 'unmatched'. */
+export const UNMATCHED_SCORE = 0.15;
 
 /** Internal knobs of one matching run. */
 export interface MatchContext {
@@ -347,7 +358,7 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   const empty: MatchDetail = { match: { regionId: input.regionId, candidates: [], status: 'unmatched' } };
   // Body size estimate for the erosion radius.
   const roughBody = input.shape?.bodySize ?? input.expectedBodySize ?? Math.sqrt(Math.max(1, input.mask.data.reduce((s, v) => s + v, 0)));
-  const erode = Math.max(2, Math.round(roughBody * 0.035));
+  const erode = Math.max(2, Math.round(roughBody * 0.045));
   const src = makePhotoSource(input.image, input.mask, input.origin, erode, index.channelWeights, ctx.correction);
   if (src.area < 50) return empty;
   const { hyps } = makeHypotheses(index, input, src);
@@ -418,20 +429,24 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
       y: c.ref.y,
       rotationDeg: norm360(c.map.phi * DEG) % 360,
       score: c.score,
-      confidence: i === 0 ? conf : Math.min(share, 1 - conf) * sigmoid(9 * (c.score - 0.42)),
+      confidence: i === 0 ? conf : Math.min(share, 1 - conf) * sigmoid(8 * (c.score - 0.3)),
     };
   });
 
   let coveredCells: CellRef[] | undefined;
   if (isPatch) {
-    coveredCells = coveredCellsOf(index, input, best);
-    if (coveredCells.length > 0) {
-      const tl = coveredCells.reduce((a, b) => (b.row < a.row || (b.row === a.row && b.col < a.col) ? b : a));
-      candidates[0].row = tl.row;
-      candidates[0].col = tl.col;
-    }
+    // Patches report the top-most, then left-most covered cell as row/col.
+    chosen.forEach((c, i) => {
+      const cells = coveredCellsOf(index, input, c);
+      if (i === 0) coveredCells = cells;
+      if (cells.length > 0) {
+        const tl = cells.reduce((a, b) => (b.row < a.row || (b.row === a.row && b.col < a.col) ? b : a));
+        candidates[i].row = tl.row;
+        candidates[i].col = tl.col;
+      }
+    });
   }
-  const status: MatchStatus = best.score < 0.2 ? 'unmatched' : conf >= 0.6 ? 'confident' : 'ambiguous';
+  const status: MatchStatus = best.score < UNMATCHED_SCORE ? 'unmatched' : conf >= CONFIDENT_THRESHOLD ? 'confident' : 'ambiguous';
   return { match: { regionId: input.regionId, candidates, coveredCells, status }, best: { map: best.map, ref: best.ref }, src };
 }
 

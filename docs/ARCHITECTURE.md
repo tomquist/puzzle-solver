@@ -173,6 +173,7 @@ assessFrame(frame: RGBAImage): FrameQuality
 ```ts
 buildReferenceIndex(reference: RGBAImage, grid: GridSpec, cut: CutStyle): ReferenceIndex
 matchRegion(index: ReferenceIndex, input: MatchInput, opts?: MatchOptions): RegionMatch
+matchRegions(index, inputs: MatchInput[], opts?): RegionMatch[]   // whole scan; 2 passes with photo→print colour correction
   // MatchInput { regionId; kind: RegionKind; image: RGBAImage (bbox crop); mask: Mask (same size);
   //              origin: Point (crop origin in photo coords); shape?: PieceShape (photo coords);
   //              orientationDeg: number; expectedBodySize?: number /* photo px per cell */ }
@@ -180,8 +181,9 @@ matchRegion(index: ReferenceIndex, input: MatchInput, opts?: MatchOptions): Regi
 findFits(regions: DetectedRegion[], matches: RegionMatch[], grid: GridSpec): FitHint[]
 // synthetic data for tests
 generateJigsaw(rows, cols, width, height, seed): JigsawCut       // piece outlines in reference coords
-renderPiecesPhoto(reference, cut, pieces: number[], opts): { photo: RGBAImage; truth: PieceTruth[] }
-renderBoxPhoto(reference, opts): { photo: RGBAImage; quad: Quad }
+renderPiecesPhoto(reference, cut, pieces: (number | number[])[], opts): { photo: RGBAImage; truth: PieceTruth[] }  // arrays = patches
+renderBoxPhoto(reference, opts): { photo: RGBAImage; pictureQuad: Quad; lidQuad: Quad }
+truthPieceShape(cut, truth): PieceShape;  perturbReference(img, opts): RGBAImage
 ```
 
 ### storage (`src/storage/`, `src/pipeline/grid.ts`)

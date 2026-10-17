@@ -156,11 +156,14 @@ export function findFits(regions: DetectedRegion[], matches: RegionMatch[], grid
     const A = s.p, B = r.other.p;
     const sa = puzzleSideOf(s.shape, A.rotationDeg, s.i);
     const sb = puzzleSideOf(r.other.shape, B.rotationDeg, r.other.i);
-    let conf = Math.max(0, 1 - r.rms / MAX_PROFILE_RMS) * Math.min(1, (Math.min(r.second, back.second) / Math.max(1e-6, r.rms) - 1) / 2);
-    if (sb !== opposite(sa)) conf *= 0.5; // placements' rotations disagree with this fit
-    conf = Math.min(0.9, conf);
     const k = key(A.region.id, B.region.id, SIDES[sa]);
     const existing = hints.get(k);
+    // Two confidently placed regions can only fit where their locations say so.
+    const bothPlaced = A.confidence >= MIN_PLACEMENT_CONFIDENCE && B.confidence >= MIN_PLACEMENT_CONFIDENCE;
+    if (bothPlaced && !existing) continue;
+    let conf = Math.max(0, 1 - r.rms / MAX_PROFILE_RMS) * Math.min(1, (Math.min(r.second, back.second) / Math.max(1e-6, r.rms) - 1) / 2);
+    if (sb !== opposite(sa)) conf *= 0.5; // the placements' rotations disagree with this fit
+    conf = Math.min(0.9, conf);
     if (existing) {
       if (existing.reason === 'location') {
         existing.reason = 'location+shape';
