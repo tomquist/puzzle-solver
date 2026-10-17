@@ -12,7 +12,7 @@ import { componentMask, labelComponents, labelRuns, removeSmallComponents } from
 import { traceOuterContour } from '../../cv/contour';
 import { distanceTransform } from '../../cv/distance';
 import { solveLinear, type Point } from '../../cv/geometry';
-import { createGray, createMask, cropMask, cropRGBA, maskArea, maskBounds, type GrayImage, type Mask, type RGBAImage, type Rect } from '../../cv/image';
+import { cloneMask, createGray, createMask, cropMask, cropRGBA, maskArea, maskBounds, type GrayImage, type Mask, type RGBAImage, type Rect } from '../../cv/image';
 import { close, dilate, erode, fillHoles, open } from '../../cv/morphology';
 import { resizeMask } from '../../cv/resize';
 import { boxBlurGray, sobel } from '../../cv/filter';
@@ -22,7 +22,7 @@ import type { DetectedRegion, PieceShape, QualityIssue, RegionKind } from '../..
 import { fitBackground, foregroundScore } from './background';
 import { assessPhoto, assessRegions } from './quality';
 import { analyzePieceShape, bodyOrientation, orientationHistogram } from './shape';
-import type { BackgroundModel, SegmentOptions, Segmentation, SegmentedRegion } from './types';
+import type { BackgroundModel, RegionDiagnostics, SegmentOptions, Segmentation, SegmentedRegion } from './types';
 import { boxBlurRGB, doubleMask, halveGray, median, offsetPoints } from './util';
 import { noiseSigma } from '../quality/metrics';
 import { rgbaToGray } from '../../cv/color';
@@ -463,6 +463,8 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   const th = chooseThreshold(score);
   let fg = hysteresis(score, th.high, th.low);
   lap('threshold');
+  const diag = opts.diagnostics;
+  if (diag) Object.assign(diag, { score, high: th.high, low: th.low, colour: cloneMask(fg), minArea });
   // Pixels only the texture cue found (colour could not separate them): kept for reporting.
   const texOnly = createMask(W, H);
   const addTexture = (tex: Mask | null) => {
@@ -478,7 +480,12 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   lap('texture');
   fg = close(fg, 2);
   fg = fillHoles(fg);
+  const unfiltered = diag ? cloneMask(fg) : null;
   fg = removeSmallComponents(fg, minArea);
+  if (diag && unfiltered) {
+    for (let i = 0; i < fg.data.length; i++) unfiltered.data[i] &= fg.data[i] ^ 1;
+    Object.assign(diag, { texture: texOnly, removed: unfiltered });
+  }
   lap('morphology');
   const { labels, stats } = labelComponents(fg, 8);
   lap('components');
@@ -492,6 +499,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   const refArea = singles.length > 0 ? median(singles.map((c) => c.area)) : others.length > 0 ? median(others.map((c) => c.area)) : 0;
   const refBody = singles.length > 0 ? median(singles.map((c) => c.shape!.bodySize)) : Math.sqrt(refArea);
   const noReference = singles.length === 0 && others.length < 3;
+  if (diag) Object.assign(diag, { refArea, refBody });
   // Expected single-piece area at a position (follows perspective size trends when measurable).
   const sizeTrend = fitSizeTrend(singles, W, H);
   const refAreaAt = (c: Candidate): number => {
@@ -565,6 +573,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   ordered.forEach((c, i) => {
     if (c.group !== undefined) groups.set(c.group, [...(groups.get(c.group) ?? []), i + 1]);
   });
+  const regionDiag: RegionDiagnostics[] = [];
   ordered.forEach((c, i) => {
     const r = regions[i].region;
     const issues: QualityIssue[] = r.issues;
@@ -587,6 +596,10 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     const unreliable = r.kind === 'unknown' || reassembled || (r.kind === 'piece' && (!c.shape || c.shape.confidence < UNCERTAIN_CONFIDENCE)) ||
       (r.kind === 'patch' && texFrac > 3 * TEXTURE_ASSISTED);
     const hardToSee = reassembled || contrast < LOW_REGION_CONTRAST || (texFrac > TEXTURE_ASSISTED && contrast < 2.5 * LOW_REGION_CONTRAST);
+    if (diag) {
+      const ra = refAreaAt(c);
+      regionDiag.push({ id: r.id, contrast, textureFraction: texFrac, merged: c.merged ?? 1, areaRatio: ra > 0 ? c.area / ra : 1, shapeConfidence: c.shape?.confidence ?? 0, split: c.group !== undefined });
+    }
     if (!c.touchesBorder && unreliable && hardToSee) {
       issues.push({ code: 'low_contrast', severity: 'warning', message: 'This piece is hard to tell from the background; its outline may be wrong.', hint: 'Use a plain background that contrasts with the pieces.', regionIds: [r.id], area: r.bbox });
     }
@@ -595,6 +608,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     }
   });
 
+  if (diag) diag.regions = regionDiag;
   const bodies = regions.filter((r) => r.region.shape).map((r) => r.region.shape!.bodySize);
   const background: BackgroundModel = {
     ...fit,

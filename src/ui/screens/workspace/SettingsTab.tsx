@@ -198,6 +198,16 @@ export function SettingsTab() {
         )}
       </section>
 
+      <section className="card stack-sm">
+        <h2 className="h3">Feedback</h2>
+        <p className="muted small">Was the puzzle picture found badly? Send the box photo and picture so detection can be improved. For a scan, use “Send feedback” at the end of its result.</p>
+        <div>
+          <a className="btn btn-wrap" href={href.feedback(puzzle.id)} data-testid="settings-feedback">
+            Send feedback about the box photo / picture
+          </a>
+        </div>
+      </section>
+
       <section className="card stack-sm danger-zone">
         <h2 className="h3">Start over</h2>
         <div className="row wrap gap-sm">

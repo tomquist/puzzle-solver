@@ -1,0 +1,6 @@
+{
+  "//": "Typecheck the Node tooling (not in the root tsconfig's include): npx tsc -p scripts/tsconfig.json",
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["./**/*.ts", "../bench", "../src/globals.d.ts"]
+}

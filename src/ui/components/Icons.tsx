@@ -46,6 +46,12 @@ export const IconDownload = (p: IconProps) => (
     <path d="M7 10l5 5 5-5M12 15V3" />
   </Svg>
 );
+export const IconShare = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7" />
+    <path d="M16 6l-4-4-4 4M12 2v13" />
+  </Svg>
+);
 export const IconImage = (p: IconProps) => (
   <Svg {...p}>
     <rect x="3" y="3" width="18" height="18" rx="2" />
