@@ -226,7 +226,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   const W = photo.width, H = photo.height;
   const patchRatio = opts.patchAreaRatio ?? 1.8;
   const fragRatio = opts.fragmentAreaRatio ?? 0.35;
-  const minArea = opts.minArea ?? Math.max(48, Math.round(2e-4 * W * H));
+  const minArea = opts.minArea ?? Math.max(48, Math.round(5e-5 * W * H));
 
   const timings = opts.timings;
   let t0 = performance.now();

@@ -12,7 +12,7 @@ import { erode, open } from '../../cv/morphology';
 import { sampleRGBA } from '../../cv/warp';
 import type { FrameQuality, QualityCode, QualityIssue, QualityReport, Severity } from '../../model/types';
 import { blurMetric, exposureStats, glareMask } from '../quality/metrics';
-import { backgroundAt, lightingRatio } from './background';
+import { backgroundAt } from './background';
 import type { Segmentation, SegmentedRegion } from './types';
 import { median, quantile } from './util';
 
@@ -349,7 +349,7 @@ export function assessPhoto(photo: RGBAImage, seg: Segmentation): QualityReport 
   }
 
   // Lighting gradient across the background.
-  const lr = lightingRatio(bgm);
+  const lr = bgm.lightingRatio;
   metrics.lightingRatio = lr;
   if (lr > T.unevenLighting) issues.push(issue('uneven_lighting', 'warning', 'The lighting is uneven.', HINT.lighting));
 

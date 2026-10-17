@@ -22,8 +22,8 @@ export interface BackgroundModel {
   /** Photo size the model was fitted for. */
   width: number;
   height: number;
-  /** Max − min of the modelled background lightness L* over the photo (lighting gradient). */
-  lightnessRange: number;
+  /** Brightest / darkest modelled background luminance over the photo (1 = even lighting). */
+  lightingRatio: number;
   /** Fraction of the photo classified as background. */
   coverage: number;
   /** Foreground score threshold (in background-sigma units) used for the segmentation. */
@@ -35,7 +35,7 @@ export interface BackgroundModel {
 }
 
 export interface SegmentOptions {
-  /** Ignore components smaller than this many pixels (default: 2e-4 · photo area, at least 48). */
+  /** Ignore components smaller than this many pixels (default: 5e-5 · photo area, at least 48). */
   minArea?: number;
   /** Regions larger than this multiple of the median single-piece area are patches (default 1.8). */
   patchAreaRatio?: number;

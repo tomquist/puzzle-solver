@@ -25,7 +25,7 @@ const SHADOW_PENALTY = 2.5;
 const SIGMA_FLOOR: [number, number, number] = [1.2, 1, 1];
 
 /** The fitted part of a {@link BackgroundModel} (segmentation statistics are added later). */
-export type BackgroundFit = Pick<BackgroundModel, 'color' | 'coefficients' | 'sigma' | 'width' | 'height' | 'lightnessRange'>;
+export type BackgroundFit = Pick<BackgroundModel, 'color' | 'coefficients' | 'sigma' | 'width' | 'height' | 'lightingRatio'>;
 
 function evalPoly(k: readonly number[], u: number, v: number): number {
   return k[0] + k[1] * u + k[2] * v + k[3] * u * u + k[4] * u * v + k[5] * v * v;
@@ -237,16 +237,7 @@ export function fitBackground(photo: RGBAImage): BackgroundFit {
     }
     if (m > 20) for (let ch = 0; ch < 3; ch++) sigma[ch] = Math.max(SIGMA_FLOOR[ch], 1.4826 * median(res[ch].subarray(0, m)));
   }
-  // Lightness range of the modelled surface over a 9×9 grid.
-  let lo = Infinity, hi = -Infinity;
-  for (let gy = 0; gy <= 8; gy++) {
-    for (let gx = 0; gx <= 8; gx++) {
-      const val = evalPoly(coefficients[0], gx / 4 - 1, gy / 4 - 1);
-      if (val < lo) lo = val;
-      if (val > hi) hi = val;
-    }
-  }
-  return { color, coefficients, sigma, width, height, lightnessRange: hi - lo };
+  return { color, coefficients, sigma, width, height, lightingRatio: lightingRatio({ coefficients }) };
 }
 
 /**

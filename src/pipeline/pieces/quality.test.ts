@@ -139,7 +139,7 @@ describe('assessPhoto on degraded photos', () => {
     const m = createMask(img.width, img.height);
     const cx = 60, cy = img.height - 70, r = 52;
     fillPolygon(m, Array.from({ length: 64 }, (_, i) => ({ x: cx + r * Math.cos((i / 64) * 2 * Math.PI), y: cy + 0.9 * r * Math.sin((i / 64) * 2 * Math.PI) })), 1);
-    // Crumb of ≈ 450 px (above the speck limit of 2e-4 · photo area, far below a piece).
+    // Crumb of ≈ 450 px (above the speck limit, far below a piece).
     fillPolygon(m, [{ x: img.width - 50, y: 20 }, { x: img.width - 22, y: 24 }, { x: img.width - 26, y: 44 }, { x: img.width - 48, y: 40 }], 1);
     for (let i = 0; i < m.data.length; i++) if (m.data[i]) img.data.set([200, 60, 50], i * 4);
     const q = report(img, 'odd');
