@@ -11,7 +11,9 @@ import type { FrameQuality } from '../../model/types';
 import { CAMERA_ERROR_TEXT, cameraPermission, CameraError, isCameraSupported, openCamera, type CameraSession } from '../../platform/camera';
 import { haptic, isCoarsePointer, isIOS } from '../../platform/device';
 import { usePipeline } from '../context/PipelineContext';
+import { usePrefs } from '../hooks/usePrefs';
 import { startFrameLoop } from '../lib/frameLoop';
+import { setDismissed } from '../lib/prefs';
 import { Banner } from './Feedback';
 import { IconCamera, IconCheck, IconClose, IconImage, IconInfo, IconTorch, IconUpload } from './Icons';
 
@@ -97,7 +99,14 @@ export function CameraCapture({
   const [cam, setCam] = useState<CamState>({ kind: 'off' });
   const [quality, setQuality] = useState<FrameQuality>();
   const [torch, setTorch] = useState(false);
-  const [showTips, setShowTips] = useState(true);
+  const [prefs, updatePrefs] = usePrefs();
+  const tipsKey = `camera-tips:${context}`;
+  const [showTips, setShowTips] = useState(() => !prefs.dismissed.includes(tipsKey));
+  const [hideTipsForGood, setHideTipsForGood] = useState(() => prefs.dismissed.includes(tipsKey));
+  const closeTips = () => {
+    updatePrefs((p) => setDismissed(p, tipsKey, hideTipsForGood));
+    setShowTips(false);
+  };
   const [flash, setFlash] = useState(false);
   const [busy, setBusy] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -252,9 +261,15 @@ export function CameraCapture({
                 ))}
               </ul>
               {ios && <span className="small">For the sharpest photo use “Take photo” below.</span>}
-              <button className="btn btn-sm btn-on-dark" onClick={() => setShowTips(false)}>
-                Got it
-              </button>
+              <div className="camera-tips-actions">
+                <label className="camera-tips-check">
+                  <input type="checkbox" checked={hideTipsForGood} onChange={(e) => setHideTipsForGood(e.currentTarget.checked)} data-testid="tips-dont-show" />
+                  Don’t show again
+                </label>
+                <button className="btn btn-sm btn-on-dark" onClick={closeTips}>
+                  Got it
+                </button>
+              </div>
             </div>
           )}
           <div className="camera-controls">

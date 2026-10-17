@@ -77,3 +77,9 @@ export function savePrefs(storage: StorageLike | undefined, prefs: AppPrefs): vo
     // Storage full or blocked – the preference just isn't remembered.
   }
 }
+
+/** Remember (or forget) that the user does not want to see a hint again. */
+export function setDismissed(p: AppPrefs, key: string, dismissed: boolean): AppPrefs {
+  const rest = p.dismissed.filter((k) => k !== key);
+  return { ...p, dismissed: dismissed ? [...rest, key] : rest };
+}
