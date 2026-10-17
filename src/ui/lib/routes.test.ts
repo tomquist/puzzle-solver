@@ -42,6 +42,7 @@ describe('routeToHash', () => {
       { name: 'puzzle', id: 'p 1', tab: 'scan' },
       { name: 'puzzle', id: 'p1', tab: 'settings' },
       { name: 'scan', id: 'p1', scanId: 's/2' },
+      { name: 'place', id: 'p1', scanId: 's2' },
     ];
     for (const r of routes) expect(parseRoute(routeToHash(r))).toEqual(r);
   });
@@ -51,6 +52,9 @@ describe('routeToHash', () => {
     expect(href.puzzle('x')).toBe('#/puzzle/x');
     expect(href.puzzle('x', 'history')).toBe('#/puzzle/x/history');
     expect(href.scan('x', 'y')).toBe('#/puzzle/x/scan/y');
+    expect(href.place('x', 'y')).toBe('#/puzzle/x/scan/y/place');
+    expect(parseRoute('#/puzzle/x/scan/y/place')).toEqual({ name: 'place', id: 'x', scanId: 'y' });
+    expect(routePuzzleId(parseRoute('#/puzzle/x/scan/y/place'))).toBe('x');
   });
 
   it('finds the puzzle id of nested routes', () => {

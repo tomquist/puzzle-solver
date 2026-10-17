@@ -77,7 +77,7 @@ test('create a puzzle, scan pieces, see results, and find it again after reload'
   await expect(page.getByTestId('analysing')).toBeVisible();
   await shot(page, info, '08-analysing');
   await expect(page.getByTestId('scan-result')).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId('region-1')).toBeVisible();
+  await expect(page.locator('[data-testid^="item-"]').first()).toBeVisible();
   await shot(page, info, '09-scan-result');
   await shot(page, info, '09-scan-result-full', true);
 
@@ -91,7 +91,7 @@ test('create a puzzle, scan pieces, see results, and find it again after reload'
   }
 
   // Piece detail.
-  await page.getByTestId('piece-item-1').click();
+  await page.locator('[data-testid^="piece-item-"]').first().click();
   const sheet = page.getByRole('dialog');
   await expect(sheet).toBeVisible();
   await shot(page, info, '11-piece-detail');
@@ -112,7 +112,7 @@ test('create a puzzle, scan pieces, see results, and find it again after reload'
   const placeAll = page.getByTestId('place-all');
   if (await placeAll.isVisible()) {
     await placeAll.click();
-    await expect(page.getByRole('button', { name: 'Undo' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeVisible();
     await shot(page, info, '12-placed-snackbar');
   }
 
@@ -162,9 +162,9 @@ test('create a puzzle, scan pieces, see results, and find it again after reload'
   await expect(page.getByText('Latest scan')).toBeVisible();
   await page.getByText('Latest scan').click();
   await expect(page.getByTestId('scan-result')).toBeVisible();
-  await expect(page.getByTestId('region-1')).toBeVisible();
+  await expect(page.locator('[data-testid^="item-"]').first()).toBeVisible();
   await shot(page, info, '18-scan-result-dark');
-  await page.getByTestId('piece-item-2').click();
+  await page.locator('[data-testid^="piece-item-"]').nth(1).click();
   await expect(page.getByRole('dialog')).toBeVisible();
   await shot(page, info, '19-piece-detail-dark');
 

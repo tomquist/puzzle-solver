@@ -196,10 +196,10 @@ export function ZoomPanView({
         </div>
       </div>
       <div className="zoompan-controls">
-        <button className="icon-btn small glass" onClick={() => zoomBy(1.6)} aria-label="Zoom in">
+        <button className="icon-btn small glass zoom-step" onClick={() => zoomBy(1.6)} aria-label="Zoom in">
           <IconPlus size={18} />
         </button>
-        <button className="icon-btn small glass" onClick={() => zoomBy(1 / 1.6)} aria-label="Zoom out">
+        <button className="icon-btn small glass zoom-step" onClick={() => zoomBy(1 / 1.6)} aria-label="Zoom out">
           <span className="minus" aria-hidden="true" />
         </button>
         {zoomedIn && (

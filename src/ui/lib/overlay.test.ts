@@ -13,6 +13,8 @@ import {
   regionCenter,
   upArrow,
   zoomAt,
+  trimmedSegment,
+  badgeNotch,
 } from './overlay';
 
 describe('polygons', () => {
@@ -79,5 +81,22 @@ describe('zoom & pan', () => {
   it('clamps panning', () => {
     expect(clampPan({ scale: 1, x: 30, y: -500 }, 200, 200, 100, 100)).toEqual({ scale: 1, x: 0, y: -100 });
     expect(clampPan({ scale: 0.25, x: 0, y: 0 }, 200, 200, 100, 100)).toEqual({ scale: 0.25, x: 25, y: 25 });
+  });
+});
+
+describe('connections and turn notches', () => {
+  it('trims connection lines to the badge edges', () => {
+    const s = trimmedSegment({ x: 0, y: 0 }, { x: 100, y: 0 }, 10, 20)!;
+    expect(s.from).toEqual({ x: 10, y: 0 });
+    expect(s.to).toEqual({ x: 80, y: 0 });
+    expect(trimmedSegment({ x: 0, y: 0 }, { x: 15, y: 0 }, 10)).toBeNull();
+  });
+  it('points the badge notch to the piece top', () => {
+    const [tip] = badgeNotch({ x: 50, y: 50 }, 10, 0);
+    expect(tip.x).toBeCloseTo(50);
+    expect(tip.y).toBeCloseTo(50 - 15.5);
+    const [tip90] = badgeNotch({ x: 50, y: 50 }, 10, 90); // needs a clockwise turn: top is on the left
+    expect(tip90.x).toBeCloseTo(50 - 15.5);
+    expect(tip90.y).toBeCloseTo(50);
   });
 });

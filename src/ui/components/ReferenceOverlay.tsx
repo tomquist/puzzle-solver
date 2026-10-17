@@ -1,15 +1,18 @@
-/** SVG overlay on the reference picture: grid, placed cells, numbered markers, coverage rects. */
+/** SVG overlay on the reference picture: grid, placed cells, numbered markers, links, coverage. */
 import type { Rect } from '../../cv/image';
 import type { CellRef, GridSpec } from '../../model/types';
-import { cellRect, gridPath, markerRadius } from '../lib/overlay';
-import type { DisplayStatus } from '../lib/pieces';
+import type { CellBounds } from '../lib/items';
+import { cellRect, gridPath, markerRadius, trimmedSegment } from '../lib/overlay';
+import type { ItemTone } from './ScanOverlay';
 
 export interface RefMarker {
-  id: number;
+  key: string;
+  label: number;
   x: number;
   y: number;
-  status: DisplayStatus;
-  /** Cells covered (patches) – drawn as an outline. */
+  tone: ItemTone;
+  /** Cells of an assembled grid – outlined as one block. */
+  bounds?: CellBounds;
   cells?: CellRef[];
 }
 
@@ -20,9 +23,10 @@ export function ReferenceOverlay({
   showGrid = true,
   placed = [],
   markers = [],
-  selectedId,
+  links = [],
+  selectedKey,
   coverage = [],
-  highlightCell,
+  highlight,
   scale,
   onMarker,
 }: {
@@ -32,14 +36,23 @@ export function ReferenceOverlay({
   showGrid?: boolean;
   placed?: CellRef[];
   markers?: RefMarker[];
-  selectedId?: number;
+  /** Pairs of marker keys to connect (pieces that go next to each other). */
+  links?: { a: string; b: string }[];
+  selectedKey?: string;
   coverage?: { rect: Rect; ok: boolean; label?: string }[];
-  highlightCell?: CellRef;
+  /** Cells to highlight (the selected item's target). */
+  highlight?: CellRef[];
   /** Screen px per reference px (keeps markers legible when zoomed out). */
   scale: number;
-  onMarker?: (id: number) => void;
+  onMarker?: (key: string) => void;
 }) {
   const r = grid ? Math.max(markerRadius(grid, width, height), 11 / scale) : 12 / scale;
+  const byKey = new Map(markers.map((m) => [m.key, m]));
+  const block = (b: CellBounds) => {
+    const a = cellRect({ row: b.row0, col: b.col0 }, grid!, width, height);
+    const z = cellRect({ row: b.row1, col: b.col1 }, grid!, width, height);
+    return { x: a.x, y: a.y, width: z.x + z.width - a.x, height: z.y + z.height - a.y };
+  };
   return (
     <svg className="overlay" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
       {grid &&
@@ -58,28 +71,42 @@ export function ReferenceOverlay({
           )}
         </g>
       ))}
-      {grid && highlightCell && (() => {
-        const rc = cellRect(highlightCell, grid, width, height);
-        return <rect className="highlight-cell" x={rc.x} y={rc.y} width={rc.width} height={rc.height} vectorEffect="non-scaling-stroke" />;
-      })()}
+      {grid &&
+        highlight?.map((c) => {
+          const rc = cellRect(c, grid, width, height);
+          return <rect key={`h${c.row},${c.col}`} className="highlight-cell" x={rc.x} y={rc.y} width={rc.width} height={rc.height} vectorEffect="non-scaling-stroke" />;
+        })}
+      {grid &&
+        markers.map((m) => {
+          if (!m.bounds) return null;
+          const b = block(m.bounds);
+          return <rect key={`b${m.key}`} className={`marker-block st-${m.tone}`} x={b.x} y={b.y} width={b.width} height={b.height} vectorEffect="non-scaling-stroke" />;
+        })}
+      {links.map((l) => {
+        const a = byKey.get(l.a);
+        const b = byKey.get(l.b);
+        const seg = a && b ? trimmedSegment(a, b, r) : null;
+        if (!seg) return null;
+        return (
+          <g key={`${l.a}-${l.b}`} className="link">
+            <line className="link-under" x1={seg.from.x} y1={seg.from.y} x2={seg.to.x} y2={seg.to.y} vectorEffect="non-scaling-stroke" />
+            <line className="link-line" x1={seg.from.x} y1={seg.from.y} x2={seg.to.x} y2={seg.to.y} vectorEffect="non-scaling-stroke" />
+          </g>
+        );
+      })}
       {markers.map((m) => (
         <g
-          key={m.id}
-          className={`marker st-${m.status}${selectedId === m.id ? ' selected' : ''}`}
-          onClick={onMarker ? () => onMarker(m.id) : undefined}
+          key={m.key}
+          className={`marker st-${m.tone}${selectedKey === m.key ? ' selected' : ''}`}
+          onClick={onMarker ? () => onMarker(m.key) : undefined}
           role={onMarker ? 'button' : undefined}
-          aria-label={`Piece ${m.id} goes here`}
-          data-testid={`marker-${m.id}`}
+          aria-label={onMarker ? `Where ${m.label} goes` : undefined}
+          data-testid={`marker-${m.key}`}
         >
-          {grid &&
-            m.cells?.map((c) => {
-              const rc = cellRect(c, grid, width, height);
-              return <rect key={`${c.row},${c.col}`} className="marker-cell" x={rc.x} y={rc.y} width={rc.width} height={rc.height} vectorEffect="non-scaling-stroke" />;
-            })}
           {onMarker && <circle className="hit" cx={m.x} cy={m.y} r={Math.max(r, 22 / scale)} />}
           <circle cx={m.x} cy={m.y} r={r} vectorEffect="non-scaling-stroke" />
           <text x={m.x} y={m.y} fontSize={r * 1.1} dy="0.36em" textAnchor="middle">
-            {m.id}
+            {m.label}
           </text>
         </g>
       ))}

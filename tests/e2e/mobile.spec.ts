@@ -98,15 +98,22 @@ test('mobile audit: every main screen', async ({ page }, info) => {
   await expect(page.getByTestId('analysing')).toBeVisible();
   await a.check('09-analysing');
   await expect(page.getByTestId('scan-result')).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId('region-1')).toBeVisible();
+  await expect(page.locator('[data-testid^="item-"]').first()).toBeVisible();
   await a.check('10-scan-result');
-  await page.locator('.quality-head').first().click();
-  await a.check('11-scan-result-issues');
+  if (await page.locator('.quality-head').count()) {
+    await page.locator('.quality-head').first().click();
+    await a.check('11-scan-result-issues');
+  }
   await page.getByRole('radio', { name: 'Both' }).click();
   await a.check('12-scan-result-both');
+  await page.getByTestId('view-options').click();
+  await expect(page.getByRole('dialog', { name: 'View options' })).toBeVisible();
+  await a.check('12b-view-options');
+  await page.keyboard.press('Escape');
+  await page.getByRole('radio', { name: 'Photo' }).click();
 
   // A piece that has a suggested place (so the sheet shows its Placed / Not this one actions).
-  await page.locator('.piece-item').filter({ hasNotText: /No (reliable )?match/ }).first().click();
+  await page.locator('[data-testid^="piece-item-"]').first().click();
   await expect(page.getByRole('dialog')).toBeVisible();
   await a.check('13-piece-detail');
   await page.getByRole('dialog').getByTestId('mark-placed').click();
@@ -115,21 +122,40 @@ test('mobile audit: every main screen', async ({ page }, info) => {
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toBeHidden();
 
+  // Guided placing mode: every step until the finish card.
+  await page.getByTestId('start-placing').click();
+  await expect(page.getByTestId('placing')).toBeVisible();
+  await a.check('15a-placing-step');
+  let unsureChecked = false;
+  for (let i = 0; i < 40 && !(await page.getByTestId('placing-done').isVisible()); i++) {
+    if (!unsureChecked && (await page.getByTestId('not-here').isVisible())) {
+      await a.check('15b-placing-unsure');
+      unsureChecked = true;
+    }
+    const before = await page.locator('.topbar-sub').textContent();
+    await page.getByTestId('placed').click();
+    await expect.poll(async () => (await page.getByTestId('placing-done').isVisible()) || (await page.locator('.topbar-sub').textContent()) !== before).toBe(true);
+  }
+  await expect(page.getByTestId('placing-done')).toBeVisible();
+  await a.check('15c-placing-done');
+  await page.goBack();
+  await expect(page.getByTestId('scan-result')).toBeVisible();
+
   const puzzleHash = new URL(page.url()).hash.replace(/\/scan\/.*$/, '');
   for (const tab of ['picture', 'history', 'settings'] as const) {
     await page.goto(`/?pipeline=mock${puzzleHash}/${tab}`);
     await expect(page.getByTestId(`tab-${tab}`)).toBeVisible();
     if (tab === 'history') await expect(page.getByTestId('scan-row')).toHaveCount(1);
-    await a.check(`15-${tab}`);
+    await a.check(`16-${tab}`);
   }
   await page.getByRole('button', { name: 'Delete puzzle' }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
-  await a.check('16-settings-delete-confirm');
+  await a.check('17-settings-delete-confirm');
   await page.getByRole('button', { name: 'Cancel' }).click();
 
   await page.goto('/?pipeline=mock');
   await expect(page.getByTestId('puzzle-card')).toHaveCount(1);
-  await a.check('17-home');
+  await a.check('18-home');
 
   a.save();
   expect(errors).toEqual([]);

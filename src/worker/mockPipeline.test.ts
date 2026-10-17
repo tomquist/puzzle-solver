@@ -76,6 +76,36 @@ describe('mock pipeline', () => {
         expect(onBorder).toBe(true);
       }
     }
+    // Groups: one assembled patch, one assembled pair of touching pieces, ≥ 1 neighbour group.
+    const groups = result.groups ?? [];
+    const kindOf = (id: number) => result.regions.find((r) => r.id === id)?.kind;
+    const assembled = groups.filter((g) => g.kind === 'assembled');
+    expect(assembled.some((g) => g.regionIds.length === 1 && kindOf(g.regionIds[0]) === 'patch')).toBe(true);
+    const pair = assembled.find((g) => g.regionIds.length === 2)!;
+    expect(pair).toBeDefined();
+    expect(pair.regionIds.every((id) => kindOf(id) === 'piece')).toBe(true);
+    const [ra, rb] = pair.regionIds.map((id) => result.regions.find((r) => r.id === id)!);
+    // The pair touches in the photo: their bounding boxes overlap.
+    expect(ra.bbox.x + ra.bbox.width >= rb.bbox.x && rb.bbox.x + rb.bbox.width >= ra.bbox.x).toBe(true);
+    for (const id of pair.regionIds) {
+      const best = result.matches.find((m) => m.regionId === id)!.candidates[0];
+      expect(pair.cells).toContainEqual({ row: best.row, col: best.col });
+    }
+    expect(groups.some((g) => g.kind === 'neighbors')).toBe(true);
+    for (const g of groups) {
+      for (const c of g.cells) {
+        expect(c.row).toBeGreaterThanOrEqual(g.bounds.row0);
+        expect(c.row).toBeLessThanOrEqual(g.bounds.row1);
+        expect(c.col).toBeGreaterThanOrEqual(g.bounds.col0);
+        expect(c.col).toBeLessThanOrEqual(g.bounds.col1);
+        expect(c.row).toBeLessThan(grid.rows);
+        expect(c.col).toBeLessThan(grid.cols);
+      }
+    }
+    // Some regions stay unmatched or unknown so the UI's hide rules are exercised.
+    expect(result.matches.filter((m) => m.status === 'unmatched').length).toBeGreaterThanOrEqual(2);
+    expect(result.regions.some((r) => r.kind === 'unknown')).toBe(true);
+
     for (const f of result.fits) {
       expect(result.regions.some((r) => r.id === f.a)).toBe(true);
       expect(result.regions.some((r) => r.id === f.b)).toBe(true);

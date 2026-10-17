@@ -1,15 +1,17 @@
-import { STATUS_LABEL, type DisplayStatus } from '../../lib/pieces';
+const ENTRIES = [
+  { tone: 'confident', label: 'Sure place' },
+  { tone: 'ambiguous', label: 'Unsure' },
+  { tone: 'patch', label: 'Assembled grid' },
+] as const;
 
-const ORDER: DisplayStatus[] = ['confident', 'ambiguous', 'unmatched', 'patch'];
-
-export function Legend({ counts }: { counts?: Partial<Record<DisplayStatus, number>> }) {
+/** Colour key for the result overlays. */
+export function Legend() {
   return (
     <ul className="legend" aria-label="Colour key">
-      {ORDER.map((s) => (
-        <li key={s}>
-          <span className={`swatch st-${s}`} />
-          {STATUS_LABEL[s]}
-          {counts?.[s] !== undefined && <span className="muted tabular"> {counts[s]}</span>}
+      {ENTRIES.map((e) => (
+        <li key={e.tone}>
+          <span className={`swatch st-${e.tone}`} />
+          {e.label}
         </li>
       ))}
     </ul>
