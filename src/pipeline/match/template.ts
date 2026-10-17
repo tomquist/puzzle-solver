@@ -5,6 +5,7 @@
 import { rgbaToLab } from '../../cv/color';
 import type { Point } from '../../cv/geometry';
 import { createFloat, createMask, type FloatImage, type Mask, type RGBAImage } from '../../cv/image';
+import { gaussianKernel } from '../../cv/filter';
 import { resizeFloat } from '../../cv/resize';
 import type { RefLevel } from './types';
 
@@ -225,6 +226,16 @@ export function buildTemplate(src: PhotoSource, m: Mapping, level: RefLevel, min
     }
   }
   if (n < minPixels) return null;
+  if (level.blur > 0) {
+    blurValid(vals, ok, gw, gh, level.blur);
+    mu0 = mu1 = mu2 = 0;
+    for (let k = 0; k < gw * gh; k++) {
+      if (!ok[k]) continue;
+      mu0 += vals[k * 3];
+      mu1 += vals[k * 3 + 1];
+      mu2 += vals[k * 3 + 2];
+    }
+  }
   mu0 /= n;
   mu1 /= n;
   mu2 /= n;
@@ -258,6 +269,37 @@ export function buildTemplate(src: PhotoSource, m: Mapping, level: RefLevel, min
   };
 }
 
+/** Separable Gaussian blur of a 3-channel grid restricted to valid cells (normalised convolution). */
+function blurValid(vals: Float32Array, ok: Uint8Array, w: number, h: number, sigma: number): void {
+  const k = gaussianKernel(sigma, Math.max(1, Math.ceil(2 * sigma)));
+  const r = (k.length - 1) >> 1;
+  const tmp = new Float32Array(vals.length);
+  for (let pass = 0; pass < 2; pass++) {
+    const src = pass === 0 ? vals : tmp, dst = pass === 0 ? tmp : vals;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        if (!ok[i]) continue;
+        let a0 = 0, a1 = 0, a2 = 0, ws = 0;
+        for (let t = -r; t <= r; t++) {
+          const xx = pass === 0 ? x + t : x, yy = pass === 0 ? y : y + t;
+          if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+          const j = yy * w + xx;
+          if (!ok[j]) continue;
+          const wt = k[t + r];
+          a0 += src[j * 3] * wt;
+          a1 += src[j * 3 + 1] * wt;
+          a2 += src[j * 3 + 2] * wt;
+          ws += wt;
+        }
+        dst[i * 3] = a0 / ws;
+        dst[i * 3 + 1] = a1 / ws;
+        dst[i * 3 + 2] = a2 / ws;
+      }
+    }
+  }
+}
+
 /** Scoring constants (weighted-Lab units). */
 export interface ScoreParams {
   /** Variance floor per pixel added to both energies (keeps flat regions from producing wild NCC). */
@@ -268,7 +310,7 @@ export interface ScoreParams {
   cap: number;
 }
 
-export const DEFAULT_SCORE: ScoreParams = { eps: 6, beta: 0.35, cap: 30 };
+export const DEFAULT_SCORE: ScoreParams = { eps: 1, beta: 0.2, cap: 30 };
 
 /**
  * Masked zero-mean NCC over the three channels jointly, minus a saturating penalty on the mean
@@ -297,4 +339,56 @@ export function scoreAt(level: RefLevel, t: Template, X: number, Y: number, p: S
   const d0 = t.mean[0] - m0, d1 = t.mean[1] - m1, d2 = t.mean[2] - m2;
   const dm = Math.sqrt(d0 * d0 + d1 * d1 + d2 * d2);
   return ncc - (p.beta * Math.min(dm, p.cap)) / p.cap;
+}
+
+/**
+ * Dense score map over top-left positions [x0, x1] × [y0, y1] (stride 1) using the level's prefix
+ * sums for the masked reference statistics (cost ≈ 3 MACs per template pixel per position).
+ * `out` receives (y1 - y0 + 1) × (x1 - x0 + 1) scores, row-major.
+ */
+export function scoreMap(level: RefLevel, t: Template, x0: number, x1: number, y0: number, y1: number, p: ScoreParams, out: Float32Array): void {
+  const P = level.prefix;
+  if (!P) throw new Error('scoreMap: level has no prefix sums');
+  const D = level.data, off = t.off, V = t.val, n = t.n, stride = level.stride, W1 = stride + 1;
+  // Runs of consecutive valid pixels: prefix offset (relative to the position) and length.
+  const runOff: number[] = [], runLen: number[] = [];
+  for (let q = 0; q < n; ) {
+    let e = q + 1;
+    while (e < n && off[e] === off[e - 1] + 1) e++;
+    const j = Math.floor(off[q] / stride), i = off[q] - j * stride;
+    runOff.push((j * W1 + i) * 4);
+    runLen.push((e - q) * 4);
+    q = e;
+  }
+  const R = runOff.length;
+  const ro = Int32Array.from(runOff), rl = Int32Array.from(runLen);
+  const invN = 1 / n, fl = p.eps * n, cap = p.cap, beta = p.beta;
+  const tm0 = t.mean[0] - level.center[0], tm1 = t.mean[1] - level.center[1], tm2 = t.mean[2] - level.center[2];
+  const te = t.energy + fl;
+  const nx = x1 - x0 + 1;
+  for (let Y = y0; Y <= y1; Y++) {
+    for (let X = x0; X <= x1; X++) {
+      const base = Y * stride + X;
+      let num = 0;
+      for (let i = 0, j = 0; i < n; i++, j += 3) {
+        const q = (base + off[i]) * 3;
+        num += V[j] * D[q] + V[j + 1] * D[q + 1] + V[j + 2] * D[q + 2];
+      }
+      const pb = (Y * W1 + X) * 4;
+      let s0 = 0, s1 = 0, s2 = 0, ss = 0;
+      for (let r = 0; r < R; r++) {
+        const a = pb + ro[r], b = a + rl[r];
+        s0 += P[b] - P[a];
+        s1 += P[b + 1] - P[a + 1];
+        s2 += P[b + 2] - P[a + 2];
+        ss += P[b + 3] - P[a + 3];
+      }
+      const m0 = s0 * invN, m1 = s1 * invN, m2 = s2 * invN;
+      const varR = ss - (s0 * m0 + s1 * m1 + s2 * m2);
+      const ncc = num / Math.sqrt(te * ((varR > 0 ? varR : 0) + fl));
+      const d0 = tm0 - m0, d1 = tm1 - m1, d2 = tm2 - m2;
+      const dm = Math.sqrt(d0 * d0 + d1 * d1 + d2 * d2);
+      out[(Y - y0) * nx + (X - x0)] = ncc - (beta * (dm < cap ? dm : cap)) / cap;
+    }
+  }
 }

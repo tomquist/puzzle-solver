@@ -8,7 +8,7 @@
  */
 import { findSimilarity, type Point } from '../../cv/geometry';
 import { cellKey, type CellRef, type MatchStatus, type Placement, type RegionMatch, type SideKind } from '../../model/types';
-import { buildTemplate, DEFAULT_SCORE, makePhotoSource, scoreAt, type ColorCorrection, type Mapping, type PhotoSource, type ScoreParams, type Template } from './template';
+import { buildTemplate, DEFAULT_SCORE, makePhotoSource, scoreAt, scoreMap, type ColorCorrection, type Mapping, type PhotoSource, type ScoreParams, type Template } from './template';
 import type { MatchInput, MatchOptions, RefLevel, ReferenceIndex } from './types';
 
 /** A similarity hypothesis to search. */
@@ -152,25 +152,17 @@ function topLeftFor(level: RefLevel, t: Template, ref: Point): { X: number; Y: n
   };
 }
 
-/** Dense coarse search of one hypothesis; returns local maxima. */
-function coarseSearch(index: ReferenceIndex, level: RefLevel, hyp: Hypothesis, t: Template, stride: number, sp: ScoreParams, out: Candidate[]): void {
+/** Dense coarse search (stride 1) of one hypothesis; collects local maxima (priors applied to them). */
+function coarseSearch(index: ReferenceIndex, level: RefLevel, hyp: Hypothesis, t: Template, sp: ScoreParams, out: Candidate[]): void {
   const mx = 0.15 * level.ppc;
   const xMin = Math.max(0, Math.ceil(level.pad - mx - t.cx));
   const xMax = Math.min(level.stride - t.w, Math.floor(level.pad + level.width - 1 + mx - t.cx));
   const yMin = Math.max(0, Math.ceil(level.pad - mx - t.cy));
   const yMax = Math.min(level.rows - t.h, Math.floor(level.pad + level.height - 1 + mx - t.cy));
   if (xMax < xMin || yMax < yMin) return;
-  const nx = Math.floor((xMax - xMin) / stride) + 1, ny = Math.floor((yMax - yMin) / stride) + 1;
+  const nx = xMax - xMin + 1, ny = yMax - yMin + 1;
   const map = new Float32Array(nx * ny);
-  for (let j = 0; j < ny; j++) {
-    const Y = yMin + j * stride;
-    for (let i = 0; i < nx; i++) {
-      const X = xMin + i * stride;
-      let v = scoreAt(level, t, X, Y, sp);
-      if (hyp.sides) v -= gridPrior(index, hyp, pivotRef(level, t, X, Y));
-      map[j * nx + i] = v;
-    }
-  }
+  scoreMap(level, t, xMin, xMax, yMin, yMax, sp, map);
   for (let j = 0; j < ny; j++) {
     for (let i = 0; i < nx; i++) {
       const v = map[j * nx + i];
@@ -188,9 +180,8 @@ function coarseSearch(index: ReferenceIndex, level: RefLevel, hyp: Hypothesis, t
         }
       }
       if (!isMax) continue;
-      const X = xMin + i * stride, Y = yMin + j * stride;
-      const ref = pivotRef(level, t, X, Y);
-      out.push({ hyp, map: hyp.map, ref, raw: v + (hyp.sides ? gridPrior(index, hyp, ref) : 0), score: v, level: 0 });
+      const ref = pivotRef(level, t, xMin + i, yMin + j);
+      out.push({ hyp, map: hyp.map, ref, raw: v, score: v - gridPrior(index, hyp, ref), level: 0 });
     }
   }
 }
@@ -316,7 +307,7 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   for (const h of hyps) {
     const t = cache.get(level0, 0, h.map);
     if (!t) continue;
-    coarseSearch(index, level0, h, t, level0.ppc >= 6 ? 2 : 1, sp, coarse);
+    coarseSearch(index, level0, h, t, sp, coarse);
   }
   if (coarse.length === 0) return empty;
   const nKeep = isPatch ? 24 : 30;

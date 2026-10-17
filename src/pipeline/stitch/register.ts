@@ -48,14 +48,73 @@ export interface RegisterDiagnostics {
   timings: Record<string, number>;
 }
 
-/** Gray version of `img` with its longer side limited to `maxSide`, plus the orig -> small transform. */
+/**
+ * Gray version of `img` with its longer side limited to `maxSide` (plus the orig -> small
+ * transform), linearly stretched so its 1st..99th intensity percentiles span 0..255. The stretch
+ * makes the FAST threshold independent of exposure (dark or washed-out close-ups).
+ */
 function grayLimited(img: RGBAImage, maxSide: number): { gray: GrayImage; toSmall: Mat3 } {
-  const gray = rgbaToGray(img);
+  let gray = rgbaToGray(img);
+  let toSmall: Mat3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
   const long = Math.max(img.width, img.height);
-  if (long <= maxSide) return { gray, toSmall: [1, 0, 0, 0, 1, 0, 0, 0, 1] };
-  const s = maxSide / long;
-  const w = Math.max(1, Math.round(img.width * s)), h = Math.max(1, Math.round(img.height * s));
-  return { gray: resizeGray(gray, w, h), toSmall: resizeTransform(img.width, img.height, w, h) };
+  if (long > maxSide) {
+    const s = maxSide / long;
+    const w = Math.max(1, Math.round(img.width * s)), h = Math.max(1, Math.round(img.height * s));
+    gray = resizeGray(gray, w, h);
+    toSmall = resizeTransform(img.width, img.height, w, h);
+  }
+  const d = gray.data;
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < d.length; i++) hist[Math.max(0, Math.min(255, Math.round(d[i])))]++;
+  const tail = 0.01 * d.length;
+  let lo = 0, hi = 255;
+  for (let i = 0, c = 0; i < 256; i++) if ((c += hist[i]) >= tail) { lo = i; break; }
+  for (let i = 255, c = 0; i >= 0; i--) if ((c += hist[i]) >= tail) { hi = i; break; }
+  const scale = 255 / Math.max(32, hi - lo);
+  for (let i = 0; i < d.length; i++) d[i] = (d[i] - lo) * scale;
+  return { gray, toSmall };
+}
+
+/** Cheap content hash (two 32-bit FNV-style lanes over the pixel words) for the reference cache. */
+function imageKey(img: RGBAImage): string {
+  const d = img.data;
+  let h1 = 0x811c9dc5, h2 = 0x01000193;
+  if (d.byteOffset % 4 === 0) {
+    const u = new Uint32Array(d.buffer, d.byteOffset, d.length >> 2);
+    for (let i = 0; i < u.length; i++) {
+      const v = u[i];
+      h1 = Math.imul(h1 ^ v, 0x01000193);
+      h2 = Math.imul(h2 + v, 0x85ebca6b) ^ (h2 >>> 13);
+    }
+  } else {
+    for (let i = 0; i < d.length; i++) {
+      h1 = Math.imul(h1 ^ d[i], 0x01000193);
+      h2 = Math.imul(h2 + d[i], 0x85ebca6b) ^ (h2 >>> 13);
+    }
+  }
+  return `${img.width}x${img.height}:${(h1 >>> 0).toString(16)}:${(h2 >>> 0).toString(16)}`;
+}
+
+interface ReferenceFeatures {
+  key: string;
+  gray: GrayImage;
+  toSmall: Mat3;
+  features: Features;
+}
+
+/**
+ * The reference is the same for every close-up of a puzzle, so its working image and features are
+ * cached (single entry, ~6 MB). Results are identical with or without the cache.
+ */
+let referenceCache: ReferenceFeatures | null = null;
+
+function referenceFeatures(reference: RGBAImage, maxSide: number, maxFeatures: number): ReferenceFeatures {
+  const key = `${imageKey(reference)}:${maxSide}:${maxFeatures}`;
+  if (referenceCache && referenceCache.key === key) return referenceCache;
+  const { gray, toSmall } = grayLimited(reference, maxSide);
+  const features = detectFeatures(gray, { maxFeatures });
+  referenceCache = { key, gray, toSmall, features };
+  return referenceCache;
 }
 
 function wrapAngle(a: number): number {
@@ -151,22 +210,22 @@ export function registerCloseupDetailed(
   };
   const minInliers = opts.minInliers ?? 15;
 
-  const ref = grayLimited(reference, opts.referenceMaxSide ?? 1280);
+  const ref = referenceFeatures(reference, opts.referenceMaxSide ?? 1280, opts.referenceFeatures ?? 3000);
+  const fr = ref.features;
+  lap('reference');
   const close = grayLimited(closeup, opts.closeupMaxSide ?? 800);
-  lap('prepare');
-  const fr = detectFeatures(ref.gray, { maxFeatures: opts.referenceFeatures ?? 3000 });
   const fc = detectFeatures(close.gray, { maxFeatures: opts.closeupFeatures ?? 1500 });
   diag.referenceKeypoints = fr.keypoints.length;
   diag.closeupKeypoints = fc.keypoints.length;
-  lap('detect');
+  lap('closeup');
   const matches = matchFeatures(fc.descriptors, fr.descriptors, { ratio: 0.8, crossCheck: true });
   diag.matches = matches.length;
   lap('match');
   if (matches.length < minInliers) return fail('too few matches');
   const first = ransacHomography(pointsOf(fc, matches, 'query'), pointsOf(fr, matches, 'train'), { threshold: 3, maxIterations: 3000, seed: 0x5717c4 });
+  diag.initialInliers = first?.inlierCount ?? 0;
+  diag.inlierRatio = diag.initialInliers / matches.length;
   if (!first || first.inlierCount < minInliers) return fail('no consistent homography');
-  diag.initialInliers = first.inlierCount;
-  diag.inlierRatio = first.inlierCount / matches.length;
   lap('ransac');
 
   // Guided matching around the predicted positions, then a tighter refit.

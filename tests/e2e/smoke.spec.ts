@@ -14,7 +14,7 @@ test('create a puzzle, scan pieces, see results, and find it again after reload'
   page.on('pageerror', (e) => errors.push(e.message));
 
   // Home: empty state.
-  await page.goto('/');
+  await page.goto('/?pipeline=mock');
   await expect(page.getByRole('heading', { name: 'Find where every piece goes' })).toBeVisible();
   await shot(page, info, '01-home-empty');
 
@@ -137,7 +137,7 @@ test('create a puzzle, scan pieces, see results, and find it again after reload'
   const exported = await download.path();
 
   // Persistence: reload and find the puzzle on the home screen.
-  await page.goto('/');
+  await page.goto('/?pipeline=mock');
   await page.reload();
   const card = page.getByTestId('puzzle-card');
   await expect(card).toHaveCount(1);
@@ -148,7 +148,7 @@ test('create a puzzle, scan pieces, see results, and find it again after reload'
   // Import the exported file → a second puzzle; then delete it again.
   await page.getByTestId('import-file').setInputFiles(exported);
   await expect(page.getByTestId('tab-scan')).toBeVisible();
-  await page.goto(`/${new URL(page.url()).hash}/settings`);
+  await page.goto(`/?pipeline=mock${new URL(page.url()).hash}/settings`);
   await page.getByRole('button', { name: 'Delete puzzle' }).click();
   await shot(page, info, '16-delete-confirm');
   await page.getByRole('dialog').getByRole('button', { name: 'Delete puzzle' }).click();

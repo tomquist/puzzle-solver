@@ -5,7 +5,7 @@
  * one reference pixel, which matters when the close-up is composited at several times the
  * reference resolution.
  */
-import { gaussianBlurGray, sobel } from '../../cv/filter';
+import { sobel } from '../../cv/filter';
 import { applyMat3, mat3Invert, mat3Multiply, solveLinear, translation, type Mat3 } from '../../cv/geometry';
 import { clampRect, cropGray, type GrayImage } from '../../cv/image';
 import { resizeGray } from '../../cv/resize';
@@ -17,7 +17,7 @@ export interface DirectRefineOptions {
   maxSamples?: number;
   /** Gauss–Newton iterations per level (default 12). */
   iterations?: number;
-  /** Reject the refinement when the overlap region moves more than this (reference px, default 4). */
+  /** Reject the refinement when the overlap moves more than this (working px, default 4). */
   maxShift?: number;
 }
 
@@ -202,9 +202,10 @@ function alignLevel(ref: GrayImage, close: GrayImage, G0: Mat3, maxSamples: numb
 
 /**
  * Refine `H` (close-up -> reference, in the pixel coordinates of the given gray images) by direct
- * photometric alignment. The close-up is first area-downsampled to about the reference's
- * resolution. The result is only accepted when it improves the normalised cross-correlation and
- * stays close to the input.
+ * photometric alignment, at the coarser of the two resolutions: a sharper close-up is
+ * area-downsampled to the reference's resolution, a sharper reference crop to the close-up's.
+ * The result is only accepted when it does not lower the normalised cross-correlation and moves
+ * the overlap by at most `maxShift` pixels of that working resolution.
  */
 export function refineHomographyDirect(ref: GrayImage, close: GrayImage, H: Mat3, opts: DirectRefineOptions = {}): DirectRefineResult {
   const maxSamples = opts.maxSamples ?? 40000;
@@ -235,11 +236,17 @@ export function refineHomographyDirect(ref: GrayImage, close: GrayImage, H: Mat3
   );
   const failed: DirectRefineResult = { H, nccBefore: 0, nccAfter: 0, accepted: false };
   if (crop.width < 16 || crop.height < 16) return failed;
-  const blur = Number(process.env.LKBLUR ?? '1');
-  const refB = blur > 0 ? gaussianBlurGray(cropGray(ref, crop), blur) : cropGray(ref, crop);
-  const closeB = blur > 0 ? gaussianBlurGray(C, blur) : C;
-  const toCrop = translation(-crop.x, -crop.y);
-  const G0 = mat3Invert(mat3Multiply(toCrop, Hd));
+  // No pre-blur: the fine level keeps all detail (most accurate); the half-resolution level
+  // (area-downsampled, hence smooth) widens the convergence basin.
+  let refB = cropGray(ref, crop);
+  let toWork = translation(-crop.x, -crop.y);
+  if (gain < 0.8) {
+    const w = Math.max(16, Math.round(crop.width * gain)), h = Math.max(16, Math.round(crop.height * gain));
+    refB = resizeGray(refB, w, h);
+    toWork = mat3Multiply(resizeTransform(crop.width, crop.height, w, h), toWork);
+  }
+  const closeB = C;
+  const G0 = mat3Invert(mat3Multiply(toWork, Hd));
   const s0 = collectSamples(refB, closeB, G0, maxSamples, 2);
   if (s0.n < 200) return failed;
   const nccBefore = nccAt(closeB, G0, s0);
@@ -258,7 +265,7 @@ export function refineHomographyDirect(ref: GrayImage, close: GrayImage, H: Mat3
   G = alignLevel(refB, closeB, G, maxSamples, iterations);
   const nccAfter = nccAt(closeB, G, s0);
 
-  // Displacement of the sampled overlap region's extremes, in reference pixels.
+  // Displacement of the sampled overlap region's extremes, in working pixels.
   const Hc2 = mat3Invert(G);
   let shift = 0;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -272,7 +279,7 @@ export function refineHomographyDirect(ref: GrayImage, close: GrayImage, H: Mat3
   }
   const accepted = nccAfter >= nccBefore - 1e-3 && shift <= maxShift && Number.isFinite(shift);
   if (!accepted) return { H, nccBefore, nccAfter: nccBefore, accepted: false };
-  // Back to reference and caller close-up coordinates: H' = T(crop) * Hc2 * (Hd^-1 * H).
-  const refined = mat3Multiply(translation(crop.x, crop.y), mat3Multiply(Hc2, mat3Multiply(mat3Invert(Hd), H)));
+  // Back to reference and caller close-up coordinates: H' = toWork^-1 * Hc2 * (Hd^-1 * H).
+  const refined = mat3Multiply(mat3Invert(toWork), mat3Multiply(Hc2, mat3Multiply(mat3Invert(Hd), H)));
   return { H: refined.map((v) => v / refined[8]), nccBefore, nccAfter, accepted: true };
 }

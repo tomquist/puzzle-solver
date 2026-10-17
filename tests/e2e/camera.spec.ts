@@ -9,7 +9,7 @@ test.use({
 test('live camera: preview, quality meter and shutter', async ({ page }, info) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.goto('/#/new');
+  await page.goto('/?pipeline=mock#/new');
   // Permission is already granted, so the camera starts by itself.
   await expect(page.locator('video.camera-video')).toBeVisible();
   await expect(page.locator('.camera-meter .meter-text')).not.toHaveText('Checking…', { timeout: 10_000 });

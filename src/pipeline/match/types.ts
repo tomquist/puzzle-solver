@@ -12,6 +12,8 @@ export interface RefLevel {
   /** Unpadded level size. */
   width: number;
   height: number;
+  /** Extra Gaussian blur (level px) applied to this level and to templates built for it. */
+  blur: number;
   /** Padding on every side, in level px. */
   pad: number;
   /** Padded width (row stride in pixels). */
@@ -22,6 +24,13 @@ export interface RefLevel {
   data: Float32Array;
   /** Per padded pixel: sum of squares of the three weighted channels. */
   sq: Float32Array;
+  /**
+   * Coarse level only: row-wise prefix sums (rows × (stride + 1) × 4, Float64) of the channels
+   * minus `center` and of their squared norm, for O(runs) masked sums in the dense search.
+   */
+  prefix?: Float64Array;
+  /** Channel means subtracted before computing `prefix`. */
+  center: [number, number, number];
 }
 
 /** Precomputed matching data for one reference image (cache it per puzzle). */
