@@ -7,13 +7,12 @@
  * score is a noise-normalised colour distance to the model that tolerates soft cast shadows
  * (moderately darker pixels with proportionally scaled chroma).
  */
-import { rgbaToGray, rgbToLab } from '../../cv/color';
-import { boxBlurGray, sobel } from '../../cv/filter';
+import { rgbToLab } from '../../cv/color';
 import { solveLinear } from '../../cv/geometry';
 import { createGray, type GrayImage, type RGBAImage } from '../../cv/image';
 import { dilate } from '../../cv/morphology';
 import type { BackgroundModel } from './types';
-import { median } from './util';
+import { median, quantile } from './util';
 
 const NT = 6;
 /** Weight of lightness differences relative to chroma (lighting varies more than colour). */
@@ -45,8 +44,8 @@ export function backgroundAt(model: Pick<BackgroundModel, 'coefficients' | 'widt
 }
 
 /**
- * Ratio of the brightest to the darkest modelled background luminance (CIE Y) over the photo, a
- * scale-free measure of the lighting gradient (1 = perfectly even).
+ * Ratio of the brightest to the darkest modelled background luminance (CIE Y) over the whole photo
+ * (9×9 grid, includes extrapolation into corners), a scale-free measure of the lighting gradient.
  */
 export function lightingRatio(model: Pick<BackgroundModel, 'coefficients'>): number {
   let lo = Infinity, hi = -Infinity;
@@ -238,7 +237,17 @@ export function fitBackground(photo: RGBAImage): BackgroundFit {
     }
     if (m > 20) for (let ch = 0; ch < 3; ch++) sigma[ch] = Math.max(SIGMA_FLOOR[ch], 1.4826 * median(res[ch].subarray(0, m)));
   }
-  return { color, coefficients, sigma, width, height, lightingRatio: lightingRatio({ coefficients }) };
+  // Lighting ratio where the table actually is (no extrapolation into corners covered by pieces):
+  // 95th / 5th percentile of the modelled luminance at the samples used for the final fit.
+  const Ys: number[] = [];
+  for (let i = 0; i < s.n; i++) {
+    if (weight[i] <= 0.3) continue;
+    const L = Math.max(0, Math.min(100, evalPoly(coefficients[0], s.u[i], s.v[i])));
+    Ys.push(((L + 16) / 116) ** 3);
+  }
+  const lo = quantile(Ys, 0.05), hi = quantile(Ys, 0.95);
+  const ratio = Ys.length >= 20 && lo > 1e-4 ? hi / lo : lightingRatio({ coefficients });
+  return { color, coefficients, sigma, width, height, lightingRatio: ratio };
 }
 
 /**
@@ -293,15 +302,4 @@ export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayIma
     }
   }
   return out;
-}
-
-/**
- * Local texture energy: mean Sobel gradient magnitude of the 3×3-smoothed luminance over a
- * (2r+1)² window. Brush strokes and print structure make pieces stand out by this measure even
- * where their colour matches the table; normalise it with the table's own statistics.
- */
-export function textureEnergy(photo: RGBAImage, r: number): GrayImage {
-  const lum = rgbaToGray(photo);
-  const grad = sobel(boxBlurGray(lum, 1)).magnitude;
-  return boxBlurGray(grad, r);
 }

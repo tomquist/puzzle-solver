@@ -22,7 +22,7 @@ export interface BackgroundModel {
   /** Photo size the model was fitted for. */
   width: number;
   height: number;
-  /** Brightest / darkest modelled background luminance over the photo (1 = even lighting). */
+  /** 95th / 5th percentile of the modelled table luminance where the table is visible (1 = even lighting). */
   lightingRatio: number;
   /** Fraction of the photo classified as background. */
   coverage: number;

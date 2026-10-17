@@ -14,15 +14,16 @@ import { distanceTransform } from '../../cv/distance';
 import { solveLinear, type Point } from '../../cv/geometry';
 import { createGray, createMask, cropMask, cropRGBA, maskArea, maskBounds, type GrayImage, type Mask, type RGBAImage, type Rect } from '../../cv/image';
 import { close, dilate, erode, fillHoles, open } from '../../cv/morphology';
-import { resizeMask, resizeRGBA } from '../../cv/resize';
+import { resizeMask } from '../../cv/resize';
+import { boxBlurGray, sobel } from '../../cv/filter';
 import { simplifyPolygon, smoothContour } from '../../cv/polygon';
 import { otsuThreshold, threshold } from '../../cv/threshold';
 import type { DetectedRegion, PieceShape, QualityIssue, RegionKind } from '../../model/types';
-import { fitBackground, foregroundScore, textureEnergy } from './background';
+import { fitBackground, foregroundScore } from './background';
 import { assessPhoto, assessRegions } from './quality';
 import { analyzePieceShape, bodyOrientation, orientationHistogram } from './shape';
 import type { BackgroundModel, SegmentOptions, Segmentation, SegmentedRegion } from './types';
-import { boxBlurRGB, median, offsetPoints } from './util';
+import { boxBlurRGB, doubleMask, halveGray, median, offsetPoints } from './util';
 import { noiseSigma } from '../quality/metrics';
 import { rgbaToGray } from '../../cv/color';
 
@@ -45,10 +46,12 @@ const NECK_RADIUS = 0.2;
 const TOUCHING_SECOND_PEAK = 0.42;
 /**
  * Median foreground score just inside an outline (background sigmas) below which an unreliable
- * region is reported as low contrast (well-segmented dark pieces on a dark table measure ≈ 3.5–5,
- * so contrast alone is not a failure).
+ * region counts as hard to see (well-segmented dark pieces on a dark table measure ≈ 3.5–5, so low
+ * contrast alone is not a failure; it is reported only together with an unreliable result).
  */
 const LOW_REGION_CONTRAST = 6;
+/** Fraction of a region found by the texture cue only, above which colour alone could not separate it. */
+const TEXTURE_ASSISTED = 0.05;
 
 /** Gray-level noise sigma from which the score is computed on a 3×3 / 5×5 box-filtered photo. */
 const NOISE_SMOOTH_1 = 3;
@@ -79,44 +82,47 @@ function estimateNoise(photo: RGBAImage): number {
 const TEXTURE_THRESHOLD = 6;
 /** Texture blobs covered by colour foreground to at least this fraction count as segmented pieces. */
 const TEXTURE_COVERED = 0.8;
+/** Table lightness (L*) below which luminance texture is used as well (no visible cast shadows). */
+const DARK_TABLE_L = 35;
 
 /**
- * Texture foreground that colour missed: texture energy normalised by the table's own texture
- * statistics (robust median / MAD over samples away from the colour foreground, so wood grain or
- * patterned cloth stays background), thresholded and eroded by the window radius so that the
- * window neither inflates outlines nor bridges gaps between pieces. Large photos are analysed at
- * half resolution.
+ * Texture foreground that colour missed. Texture energy = mean Sobel magnitude of the (smoothed)
+ * foreground score over a (2r+1)² window: on the shadow-tolerant score the table and soft cast
+ * shadows are flat (noise only), while brush strokes and print structure vary even where the
+ * piece's colour matches the table. It is normalised by the table's own statistics (robust median /
+ * MAD away from the colour foreground, so wood grain or patterned cloth stays background),
+ * thresholded and eroded by the window radius (the window must neither inflate outlines nor bridge
+ * gaps). Large photos are analysed at half resolution.
  */
-function textureForeground(photo: RGBAImage, colourFg: Mask): Mask | null {
-  const { width: W, height: H } = photo;
-  const f = W * H > 2.5e6 ? 2 : 1;
-  const img = f > 1 ? resizeRGBA(photo, Math.round(W / f), Math.round(H / f)) : photo;
-  const fgS = f > 1 ? resizeMask(colourFg, img.width, img.height) : colourFg;
+function textureForeground(score: GrayImage, colourFg: Mask): Mask | null {
+  const { width: W, height: H } = score;
+  const half = W * H > 2.5e6;
+  // At half resolution the 2×2 average already suppresses pixel noise.
+  const img = half ? halveGray(score) : boxBlurGray(score, 1);
   const { width: w, height: h } = img;
+  const fgS = half ? resizeMask(colourFg, w, h) : colourFg;
   const r = Math.max(2, Math.round(Math.min(w, h) / 300));
   if (w < 8 * r || h < 8 * r) return null;
-  const energy = textureEnergy(img, r);
-  // Robust statistics of the table's texture.
+  const energy = boxBlurGray(sobel(img).magnitude, r);
+  // Robust statistics of the table's texture (samples away from the colour foreground).
   const near = dilate(fgS, r + 3);
   const step = Math.max(1, Math.round(Math.sqrt((w * h) / 40000)));
-  const vals: number[] = [];
+  const buf = new Float32Array(Math.ceil(w / step) * Math.ceil(h / step));
+  let n = 0;
   for (let y = r; y < h - r; y += step) {
-    for (let x = r; x < w - r; x += step) if (!near.data[y * w + x]) vals.push(energy.data[y * w + x]);
+    for (let x = r; x < w - r; x += step) if (!near.data[y * w + x]) buf[n++] = energy.data[y * w + x];
   }
-  if (vals.length < 100) return null;
+  if (n < 100) return null;
+  const vals = buf.subarray(0, n);
   const m = median(vals);
-  const dev = vals.map((v) => Math.abs(v - m));
-  const sigma = Math.max(1.4826 * median(dev), 0.03 * m, 0.05);
+  for (let i = 0; i < n; i++) vals[i] = Math.abs(vals[i] - m);
+  const sigma = Math.max(1.4826 * median(vals), 0.03 * m, 0.05);
   const t = m + TEXTURE_THRESHOLD * sigma;
   const mask = createMask(w, h);
   for (let i = 0; i < mask.data.length; i++) mask.data[i] = energy.data[i] > t ? 1 : 0;
   const core = erode(mask, r + 1);
-  // Texture blobs that colour already covers well are segmented pieces: there the texture window
-  // still sees the soft cast shadow, a thin band along the outline, so only thick uncovered parts
-  // are added. Blobs colour mostly missed (dark print on a dark table) are added whole.
-  const uncovered = createMask(w, h);
-  for (let i = 0; i < core.data.length; i++) uncovered.data[i] = core.data[i] && !fgS.data[i] ? 1 : 0;
-  const thick = open(uncovered, Math.max(2, Math.round(3 / f)));
+  // Texture blobs that colour already covers well are segmented pieces (the texture would only
+  // blur their outline): skip them. Blobs colour mostly missed (dark print on a dark table) are added.
   const { count, y: ry, x0: rx0, x1: rx1, root } = labelRuns(core, 1, 8);
   const area = new Float64Array(count), covered = new Float64Array(count);
   for (let i = 0; i < count; i++) {
@@ -126,12 +132,12 @@ function textureForeground(photo: RGBAImage, colourFg: Mask): Mask | null {
     area[root[i]] += rx1[i] - rx0[i] + 1;
     covered[root[i]] += c;
   }
-  const add = thick;
+  const add = createMask(w, h);
   for (let i = 0; i < count; i++) {
     const k = root[i];
     if (covered[k] < TEXTURE_COVERED * area[k]) add.data.fill(1, ry[i] * w + rx0[i], ry[i] * w + rx1[i] + 1);
   }
-  return f > 1 ? resizeMask(add, W, H) : add;
+  return half ? doubleMask(add, W, H) : add;
 }
 
 /** A region candidate: local mask (tight bbox) plus derived geometry. */
@@ -152,6 +158,20 @@ interface Candidate {
   group?: number;
   /** Number of separate fragments this candidate was reassembled from (low-contrast pieces). */
   merged?: number;
+}
+
+/** Fraction of a region (bbox-local `mask` at `bbox`) covered by the full-photo mask `m`. */
+function maskFraction(m: Mask, mask: Mask, bbox: Rect): number {
+  let n = 0, hit = 0;
+  for (let y = 0; y < bbox.height; y++) {
+    const row = (y + bbox.y) * m.width + bbox.x;
+    for (let x = 0; x < bbox.width; x++) {
+      if (!mask.data[y * bbox.width + x]) continue;
+      n++;
+      hit += m.data[row + x];
+    }
+  }
+  return n > 0 ? hit / n : 0;
 }
 
 /** Gap (px) between two rectangles; 0 when they overlap. */
@@ -416,8 +436,18 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   const th = chooseThreshold(score);
   let fg = hysteresis(score, th.high, th.low);
   lap('threshold');
-  const tex = textureForeground(scored, fg);
-  if (tex) for (let i = 0; i < fg.data.length; i++) fg.data[i] |= tex.data[i];
+  // Pixels only the texture cue found (colour could not separate them): kept for reporting.
+  const texOnly = createMask(W, H);
+  const addTexture = (tex: Mask | null) => {
+    if (!tex) return;
+    for (let i = 0; i < fg.data.length; i++) {
+      if (tex.data[i] && !fg.data[i]) { fg.data[i] = 1; texOnly.data[i] = 1; }
+    }
+  };
+  addTexture(textureForeground(score, fg));
+  // On a dark table cast shadows are invisible, so luminance texture is safe there and catches dark
+  // print whose colour equals the table (on light tables it would also catch the shadows).
+  if (fit.color[0] < DARK_TABLE_L) addTexture(textureForeground(rgbaToGray(scored), fg));
   lap('texture');
   fg = close(fg, 2);
   fg = fillHoles(fg);
@@ -522,11 +552,15 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     } else if (r.kind === 'patch' && c.secondPeak > TOUCHING_SECOND_PEAK) {
       issues.push({ code: 'touching_pieces', severity: 'warning', message: 'Several pieces seem to touch.', hint: 'Leave a small gap between loose pieces.', regionIds: [r.id], area: r.bbox });
     }
-    // Pieces that are hard to tell from the table and whose result is unreliable (fragments,
-    // reassembled or shapeless outlines): say so clearly.
+    // Regions colour could not separate (texture had to help, reassembled from fragments, or very
+    // weak outlines) whose result is unreliable (fragment, no convincing shape): say so clearly.
     const contrast = median(outlineScores(score, fg, regions[i]));
-    const unreliable = r.kind === 'unknown' || (c.merged ?? 1) > 1 || (r.kind === 'piece' && (!c.shape || c.shape.confidence < UNCERTAIN_CONFIDENCE));
-    if (!c.touchesBorder && unreliable && contrast < LOW_REGION_CONTRAST) {
+    const texFrac = maskFraction(texOnly, c.mask, c.bbox);
+    const reassembled = (c.merged ?? 1) > 1;
+    const unreliable = r.kind === 'unknown' || reassembled || (r.kind === 'piece' && (!c.shape || c.shape.confidence < UNCERTAIN_CONFIDENCE)) ||
+      (r.kind === 'patch' && texFrac > TEXTURE_ASSISTED);
+    const hardToSee = reassembled || texFrac > TEXTURE_ASSISTED || contrast < LOW_REGION_CONTRAST;
+    if (!c.touchesBorder && unreliable && hardToSee) {
       issues.push({ code: 'low_contrast', severity: 'warning', message: 'This piece is hard to tell from the background; its outline may be wrong.', hint: 'Use a plain background that contrasts with the pieces.', regionIds: [r.id], area: r.bbox });
     }
     if (r.kind === 'piece' && !c.touchesBorder && (!c.shape || c.shape.confidence < UNCERTAIN_CONFIDENCE)) {

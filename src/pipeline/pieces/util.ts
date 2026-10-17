@@ -1,6 +1,6 @@
 /** Small numeric helpers shared inside the pieces package. */
 import type { Point } from '../../cv/geometry';
-import type { RGBAImage } from '../../cv/image';
+import { createGray, createMask, type GrayImage, type Mask, type RGBAImage } from '../../cv/image';
 
 /** Median of a list (0 for an empty list). Does not modify the input. */
 export function median(values: ArrayLike<number>): number {
@@ -61,4 +61,26 @@ export function boxBlurRGB(img: RGBAImage, r: number): RGBAImage {
   }
   for (let i = 3; i < out.length; i += 4) out[i] = src[i];
   return { width: w, height: h, data: out };
+}
+
+/** 2×2 average downsample of a gray image (odd trailing row/column dropped). */
+export function halveGray(img: GrayImage): GrayImage {
+  const w = img.width >> 1, h = img.height >> 1, W = img.width, s = img.data;
+  const out = createGray(w, h);
+  for (let y = 0; y < h; y++) {
+    const r0 = 2 * y * W, r1 = r0 + W;
+    for (let x = 0; x < w; x++) out.data[y * w + x] = 0.25 * (s[r0 + 2 * x] + s[r0 + 2 * x + 1] + s[r1 + 2 * x] + s[r1 + 2 * x + 1]);
+  }
+  return out;
+}
+
+/** Nearest-neighbour 2× upsample of a mask to `width` × `height` (replicates the last row/column). */
+export function doubleMask(m: Mask, width: number, height: number): Mask {
+  const out = createMask(width, height);
+  for (let y = 0; y < height; y++) {
+    const sy = Math.min(m.height - 1, y >> 1);
+    const src = sy * m.width, dst = y * width;
+    for (let x = 0; x < width; x++) out.data[dst + x] = m.data[src + Math.min(m.width - 1, x >> 1)];
+  }
+  return out;
 }

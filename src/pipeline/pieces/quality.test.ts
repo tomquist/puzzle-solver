@@ -126,6 +126,26 @@ describe('assessPhoto on degraded photos', () => {
     expectIssue(q, 'touching_pieces');
   });
 
+  it('moderate lighting gradients (illumination ≤ 0.25) do not warn', () => {
+    for (const [ref, bg] of [['sn', GREY], ['gw', DARK], ['gw', WOOD]] as [Ref, RGB][]) {
+      const q = report(scene(ref, bg, { illumination: 0.25 }).photo, `moderate-light-${ref}`);
+      expect(codes(q), `${ref}: lightingRatio ${q.metrics.lightingRatio}`).not.toContain('uneven_lighting');
+      expect(q.metrics.lightingRatio).toBeLessThan(3.5);
+    }
+  });
+
+  it('clipping of featureless white print is info, clipping of coloured print a warning', () => {
+    // Great Wave paper (cream / white) pushed into clipping by gain and a lighting gradient.
+    const paper = report(scene('gw', WOOD, { backgroundTexture: 16, illumination: 0.2, gain: [0.99, 1.07, 1.04] }).photo, 'paper-clip');
+    expect(paper.issues.find((i) => i.code === 'too_bright')?.severity ?? 'info').toBe('info');
+    expect(codes(paper)).not.toContain('glare');
+    expect(codes(paper)).not.toContain('uneven_lighting');
+    // Starry Night blues clipped in one channel: detail is lost.
+    const paint = report(exposePhoto(base.sn.photo, 1.6), 'paint-clip');
+    expect(paint.issues.find((i) => i.code === 'too_bright')?.severity).not.toBe('info');
+    expect(paint.metrics.colouredClipped).toBeGreaterThan(0.05);
+  });
+
   it('low contrast background', () => {
     // Great Wave pieces (mostly cream paper) on a cream table.
     const q = report(scene('gw', [225, 220, 195]).photo, 'lowcontrast');

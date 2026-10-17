@@ -317,6 +317,69 @@ describe('segmentPieces special cases', () => {
   });
 });
 
+describe('segmentPieces on hard tables', () => {
+  const summary = (seg: ReturnType<typeof segmentPieces>, truth: Parameters<typeof evaluateScene>[1], cut: Parameters<typeof evaluateScene>[2]) => {
+    const ev = evaluateScene(seg, truth, cut, 0.8);
+    const det = ev.pieces.filter((p) => p.detected).length;
+    return { recall: det / truth.length, precision: (ev.regions - ev.falseRegions) / Math.max(1, ev.regions), ev };
+  };
+
+  it('keeps dark pieces whole in a noisy, blurry photo on a dark table (adaptive pre-filter)', () => {
+    const { photo, truth, cut } = scene('starry-night', 'dark', 2, { noiseSigma: 7, blurSigma: 1.4, illumination: 0.25, gain: [1.0, 1.17, 0.94] });
+    const seg = segmentPieces(photo);
+    if (DEBUG_IMAGES) savePng('.debug/pieces/hard-noisy.png', drawOverlay(photo, seg, truth));
+    const { recall, precision } = summary(seg, truth, cut);
+    console.log(`noisy dark table: noise ${seg.background.noise.toFixed(1)}, smoothing ${seg.background.smoothing}, recall ${recall.toFixed(2)}, precision ${precision.toFixed(2)}`);
+    expect(seg.background.smoothing).toBeGreaterThan(0);
+    expect(recall).toBeGreaterThanOrEqual(0.9);
+    expect(precision).toBeGreaterThanOrEqual(0.9);
+    // Clean photos are not smoothed.
+    expect(segmentPieces(scene('starry-night', 'dark', 2).photo, { assessQuality: false }).background.smoothing).toBe(0);
+  });
+
+  it('finds black pieces on a black table by their texture', () => {
+    let recall = 0, precision = 0;
+    for (const seed of [1, 2]) {
+      const { photo, truth, cut } = scene('starry-night', 'dark', seed, { background: [20, 24, 23] });
+      const seg = segmentPieces(photo);
+      if (DEBUG_IMAGES) savePng(`.debug/pieces/hard-black-${seed}.png`, drawOverlay(photo, seg, truth));
+      const s = summary(seg, truth, cut);
+      recall += s.recall / 2;
+      precision += s.precision / 2;
+      // Whatever could not be separated cleanly is reported with its region ids.
+      const unreliable = seg.regions.filter((r) => r.region.kind === 'unknown' || (r.region.kind === 'piece' && !r.region.shape));
+      if (unreliable.length) {
+        const lc = seg.quality.issues.find((i) => i.code === 'low_contrast');
+        expect(lc?.severity).toBe('warning');
+        expect(lc?.regionIds?.length).toBeGreaterThan(0);
+      }
+    }
+    console.log(`black on black: recall ${recall.toFixed(2)}, precision ${precision.toFixed(2)}`);
+    expect(recall).toBeGreaterThanOrEqual(0.9);
+    expect(precision).toBeGreaterThanOrEqual(0.9);
+  });
+
+  it('reports pieces it cannot separate as low contrast with region ids', () => {
+    // Noise + blur + a table of the same colour as the dark paint: some pieces fall apart.
+    const { photo } = scene('starry-night', 'dark', 1, { background: [22, 26, 24], noiseSigma: 9, blurSigma: 1.6 });
+    const seg = segmentPieces(photo);
+    if (DEBUG_IMAGES) savePng('.debug/pieces/hard-unseparable.png', drawOverlay(photo, seg));
+    const lc = seg.quality.issues.find((i) => i.code === 'low_contrast');
+    expect(lc).toBeDefined();
+    expect(lc!.severity).toBe('warning');
+    expect(lc!.regionIds!.length).toBeGreaterThan(0);
+    for (const id of lc!.regionIds!) expect(seg.regions[id - 1].region.issues.some((i) => i.code === 'low_contrast')).toBe(true);
+  });
+
+  it('does not take strongly textured cloth for pieces', () => {
+    const { photo, truth, cut } = scene('great-wave', 'wood', 2, { backgroundTexture: 45 });
+    const seg = segmentPieces(photo);
+    const { recall, precision } = summary(seg, truth, cut);
+    expect(recall).toBeGreaterThanOrEqual(0.95);
+    expect(precision).toBe(1);
+  });
+});
+
 describe('segmentPieces performance', () => {
   it('segments 40 pieces on a 2400×1800 photo within budget', () => {
     const ref = resizeRGBA(loadTestAsset('starry-night'), 1280, 1014);

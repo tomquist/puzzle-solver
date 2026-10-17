@@ -7,7 +7,8 @@
  * background model and the spatial trend of piece sizes (perspective).
  */
 import { rgbaToGray, rgbToLab } from '../../cv/color';
-import { labelComponents } from '../../cv/components';
+import { findOuterContours } from '../../cv/contour';
+import { convexHull, polygonArea, polygonPerimeter } from '../../cv/polygon';
 import { createMask, createRGBA, type Mask, type RGBAImage } from '../../cv/image';
 import { erode, open } from '../../cv/morphology';
 import { sampleRGBA } from '../../cv/warp';
@@ -31,21 +32,27 @@ export const QUALITY_THRESHOLDS = {
   darkMean: 0.15,
   /** 95th percentile of piece luminance below which the photo is too dark. */
   darkP95: 0.33,
-  /** Fraction of piece pixels clipped in textured surroundings (detail lost) above which the photo is too bright. */
-  brightLossy: Number((globalThis as unknown as { __lossyT?: number }).__lossyT ?? 0.06),
-  /** Clipped (any channel ≥ 254) / blown (all ≥ 253) piece fractions reported as info when the clipping is featureless. */
+  /** Fraction of piece pixels of coloured print with a clipped channel above which the photo is too bright. */
+  brightColoured: 0.05,
+  /** Fraction of piece pixels blown out to white above which the photo is too bright regardless of the print. */
+  brightBlownMassive: 0.15,
+  /** Clipped (any channel ≥ 254) / blown (all ≥ 253) piece fractions reported as info (white print reaching the clip level). */
   brightClipped: 0.25,
   brightBlown: 0.04,
   /** Fraction of the whole photo blown out to white. */
   brightPhotoBlown: 0.3,
-  /** Fraction of a piece covered by a compact glare blob that raises a region issue. */
-  regionGlare: 0.012,
+  /** Fraction of a piece covered by compact convex blown-out blobs (specular glare) that raises a region issue. */
+  regionGlare: 0.03,
   /** Otsu separability of the (log) foreground score below which contrast is low. */
   lowSeparability: 0.7,
   /** Median outline foreground score (background sigmas) below which contrast is low. */
   lowOutlineContrast: 7.5,
-  /** Ratio of the brightest to the darkest modelled background luminance that is uneven lighting (±10 % sRGB gain ≈ 1.8). */
-  unevenLighting: 2.6,
+  /**
+   * 95th / 5th percentile of the table luminance (linear light) above which lighting is uneven.
+   * synth `illumination` 0.2 / 0.25 (±26–30 % sRGB at the corners, segmentation unaffected) measure
+   * 1.9–2.9; 0.35 measures 3.1–4.7 and 0.5 measures 4.8–10.6.
+   */
+  unevenLighting: 3.5,
   /** Median body size (px) below which pieces are too small; below the second value it is an error. */
   lowResolution: 50,
   lowResolutionError: 28,
@@ -55,13 +62,10 @@ export const QUALITY_THRESHOLDS = {
 };
 
 const T = QUALITY_THRESHOLDS;
-/** Width (px) of the unclipped ring examined around clipped areas. */
-const RING = 4;
-/** Bright neutral (paper, sky) pixel: all channels ≥ NEUTRAL_MIN and max − min ≤ NEUTRAL_SPREAD. */
-const NEUTRAL_MIN = 190;
-const NEUTRAL_SPREAD = 55;
-/** Near-white clipped areas whose ring is at least this bright-neutral are featureless. */
-const FEATURELESS_RING = Number((globalThis as unknown as { __featT?: number }).__featT ?? 0.5);
+/** A clipped pixel with another channel below this is coloured print (hue and texture lost). */
+const COLOURED_BELOW = 190;
+/** Minimum solidity (area / convex hull) of a blown blob to count as specular glare. */
+const GLARE_SOLIDITY = 0.88;
 
 function issue(code: QualityCode, severity: Severity, message: string, hint?: string, regionIds?: number[]): QualityIssue {
   const out: QualityIssue = { code, severity, message };
@@ -215,74 +219,42 @@ export interface ClipAnalysis {
   pixels: number;
   /** Pixels with a clipped channel (≥ 254). */
   clipped: number;
-  /** Clipped pixels in areas whose unclipped surroundings are textured (detail was probably lost). */
-  lossy: number;
-  /** Pixels of compact blown-out blobs (glare candidates) with textured surroundings / halo. */
+  /** Clipped pixels of coloured print (another channel < 190): hue and texture are lost. */
+  colouredClipped: number;
+  /** Near-white pixels blown out in all channels (≥ 253). */
+  blown: number;
+  /** Pixels of compact, convex blown-out blobs (specular glare). */
   glare: number;
-  /** Pixels of compact blown-out blobs in featureless surroundings (white paper, sky). */
-  featurelessBlown: number;
 }
 
 /**
- * Clipping analysis of a region (interior `inner`). Clipped pixels of coloured print (another
- * channel well below the clip) lose hue and texture: lossy. Near-white clipped areas are judged by
- * their surroundings (a ring a few px wide): surrounded mostly by bright neutral material they are
- * featureless paper or sky that merely crossed the clip level (no detail lost); surrounded by
- * coloured print they are glare or blown highlights inside the picture (detail lost).
+ * Clipping analysis of a region (interior `inner`). Clipping of coloured print loses hue and
+ * texture. Near-white blown areas are ambiguous (white paper or sky that crossed the clip level
+ * loses nothing); only compact convex blown blobs — the image of a lamp or window on a glossy
+ * surface — count as glare, while blown white print follows the print's irregular shapes.
  */
 export function clipAnalysis(sr: SegmentedRegion, inner: Mask): ClipAnalysis {
   const { width: w, height: h, data: d } = sr.image;
-  const out: ClipAnalysis = { pixels: 0, clipped: 0, lossy: 0, glare: 0, featurelessBlown: 0 };
-  const C = createMask(w, h);
+  const out: ClipAnalysis = { pixels: 0, clipped: 0, colouredClipped: 0, blown: 0, glare: 0 };
   for (let i = 0; i < w * h; i++) {
     if (!inner.data[i]) continue;
     out.pixels++;
-    if (d[i * 4] >= 254 || d[i * 4 + 1] >= 254 || d[i * 4 + 2] >= 254) { C.data[i] = 1; out.clipped++; }
+    const p = i * 4, r = d[p], g = d[p + 1], b = d[p + 2];
+    if (r < 254 && g < 254 && b < 254) continue;
+    out.clipped++;
+    if (Math.min(r, g, b) < COLOURED_BELOW) out.colouredClipped++;
+    else if (r >= 253 && g >= 253 && b >= 253) out.blown++;
   }
-  if (out.clipped === 0) return out;
-  const { labels, stats } = labelComponents(C, 8);
-  // Ring: propagate component labels RING px into the unclipped interior (4-neighbour layers).
-  const ring = new Int32Array(labels);
-  let frontier: number[] = [];
-  for (let i = 0; i < w * h; i++) if (labels[i]) frontier.push(i);
-  for (let step = 0; step < RING && frontier.length; step++) {
-    const next: number[] = [];
-    for (const i of frontier) {
-      const x = i % w;
-      for (const j of [i - 1, i + 1, i - w, i + w]) {
-        if (j < 0 || j >= w * h || (j === i - 1 && x === 0) || (j === i + 1 && x === w - 1)) continue;
-        if (ring[j] || !inner.data[j]) continue;
-        ring[j] = ring[i];
-        next.push(j);
-      }
-    }
-    frontier = next;
-  }
-  const ringN = new Float64Array(stats.length), ringNeutral = new Float64Array(stats.length);
-  for (let i = 0; i < w * h; i++) {
-    if (!ring[i] || labels[i]) continue;
-    const k = ring[i] - 1, p = i * 4;
-    const mx = Math.max(d[p], d[p + 1], d[p + 2]), mn = Math.min(d[p], d[p + 1], d[p + 2]);
-    ringN[k]++;
-    if (mn >= NEUTRAL_MIN && mx - mn <= NEUTRAL_SPREAD) ringNeutral[k]++;
-  }
-  // Featureless: a near-white area surrounded mostly by bright neutral material.
-  const featureless = stats.map((_, k) => ringN[k] >= 4 && ringNeutral[k] >= FEATURELESS_RING * ringN[k]);
-  if ((globalThis as unknown as { __clipDbg?: string[] }).__clipDbg) stats.forEach((st, k) => { if (st.area >= 60) (globalThis as unknown as { __clipDbg: string[] }).__clipDbg.push(`${st.area}:${ringN[k] ? (ringNeutral[k] / ringN[k]).toFixed(2) : '-'}`); });
-  for (let i = 0; i < w * h; i++) {
-    if (!labels[i]) continue;
-    const p = i * 4;
-    const coloured = Math.min(d[p], d[p + 1], d[p + 2]) < NEUTRAL_MIN;
-    if (coloured || !featureless[labels[i] - 1]) out.lossy++;
-  }
+  if (out.blown < 12) return out;
   // Compact blown-out blobs (opening scaled to the piece removes thin white print structures).
-  const g = glareMask(sr.image, { minValue: 0.98, maxSaturation: 0.025 });
-  for (let i = 0; i < g.data.length; i++) g.data[i] &= inner.data[i];
-  const blobs = open(g, Math.max(1, Math.round(0.05 * Math.sqrt(out.pixels))));
-  for (let i = 0; i < blobs.data.length; i++) {
-    if (!blobs.data[i]) continue;
-    if (labels[i] && !featureless[labels[i] - 1]) out.glare++;
-    else out.featurelessBlown++;
+  const gm = glareMask(sr.image, { minValue: 0.98, maxSaturation: 0.025 });
+  for (let i = 0; i < gm.data.length; i++) gm.data[i] &= inner.data[i];
+  const blobs = open(gm, Math.max(1, Math.round(0.05 * Math.sqrt(out.pixels))));
+  for (const { contour, stats } of findOuterContours(blobs, 12)) {
+    const hull = polygonArea(convexHull(contour));
+    // Solidity of the blob (traced pixel-centre outlines lose ≈ half a pixel all around).
+    const solidity = hull > 0 ? Math.min(1, stats.area / (hull + 0.5 * polygonPerimeter(convexHull(contour)) + 1)) : 0;
+    if (solidity >= GLARE_SOLIDITY) out.glare += stats.area;
   }
   return out;
 }
@@ -377,26 +349,27 @@ export function assessPhoto(photo: RGBAImage, seg: Segmentation): QualityReport 
   const packed = packInterior(useful, inner);
   const ex = exposureStats(packed);
   const clip = clipping(packed);
-  let pixels = 0, lossy = 0;
+  let pixels = 0, coloured = 0;
   for (const r of useful) {
     const a = clipAnalysis(r, inner.get(r.region.id)!);
     pixels += a.pixels;
-    lossy += a.lossy;
+    coloured += a.colouredClipped;
   }
-  const lossyFrac = pixels > 0 ? lossy / pixels : 0;
+  const colouredFrac = pixels > 0 ? coloured / pixels : 0;
   metrics.brightness = ex.mean;
   metrics.p95 = ex.p95;
   metrics.clipped = clip.clipped;
   metrics.blown = clip.blown;
-  metrics.clippedLossy = lossyFrac;
+  metrics.colouredClipped = colouredFrac;
   if (ex.mean < T.darkMean || ex.p95 < T.darkP95) {
     issues.push(issue('too_dark', ex.mean < 0.07 ? 'error' : 'warning', 'The photo is too dark.', HINT.dark));
-  } else if (lossyFrac > T.brightLossy || photoClip.blown > T.brightPhotoBlown) {
-    // Clipping that cuts through print structure: detail is lost.
-    issues.push(issue('too_bright', lossyFrac > 0.25 ? 'error' : 'warning', 'The photo is overexposed.', HINT.bright));
+  } else if (colouredFrac > T.brightColoured || clip.blown > T.brightBlownMassive || photoClip.blown > T.brightPhotoBlown) {
+    // Coloured print clipped, or large areas blown out: detail is lost.
+    const severe = colouredFrac > 0.25 || clip.blown > 0.4;
+    issues.push(issue('too_bright', severe ? 'error' : 'warning', 'The photo is overexposed.', HINT.bright));
   } else if (clip.clipped > T.brightClipped || clip.blown > T.brightBlown) {
-    // Clipping confined to featureless bright print (paper, sky): little detail lost.
-    issues.push(issue('too_bright', 'info', 'Bright areas are clipped (featureless, little detail lost).', HINT.bright));
+    // Only white / cream print (paper, sky) reaches the clip level: little detail is lost.
+    issues.push(issue('too_bright', 'info', 'White areas of the print are clipped.', HINT.bright));
   }
 
   // Sharpness: edge width across the outlines (+ content blur on the pieces).
