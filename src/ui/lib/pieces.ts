@@ -100,15 +100,23 @@ export function scanStats(result: ScanResult): ScanStats {
   return s;
 }
 
-/** Plain-language fit hints for one region ("Fits #7 on its right side", ...). */
-export function fitHintTexts(regionId: number, result: ScanResult): string[] {
+export interface FitHintText {
+  /** e.g. "Fits #7 on its right side", "Attaches to patch #3 at its top". */
+  text: string;
+  /** The other region. */
+  other: number;
+  confidence: number;
+}
+
+/** Plain-language fit hints for one region, most confident first. */
+export function fitHintTexts(regionId: number, result: ScanResult): FitHintText[] {
   const kindOf = (id: number) => result.regions.find((r) => r.id === id)?.kind;
-  const out: string[] = [];
-  const describe = (other: number, side: PuzzleSide, hint: FitHint) => {
+  const describe = (other: number, side: PuzzleSide, hint: FitHint): FitHintText => {
     const sure = hint.confidence < 0.5 ? ' (maybe)' : '';
-    if (kindOf(other) === 'patch') return `Attaches to patch #${other} at its ${side}${sure}`;
-    return `Fits #${other} on its ${side} side${sure}`;
+    const text = kindOf(other) === 'patch' ? `Attaches to patch #${other} at its ${side}${sure}` : `Fits #${other} on its ${side} side${sure}`;
+    return { text, other, confidence: hint.confidence };
   };
+  const out: FitHintText[] = [];
   const sorted = [...result.fits].sort((p, q) => q.confidence - p.confidence);
   for (const f of sorted) {
     if (f.a === regionId) out.push(describe(f.b, f.sideA, f));
@@ -133,4 +141,38 @@ export function pieceKindLabel(region: DetectedRegion): string {
     default:
       return 'Piece (shape unclear)';
   }
+}
+
+const SIDE_NAMES: PuzzleSide[] = ['top', 'right', 'bottom', 'left'];
+
+/**
+ * Quarter turns k such that local side j of the piece ends up on puzzle side (j + k) mod 4 after
+ * applying `rotationDeg` (local frame is the photo rotated by `angleDeg`).
+ */
+export function localToPuzzleTurns(angleDeg: number, rotationDeg: number): number {
+  return (((Math.round((angleDeg + rotationDeg) / 90) % 4) + 4) % 4);
+}
+
+/** Puzzle sides (finished orientation) of the piece's flat sides for a placement. */
+export function flatSidesInPuzzle(region: DetectedRegion, rotationDeg: number): PuzzleSide[] {
+  const shape = region.shape;
+  if (!shape) return [];
+  const k = localToPuzzleTurns(shape.angleDeg, rotationDeg);
+  const out: PuzzleSide[] = [];
+  shape.sides.forEach((s, j) => {
+    if (s.kind === 'flat') out.push(SIDE_NAMES[(j + k) % 4]);
+  });
+  return out;
+}
+
+/** "Flat side at the top" / "Top-left corner" / "" for a placement. */
+export function borderText(region: DetectedRegion, rotationDeg: number): string {
+  const flats = flatSidesInPuzzle(region, rotationDeg);
+  if (flats.length === 1) return `Flat side goes along the ${flats[0]} border`;
+  if (flats.length >= 2) {
+    const v = flats.includes('top') ? 'top' : flats.includes('bottom') ? 'bottom' : '';
+    const h = flats.includes('left') ? 'left' : flats.includes('right') ? 'right' : '';
+    if (v && h) return `${v[0].toUpperCase()}${v.slice(1)}-${h} corner of the puzzle`;
+  }
+  return '';
 }

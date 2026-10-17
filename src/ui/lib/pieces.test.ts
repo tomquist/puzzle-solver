@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { DetectedRegion, RegionMatch, ScanResult } from '../../model/types';
-import { cellsForPlacement, currentPlacement, displayStatus, fitHintTexts, orderedCandidates, regionPassesFilter, scanStats } from './pieces';
+import type { DetectedRegion, RegionMatch, ScanResult, SideShape } from '../../model/types';
+import { borderText, cellsForPlacement, flatSidesInPuzzle, currentPlacement, displayStatus, fitHintTexts, orderedCandidates, regionPassesFilter, scanStats } from './pieces';
 import { composeScale, referenceResolution, sortIssues } from './quality';
 
 function region(id: number, kind: DetectedRegion['kind'], shapeKind?: 'edge' | 'corner' | 'interior'): DetectedRegion {
@@ -60,8 +60,25 @@ describe('scan result helpers', () => {
   });
 
   it('describes fits from both sides', () => {
-    expect(fitHintTexts(1, result)).toEqual(['Fits #2 on its right side', 'Attaches to patch #3 at its top (maybe)']);
-    expect(fitHintTexts(2, result)).toEqual(['Fits #1 on its left side']);
+    expect(fitHintTexts(1, result).map((h) => h.text)).toEqual(['Fits #2 on its right side', 'Attaches to patch #3 at its top (maybe)']);
+    expect(fitHintTexts(2, result)).toEqual([{ text: 'Fits #1 on its left side', other: 1, confidence: 0.8 }]);
+  });
+
+  it('maps flat sides into the finished orientation', () => {
+    const flat: SideShape = { kind: 'flat', length: 1, profile: [] };
+    const tab: SideShape = { kind: 'tab', length: 1, profile: [] };
+    const r = region(9, 'piece', 'edge');
+    // Local side 1 (right) is flat; the piece needs a 90° counter-clockwise turn (270° cw):
+    // right side → top.
+    r.shape = { ...r.shape!, angleDeg: 0, sides: [tab, flat, tab, tab] };
+    expect(flatSidesInPuzzle(r, 270)).toEqual(['top']);
+    expect(borderText(r, 270)).toBe('Flat side goes along the top border');
+    // Tilted by 10°, rotation 80° cw → k = 1: right → bottom.
+    r.shape = { ...r.shape!, angleDeg: 10 };
+    expect(flatSidesInPuzzle(r, 80)).toEqual(['bottom']);
+    // Corner: local top + right flat, no turn → top-right corner.
+    r.shape = { ...r.shape!, angleDeg: 0, sides: [flat, flat, tab, tab] };
+    expect(borderText(r, 0)).toBe('Top-right corner of the puzzle');
   });
 });
 
