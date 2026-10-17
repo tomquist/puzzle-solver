@@ -158,6 +158,33 @@ test('mobile audit: every main screen', async ({ page }, info) => {
   await page.goBack();
   await expect(page.getByTestId('scan-result')).toBeVisible();
 
+  // Send feedback (the quiet link at the end of the result): a few marks, then the file.
+  await page.getByTestId('scan-feedback-link').click();
+  await expect(page.getByTestId('send-feedback')).toBeVisible();
+  const fbPhoto = page.getByTestId('fb-photo');
+  await expect(fbPhoto).toBeVisible();
+  const fbBox = (await fbPhoto.boundingBox())!;
+  await fbPhoto.click({ position: { x: fbBox.width * 0.1, y: fbBox.height * 0.1 } });
+  const hiddenRegion = await page.locator('[data-testid^="fb-region-"][data-hidden="true"]').first().getAttribute('data-testid');
+  await page.getByTestId('fb-mode-not_a_piece').click();
+  await page.getByTestId(hiddenRegion!.replace('fb-region-', 'fb-hit-')).click();
+  await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(2);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await a.check('15d-feedback');
+  const shownRegion = await page.locator('[data-testid^="fb-region-"][data-hidden="false"]').first().getAttribute('data-testid');
+  await page.getByTestId('fb-mode-wrong_place').click();
+  await page.getByTestId(shownRegion!.replace('fb-region-', 'fb-hit-')).click();
+  await page.getByTestId('fb-correct-2').click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await a.check('15d2-feedback-right-place');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toBeHidden();
+  await page.getByTestId('fb-create').click();
+  await expect(page.getByTestId('fb-download')).toBeVisible({ timeout: 30_000 });
+  await a.check('15e-feedback-file');
+  await page.goBack();
+  await expect(page.getByTestId('scan-result')).toBeVisible();
+
   const puzzleHash = new URL(page.url()).hash.replace(/\/scan\/.*$/, '');
   for (const tab of ['picture', 'history', 'settings'] as const) {
     await page.goto(`/?pipeline=mock${puzzleHash}/${tab}`);
@@ -169,6 +196,9 @@ test('mobile audit: every main screen', async ({ page }, info) => {
   await expect(page.getByRole('dialog')).toBeVisible();
   await a.check('17-settings-delete-confirm');
   await page.getByRole('button', { name: 'Cancel' }).click();
+  await page.getByTestId('settings-feedback').click();
+  await expect(page.getByTestId('send-feedback')).toBeVisible();
+  await a.check('17b-settings-feedback');
 
   await page.goto('/?pipeline=mock');
   await expect(page.getByTestId('puzzle-card')).toHaveCount(1);

@@ -43,6 +43,8 @@ describe('routeToHash', () => {
       { name: 'puzzle', id: 'p1', tab: 'settings' },
       { name: 'scan', id: 'p1', scanId: 's/2' },
       { name: 'place', id: 'p1', scanId: 's2' },
+      { name: 'feedback', id: 'p1', scanId: 's2' },
+      { name: 'feedback', id: 'p1' },
     ];
     for (const r of routes) expect(parseRoute(routeToHash(r))).toEqual(r);
   });
@@ -53,6 +55,9 @@ describe('routeToHash', () => {
     expect(href.puzzle('x', 'history')).toBe('#/puzzle/x/history');
     expect(href.scan('x', 'y')).toBe('#/puzzle/x/scan/y');
     expect(href.place('x', 'y')).toBe('#/puzzle/x/scan/y/place');
+    expect(href.feedback('x', 'y')).toBe('#/puzzle/x/scan/y/feedback');
+    expect(href.feedback('x')).toBe('#/puzzle/x/feedback');
+    expect(parseRoute('#/puzzle/x/feedback')).toEqual({ name: 'feedback', id: 'x' });
     expect(parseRoute('#/puzzle/x/scan/y/place')).toEqual({ name: 'place', id: 'x', scanId: 'y' });
     expect(routePuzzleId(parseRoute('#/puzzle/x/scan/y/place'))).toBe('x');
   });

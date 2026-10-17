@@ -10,6 +10,7 @@ import { NewPuzzleWizard } from './screens/wizard/NewPuzzleWizard';
 import { PuzzleWorkspace } from './screens/workspace/PuzzleWorkspace';
 import { PlacingScreen } from './screens/scan/PlacingScreen';
 import { ScanResultScreen } from './screens/scan/ScanResultScreen';
+import { SendFeedbackScreen } from './screens/feedback/SendFeedbackScreen';
 import type { PipelineApi } from '../worker/api';
 
 export function App({ pipeline }: { pipeline?: PipelineApi } = {}) {
@@ -45,6 +46,12 @@ function Router() {
       return (
         <PuzzleProvider key={route.id} id={route.id}>
           <PlacingScreen key={route.scanId} scanId={route.scanId} />
+        </PuzzleProvider>
+      );
+    case 'feedback':
+      return (
+        <PuzzleProvider key={route.id} id={route.id}>
+          <SendFeedbackScreen key={route.scanId ?? ''} scanId={route.scanId} />
         </PuzzleProvider>
       );
     case 'notFound':

@@ -166,6 +166,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
           >
             <p>Spread the pieces on a plain, contrasting background so they don’t touch, and shoot from directly above.</p>
           </EmptyState>
+          <FeedbackLink puzzleId={puzzle.id} scanId={scan.id} />
         </main>
       </>
     );
@@ -313,6 +314,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
           </ul>
           <Legend />
         </section>
+        <FeedbackLink puzzleId={puzzle.id} scanId={scan.id} />
       </main>
 
       <div className="action-bar" data-testid="action-bar">
@@ -356,5 +358,16 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
       )}
       <Snackbar message={snack} onClose={closeSnack} />
     </>
+  );
+}
+
+/** Quiet way to report a bad detection (at the very end of the result). */
+function FeedbackLink({ puzzleId, scanId }: { puzzleId: string; scanId: string }) {
+  return (
+    <p className="feedback-link small">
+      <a href={href.feedback(puzzleId, scanId)} data-testid="scan-feedback-link">
+        Something wrong with this scan? Send feedback
+      </a>
+    </p>
   );
 }

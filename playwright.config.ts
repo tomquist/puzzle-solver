@@ -63,18 +63,18 @@ export default defineConfig({
     {
       name: 'phone',
       use: phoneChromium(390, 844, 2),
-      testMatch: /(smoke|camera|errors|placing)\.spec\.ts/,
+      testMatch: /(smoke|camera|errors|placing|feedback)\.spec\.ts/,
     },
     {
       name: 'desktop',
       use: { browserName: 'chromium', viewport: { width: 1280, height: 860 } },
-      testMatch: /(smoke|camera|errors|pipeline|box-check|placing)\.spec\.ts/,
+      testMatch: /(smoke|camera|errors|pipeline|box-check|placing|feedback)\.spec\.ts/,
     },
     {
       name: 'iphone-13',
       use: { ...devices['iPhone 13'] },
       // No fake camera in WebKit; the real pipeline runs here too (worker, IndexedDB, codecs).
-      testMatch: /(smoke|errors|pipeline|mobile|placing)\.spec\.ts/,
+      testMatch: /(smoke|errors|pipeline|mobile|placing|feedback)\.spec\.ts/,
     },
     {
       name: 'android-small',

@@ -6,6 +6,8 @@
  *   #/puzzle/:id/:tab          workspace tab (scan | picture | history | settings)
  *   #/puzzle/:id/scan/:scanId  scan result
  *   #/puzzle/:id/scan/:scanId/place  guided placing mode for a scan
+ *   #/puzzle/:id/scan/:scanId/feedback  send feedback about a scan
+ *   #/puzzle/:id/feedback      send feedback about the box photo / picture
  */
 
 export const PUZZLE_TABS = ['scan', 'picture', 'history', 'settings'] as const;
@@ -17,6 +19,7 @@ export type Route =
   | { name: 'puzzle'; id: string; tab: PuzzleTab }
   | { name: 'scan'; id: string; scanId: string }
   | { name: 'place'; id: string; scanId: string }
+  | { name: 'feedback'; id: string; scanId?: string }
   | { name: 'notFound'; path: string };
 
 function isTab(s: string): s is PuzzleTab {
@@ -43,6 +46,8 @@ export function parseRoute(hash: string): Route {
     const id = parts[1];
     if (parts.length === 2) return { name: 'puzzle', id, tab: 'scan' };
     if (parts.length === 3 && isTab(parts[2])) return { name: 'puzzle', id, tab: parts[2] };
+    if (parts.length === 3 && parts[2] === 'feedback') return { name: 'feedback', id };
+    if (parts.length === 5 && parts[2] === 'scan' && parts[3] && parts[4] === 'feedback') return { name: 'feedback', id, scanId: parts[3] };
     if (parts.length === 4 && parts[2] === 'scan' && parts[3]) return { name: 'scan', id, scanId: parts[3] };
     if (parts.length === 5 && parts[2] === 'scan' && parts[3] && parts[4] === 'place') return { name: 'place', id, scanId: parts[3] };
   }
@@ -62,6 +67,10 @@ export function routeToHash(route: Route): string {
       return `#/puzzle/${encodeURIComponent(route.id)}/scan/${encodeURIComponent(route.scanId)}`;
     case 'place':
       return `#/puzzle/${encodeURIComponent(route.id)}/scan/${encodeURIComponent(route.scanId)}/place`;
+    case 'feedback':
+      return route.scanId
+        ? `#/puzzle/${encodeURIComponent(route.id)}/scan/${encodeURIComponent(route.scanId)}/feedback`
+        : `#/puzzle/${encodeURIComponent(route.id)}/feedback`;
     case 'notFound':
       return `#${route.path}`;
   }
@@ -73,9 +82,10 @@ export const href = {
   puzzle: (id: string, tab: PuzzleTab = 'scan') => routeToHash({ name: 'puzzle', id, tab }),
   scan: (id: string, scanId: string) => routeToHash({ name: 'scan', id, scanId }),
   place: (id: string, scanId: string) => routeToHash({ name: 'place', id, scanId }),
+  feedback: (id: string, scanId?: string) => routeToHash({ name: 'feedback', id, scanId }),
 };
 
 /** Puzzle id of routes that live inside a puzzle (workspace and scan results). */
 export function routePuzzleId(route: Route): string | undefined {
-  return route.name === 'puzzle' || route.name === 'scan' || route.name === 'place' ? route.id : undefined;
+  return route.name === 'puzzle' || route.name === 'scan' || route.name === 'place' || route.name === 'feedback' ? route.id : undefined;
 }
