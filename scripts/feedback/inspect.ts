@@ -276,13 +276,22 @@ export function writeInspection(r: FeedbackReplay, outDir: string): { summary: s
     const bg = r.background;
     const tw = 640, th = Math.max(1, Math.round((tw * r.photo.height) / r.photo.width));
     const thumb = new View(r.photo, { maxSide: tw }).render([[['PHOTO', COLORS.white]]]);
-    const model = new View(backgroundImage(r, tw, th), { maxSide: tw }).render([[['TABLE MODEL (QUADRATIC LAB SURFACE)', COLORS.white]]]);
+    const modelImg = backgroundImage(r, tw, th);
+    // Further table colours (patterned cloth, floor) as swatches in the top-left corner.
+    bg.palette.forEach((p, k) => {
+      const c = labToRgba({ width: 1, height: 1, channels: 3, data: Float32Array.from(p.color) }).data;
+      fillRect(modelImg, 8 + k * 64, 8, 56, 56, [255, 255, 255, 255]);
+      fillRect(modelImg, 10 + k * 64, 10, 52, 52, [c[0], c[1], c[2], 255]);
+    });
+    const model = new View(modelImg, { maxSide: tw }).render([[[bg.palette.length ? 'TABLE MODEL + FURTHER TABLE COLOURS (SWATCHES)' : 'TABLE MODEL (QUADRATIC LAB SURFACE)', COLORS.white]]]);
     const top = hstack([thumb, model]);
     const f1 = (x: number) => x.toFixed(1);
     save('5-background.png', vstack([top, textPanel([
       [`TABLE COLOUR LAB (${bg.color.map(f1).join(', ')}), SPREAD SIGMA (${bg.sigma.map(f1).join(', ')})`, COLORS.white],
       [`LIGHTING RATIO ${bg.lightingRatio.toFixed(2)} (WARN > 3.5), NOISE ${f1(bg.noise)} GRAY LEVELS, PRE-SMOOTHING RADIUS ${bg.smoothing}`, COLORS.white],
       [`THRESHOLD HIGH ${f1(d?.high ?? bg.threshold)} LOW ${f1(d?.low ?? 0)}, SEPARABILITY ${bg.separability.toFixed(2)}, OUTLINE CONTRAST ${f1(bg.outlineContrast)} (LOW < 7.5), TABLE ${(100 * bg.coverage).toFixed(0)}% OF THE PHOTO`, COLORS.white],
+      [`TABLE MODEL EXPLAINS ${(100 * bg.bandFit).toFixed(0)}% OF THE BORDER; FURTHER TABLE COLOURS: ${bg.palette.length ? bg.palette.map((p) => `LAB (${p.color.map(f1).join(', ')}) IN ${(100 * p.interior).toFixed(0)}% OF THE MIDDLE`).join('; ') : 'NONE'}`, COLORS.white],
+      [`JPEG BLOCKINESS ${(d?.blockiness ?? 1).toFixed(2)} (OUTLINES SNAPPED TO BRIGHTNESS EDGES FROM 1.3)`, COLORS.white],
       [`QUALITY NOW: ${issuesText(r.current?.quality)}`, COLORS.ambiguous],
       [`QUALITY IN THE APP: ${issuesText(r.original?.quality)}`, COLORS.unmatched],
     ], top.width)], 4));
@@ -376,6 +385,7 @@ export function formatSummary(r: FeedbackReplay): string {
   if (r.background) {
     const bg = r.background;
     lines.push(`  table Lab (${bg.color.map((x) => x.toFixed(0)).join(',')}) sigma (${bg.sigma.map((x) => x.toFixed(1)).join(',')}) noise ${bg.noise.toFixed(1)} smoothing ${bg.smoothing} threshold ${bg.threshold.toFixed(1)} separability ${bg.separability.toFixed(2)} outline contrast ${bg.outlineContrast.toFixed(1)} lighting ${bg.lightingRatio.toFixed(2)}`);
+    lines.push(`  table fit ${(100 * bg.bandFit).toFixed(0)}% of border, palette ${bg.palette.length ? bg.palette.map((p) => `Lab(${p.color.map((x) => x.toFixed(0)).join(',')}) ${(100 * p.interior).toFixed(0)}% inside`).join(', ') : 'none'}, jpeg blockiness ${(r.diagnostics?.blockiness ?? 1).toFixed(2)}`);
   }
   if (r.marks.length > 0) {
     lines.push('');

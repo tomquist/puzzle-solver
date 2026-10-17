@@ -24,6 +24,19 @@ export interface BackgroundModel {
   height: number;
   /** 95th / 5th percentile of the modelled table luminance where the table is visible (1 = even lighting). */
   lightingRatio: number;
+  /**
+   * Fraction of the photo's border band that the table model explains (within 3.5 sigmas): about
+   * 0.8–1 for a plain or wood table minus pieces lying on the border, low for patterned cloth.
+   */
+  bandFit: number;
+  /**
+   * Further table colours (a patterned cloth, the floor beyond the table edge), each with its spread
+   * and the main surface's lightness `refL` where it was measured: under other lighting it scales
+   * with the main surface. Blends of two table colours count as table too. `interior` is the share
+   * of the middle of the photo showing the colour (a pattern spreads over the whole table).
+   * Empty for a plain table.
+   */
+  palette: { color: [number, number, number]; sigma: [number, number, number]; refL: number; interior: number }[];
   /** Fraction of the photo classified as background. */
   coverage: number;
   /** Estimated sensor noise (gray levels, measured on the photo's border bands). */
@@ -89,6 +102,8 @@ export interface SegmentDiagnostics {
   /** Foreground components dropped as specks (smaller than `minArea`). */
   removed?: Mask;
   minArea?: number;
+  /** Colour blockiness (JPEG at its original pixel grid when ≥ 1.3; outlines are then snapped to brightness edges). */
+  blockiness?: number;
   /** Expected single-piece area (px) and body size used for classification (0 = no reference). */
   refArea?: number;
   refBody?: number;
