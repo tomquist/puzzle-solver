@@ -27,3 +27,16 @@ test('mobile audit: live camera', async ({ page }, info) => {
   await shutter.click();
   await expect(page.getByTestId('wizard-corners')).toBeVisible({ timeout: 20_000 });
 });
+
+// CI runners and many phones have wider system fonts than the dev machine: the camera action
+// row must wrap instead of overflowing (regression: "Upload photo" spilled past a 360 px screen).
+test('mobile audit: live camera with wide system fonts', async ({ page }) => {
+  await page.goto('/?pipeline=mock#/new');
+  await page.addStyleTag({
+    content: 'html, body, button, label, a { font-family: Verdana, "DejaVu Sans", sans-serif !important; letter-spacing: 0.05em !important; }',
+  });
+  await expect(page.locator('video.camera-video')).toBeVisible();
+  await page.waitForTimeout(300);
+  const vs = (await auditPage(page)).filter((v) => v.rule === 'overflow');
+  expect(vs, formatViolations(vs)).toEqual([]);
+});
