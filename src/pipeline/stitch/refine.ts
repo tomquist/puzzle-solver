@@ -27,6 +27,8 @@ export interface DirectRefineResult {
   /** Normalised cross-correlation of reference and warped close-up before / after refinement. */
   nccBefore: number;
   nccAfter: number;
+  /** False when the overlap was too small to measure anything (NCC values are then 0). */
+  measured: boolean;
   accepted: boolean;
 }
 
@@ -127,11 +129,11 @@ function alignLevel(ref: GrayImage, close: GrayImage, G0: Mat3, maxSamples: numb
     }
   }
   const res = new Float32Array(s.n);
+  const val = new Float32Array(s.n);
   const valid = new Uint8Array(s.n);
   const JtJ = new Float64Array(100);
   const Jte = new Float64Array(10);
   const row = new Float64Array(10);
-  let sigma = -1;
   for (let it = 0; it < iterations; it++) {
     JtJ.fill(0);
     Jte.fill(0);
@@ -143,13 +145,14 @@ function alignLevel(ref: GrayImage, close: GrayImage, G0: Mat3, maxSamples: numb
       const I = wq > 0 ? sampleGray(close, u, v) : NaN;
       if (Number.isNaN(I) || u < 1 || v < 1 || u > close.width - 2 || v > close.height - 2) { valid[i] = 0; continue; }
       valid[i] = 1;
+      val[i] = I;
       res[i] = alpha * I + beta - s.r[i];
     }
     let nv = 0;
     const absRes = new Float32Array(s.n);
     for (let i = 0; i < s.n; i++) if (valid[i]) absRes[nv++] = Math.abs(res[i]);
     if (nv < 200) return G0;
-    sigma = Math.max(0.5, 1.4826 * median(absRes, nv));
+    const sigma = Math.max(0.5, 1.4826 * median(absRes, nv));
     const k = 1.345 * sigma;
     // Pass 2: weighted normal equations.
     for (let i = 0; i < s.n; i++) {
@@ -157,7 +160,7 @@ function alignLevel(ref: GrayImage, close: GrayImage, G0: Mat3, maxSamples: numb
       const x = s.x[i], y = s.y[i];
       const wq = G[6] * x + G[7] * y + G[8];
       const u = (G[0] * x + G[1] * y + G[2]) / wq, v = (G[3] * x + G[4] * y + G[5]) / wq;
-      const I = sampleGray(close, u, v);
+      const I = val[i];
       const gu = sampleGray(gx, u, v) / 8, gv = sampleGray(gy, u, v) / 8;
       const ja = (G[0] - G[6] * u) / wq, jb = (G[1] - G[7] * u) / wq;
       const jc = (G[3] - G[6] * v) / wq, jd = (G[4] - G[7] * v) / wq;
@@ -234,7 +237,7 @@ export function refineHomographyDirect(ref: GrayImage, close: GrayImage, H: Mat3
     ref.width,
     ref.height,
   );
-  const failed: DirectRefineResult = { H, nccBefore: 0, nccAfter: 0, accepted: false };
+  const failed: DirectRefineResult = { H, nccBefore: 0, nccAfter: 0, measured: false, accepted: false };
   if (crop.width < 16 || crop.height < 16) return failed;
   // No pre-blur: the fine level keeps all detail (most accurate); the half-resolution level
   // (area-downsampled, hence smooth) widens the convergence basin.
@@ -278,8 +281,8 @@ export function refineHomographyDirect(ref: GrayImage, close: GrayImage, H: Mat3
     shift = Math.max(shift, Math.hypot(q.x - p.x, q.y - p.y));
   }
   const accepted = nccAfter >= nccBefore - 1e-3 && shift <= maxShift && Number.isFinite(shift);
-  if (!accepted) return { H, nccBefore, nccAfter: nccBefore, accepted: false };
+  if (!accepted) return { H, nccBefore, nccAfter: nccBefore, measured: true, accepted: false };
   // Back to reference and caller close-up coordinates: H' = toWork^-1 * Hc2 * (Hd^-1 * H).
   const refined = mat3Multiply(mat3Invert(toWork), mat3Multiply(Hc2, mat3Multiply(mat3Invert(Hd), H)));
-  return { H: refined.map((v) => v / refined[8]), nccBefore, nccAfter, accepted: true };
+  return { H: refined.map((v) => v / refined[8]), nccBefore, nccAfter, measured: true, accepted: true };
 }

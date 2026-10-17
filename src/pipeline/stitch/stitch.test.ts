@@ -113,6 +113,7 @@ describe('registerCloseup', () => {
       expect(reg, diagnostics.failure).not.toBeNull();
       const r = reg!;
       const err = reprojectionError(s, r.toReference);
+      console.log(`${c.name}: max ${err.max.toFixed(3)} / mean ${err.mean.toFixed(3)} ref px, ${r.inliers} inliers, gain ${r.scaleGain.toFixed(2)}, confidence ${r.confidence.toFixed(2)}`);
       expect(err.n).toBeGreaterThan(100);
       expect(err.max).toBeLessThan(1.5);
       expect(err.mean).toBeLessThan(0.5);

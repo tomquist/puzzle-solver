@@ -12,7 +12,7 @@
  */
 import { mat3Invert, solveLinear, type Mat3 } from '../../cv/geometry';
 import { clampRect, type RGBAImage } from '../../cv/image';
-import { sampleRGBA } from '../../cv/warp';
+import { sampleLinear } from './sampling';
 import { imageCorners, mapPolygon, smoothstep } from './util';
 
 /** Per channel R, G, B: [g0, gu, gv, gr, o0, ou, ov] (21 numbers). */
@@ -177,7 +177,7 @@ export function analyzePhotometry(reference: RGBAImage, closeup: RGBAImage, toRe
   // Block sums: [refR, refG, refB, cR, cG, cB, count, clippedMask, sumU, sumV].
   const stride = 10;
   const acc = new Float64Array(bw * bh * stride);
-  const px = [0, 0, 0, 0];
+  const px = new Float64Array(3);
   const margin = 2;
   for (let y = r.y; y < r.y + r.height; y++) {
     const by = Math.floor((y - r.y) / B);
@@ -187,7 +187,7 @@ export function analyzePhotometry(reference: RGBAImage, closeup: RGBAImage, toRe
       const cu = (inv[0] * x + inv[1] * y + inv[2]) / w;
       const cv = (inv[3] * x + inv[4] * y + inv[5]) / w;
       if (cu < margin || cv < margin || cu > closeup.width - 1 - margin || cv > closeup.height - 1 - margin) continue;
-      if (!sampleRGBA(closeup, cu, cv, px)) continue;
+      sampleLinear(closeup.data, closeup.width, closeup.height, cu, cv, px);
       const o = (by * bw + Math.floor((x - r.x) / B)) * stride;
       const ri = (y * reference.width + x) * 4;
       let clip = acc[o + 7];

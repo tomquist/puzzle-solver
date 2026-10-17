@@ -38,7 +38,7 @@ export interface RegisterDiagnostics {
   inlierRatio: number;
   /** Inliers after guided matching. */
   inliers: number;
-  /** NCC of reference vs. warped close-up over the overlap (after refinement). */
+  /** NCC of reference vs. warped close-up over the overlap (after refinement; 0 if not measured). */
   ncc: number;
   refined: boolean;
   /** Why registration failed (undefined on success). */
@@ -242,11 +242,13 @@ export function registerCloseupDetailed(
   diag.inliers = inlierMatches.length;
   lap('guided');
 
-  // Direct refinement in working coordinates.
+  // Direct refinement in working coordinates (also measures photometric agreement).
+  let nccMeasured = false;
   if (opts.refine ?? true) {
     const r = refineHomographyDirect(ref.gray, close.gray, H);
     diag.ncc = r.nccAfter;
     diag.refined = r.accepted;
+    nccMeasured = r.measured;
     H = r.H;
   }
   lap('refine');
@@ -282,11 +284,11 @@ export function registerCloseupDetailed(
   const center = { x: coverage.x + coverage.width / 2 - 0.5, y: coverage.y + coverage.height / 2 - 0.5 };
   const scaleGain = localScale(mat3Invert(Horig), center);
 
-  if (diag.refined && diag.ncc < 0.2) return fail('close-up does not resemble the reference');
+  if (nccMeasured && diag.ncc < 0.2) return fail('close-up does not resemble the reference');
 
   const cInliers = 1 - Math.exp(-Math.max(0, diag.inliers - 10) / 40);
   const cRatio = clamp01((diag.inlierRatio - 0.1) / 0.3);
-  const cNcc = diag.refined ? clamp01((diag.ncc - 0.2) / 0.5) : 0.5;
+  const cNcc = nccMeasured ? clamp01((diag.ncc - 0.2) / 0.5) : 0.5;
   const confidence = clamp01(cInliers * (0.5 + 0.5 * cRatio) * (0.4 + 0.6 * cNcc));
   lap('validate');
 

@@ -101,7 +101,6 @@ export function ransacHomography(src: Point[], dst: Point[], opts: RansacOptions
   const idx = new Int32Array(4);
   let bestH: Mat3 | null = null;
   let bestCost = Infinity;
-  let bestCount = 0;
   let limit = maxIterations;
   const updateLimit = (count: number) => {
     const w = count / n;
@@ -145,7 +144,6 @@ export function ransacHomography(src: Point[], dst: Point[], opts: RansacOptions
     }
     bestH = model;
     bestCost = cost;
-    bestCount = count;
     updateLimit(count);
   }
   if (!bestH) return null;
@@ -172,6 +170,7 @@ export function ransacHomography(src: Point[], dst: Point[], opts: RansacOptions
     inliers[i] = err[i] < t2;
     if (inliers[i]) inlierCount++;
   }
-  if (inlierCount < 4 || (n > 4 && inlierCount <= 4) || bestCount < 4) return null;
+  // A consensus of only the minimal sample proves nothing (unless that is all the data).
+  if (inlierCount < 4 || (n > 4 && inlierCount === 4)) return null;
   return { H, inliers, inlierCount };
 }

@@ -8,6 +8,7 @@ import { createRGBA, type RGBAImage } from '../../cv/image';
 import { resizeRGBA } from '../../cv/resize';
 import type { CloseupRegistration } from '../../model/types';
 import { analyzePhotometry, identityPhotometric, type ConsistencyMap, type PhotometricModel } from './photometric';
+import { sampleCubic, sampleLinear } from './sampling';
 import { det3, imageCorners, resizeTransform } from './util';
 
 export interface ComposeHighResOptions {
@@ -43,6 +44,13 @@ interface Layer {
   y0: number;
   x1: number;
   y1: number;
+}
+
+const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+
+/** Round and clamp to 0..255. */
+function toByte(v: number): number {
+  return v <= 0 ? 0 : v >= 255 ? 255 : (v + 0.5) | 0;
 }
 
 /** Glare: a close-up pixel whose darkest channel exceeds GLARE_LO fades out until GLARE_HI. */
@@ -99,7 +107,21 @@ function prepareLayer(reference: RGBAImage, c: CloseupInput, outW: number, outH:
   x1 = Math.min(outW - 1, Math.ceil(x1) + 1); y1 = Math.min(outH - 1, Math.ceil(y1) + 1);
   if (x1 < x0 || y1 < y0) return null;
 
-  const photo = opts.photometric === false ? { model: identityPhotometric(), consistency: null } : analyzePhotometry(reference, img, layerToRef);
+  let photo: { model: PhotometricModel; consistency: ConsistencyMap | null } = { model: identityPhotometric(), consistency: null };
+  if (opts.photometric !== false) {
+    // Compare colours at the reference's resolution: area-downsample a sharper close-up first so
+    // block means are not polluted by aliasing. (u, v) are normalised, so the model carries over.
+    const layerGain = registration.scaleGain * (img.width / image.width);
+    let pimg = img, pH = layerToRef;
+    if (layerGain > 1.25) {
+      const w = Math.max(2, Math.round(img.width / layerGain)), h = Math.max(2, Math.round(img.height / layerGain));
+      pimg = resizeRGBA(img, w, h);
+      pH = mat3Multiply(layerToRef, mat3Invert(resizeTransform(img.width, img.height, w, h)));
+    }
+    photo = analyzePhotometry(reference, pimg, pH);
+    // Fully consistent close-ups (the common case) skip the per-pixel lookup.
+    if (photo.consistency && photo.consistency.data.every((v) => v >= 0.999)) photo.consistency = null;
+  }
   return {
     img,
     M,
@@ -121,48 +143,6 @@ interface RowBuffers {
   refX: Float32Array;
   /** Scratch RGB sample. */
   px: Float64Array;
-}
-
-/** Bilinear RGB sample at (u, v) (integer coordinates = pixel centers, clamped at the border). */
-function sampleLinear(data: Uint8ClampedArray, w: number, h: number, u: number, v: number, out: Float64Array): void {
-  let x0 = Math.floor(u), y0 = Math.floor(v);
-  let fx = u - x0, fy = v - y0;
-  if (x0 < 0) { x0 = 0; fx = 0; } else if (x0 >= w - 1) { x0 = w - 1; fx = 0; }
-  if (y0 < 0) { y0 = 0; fy = 0; } else if (y0 >= h - 1) { y0 = h - 1; fy = 0; }
-  const i00 = (y0 * w + x0) * 4;
-  const i10 = fx > 0 ? i00 + 4 : i00;
-  const i01 = fy > 0 ? i00 + w * 4 : i00;
-  const i11 = fx > 0 ? i01 + 4 : i01;
-  const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy), w01 = (1 - fx) * fy, w11 = fx * fy;
-  out[0] = data[i00] * w00 + data[i10] * w10 + data[i01] * w01 + data[i11] * w11;
-  out[1] = data[i00 + 1] * w00 + data[i10 + 1] * w10 + data[i01 + 1] * w01 + data[i11 + 1] * w11;
-  out[2] = data[i00 + 2] * w00 + data[i10 + 2] * w10 + data[i01 + 2] * w01 + data[i11 + 2] * w11;
-}
-
-/** Catmull–Rom bicubic RGB sample at (u, v), clamped at the border (may overshoot 0..255 slightly). */
-function sampleCubic(data: Uint8ClampedArray, w: number, h: number, u: number, v: number, out: Float64Array): void {
-  const x0 = Math.floor(u), y0 = Math.floor(v);
-  const tx = u - x0, ty = v - y0;
-  const tx2 = tx * tx, tx3 = tx2 * tx, ty2 = ty * ty, ty3 = ty2 * ty;
-  const wx0 = 0.5 * (-tx3 + 2 * tx2 - tx), wx1 = 0.5 * (3 * tx3 - 5 * tx2 + 2), wx2 = 0.5 * (-3 * tx3 + 4 * tx2 + tx), wx3 = 0.5 * (tx3 - tx2);
-  const wy0 = 0.5 * (-ty3 + 2 * ty2 - ty), wy1 = 0.5 * (3 * ty3 - 5 * ty2 + 2), wy2 = 0.5 * (-3 * ty3 + 4 * ty2 + ty), wy3 = 0.5 * (ty3 - ty2);
-  const c0 = (x0 - 1 < 0 ? 0 : x0 - 1 >= w ? w - 1 : x0 - 1) * 4;
-  const c1 = (x0 < 0 ? 0 : x0 >= w ? w - 1 : x0) * 4;
-  const c2 = (x0 + 1 < 0 ? 0 : x0 + 1 >= w ? w - 1 : x0 + 1) * 4;
-  const c3 = (x0 + 2 < 0 ? 0 : x0 + 2 >= w ? w - 1 : x0 + 2) * 4;
-  let r = 0, g = 0, b = 0;
-  for (let j = 0; j < 4; j++) {
-    const yy = y0 - 1 + j;
-    const row = (yy < 0 ? 0 : yy >= h ? h - 1 : yy) * w * 4;
-    const wy = j === 0 ? wy0 : j === 1 ? wy1 : j === 2 ? wy2 : wy3;
-    const a = row + c0, bb = row + c1, c = row + c2, d = row + c3;
-    r += wy * (data[a] * wx0 + data[bb] * wx1 + data[c] * wx2 + data[d] * wx3);
-    g += wy * (data[a + 1] * wx0 + data[bb + 1] * wx1 + data[c + 1] * wx2 + data[d + 1] * wx3);
-    b += wy * (data[a + 2] * wx0 + data[bb + 2] * wx1 + data[c + 2] * wx2 + data[d + 2] * wx3);
-  }
-  out[0] = r;
-  out[1] = g;
-  out[2] = b;
 }
 
 /**
@@ -273,6 +253,8 @@ export function composeHighRes(reference: RGBAImage, closeups: CloseupInput[], o
   const sAvg = Math.sqrt(sx * sy);
   const out = createRGBA(W, Hh);
   const od = out.data;
+  // Packed RGBA stores are much faster than four clamped byte stores.
+  const o32 = LITTLE_ENDIAN ? new Uint32Array(od.buffer, od.byteOffset, W * Hh) : null;
   // Downscaling needs an area-filtered base; upscaling interpolates the reference on the fly.
   const base = sx < 1 || sy < 1 ? resizeRGBA(reference, W, Hh) : null;
   const layers: Layer[] = [];
@@ -323,19 +305,23 @@ export function composeHighRes(reference: RGBAImage, closeups: CloseupInput[], o
         b1 = rd[t0 + 1] * w00 + rd[t1 + 1] * w10 + rd[t2 + 1] * w01 + rd[t3 + 1] * w11;
         b2 = rd[t0 + 2] * w00 + rd[t1 + 2] * w10 + rd[t2 + 2] * w01 + rd[t3 + 2] * w11;
       }
+      let r = b0, g = b1, b = b2;
       const ws = any ? row.wsum[X] : 0;
       if (ws > 0) {
         const A = 1 - row.keep[X];
         const inv = A / ws;
-        od[o] = row.acc[X * 3] * inv + (1 - A) * b0;
-        od[o + 1] = row.acc[X * 3 + 1] * inv + (1 - A) * b1;
-        od[o + 2] = row.acc[X * 3 + 2] * inv + (1 - A) * b2;
-      } else {
-        od[o] = b0;
-        od[o + 1] = b1;
-        od[o + 2] = b2;
+        r = row.acc[X * 3] * inv + (1 - A) * b0;
+        g = row.acc[X * 3 + 1] * inv + (1 - A) * b1;
+        b = row.acc[X * 3 + 2] * inv + (1 - A) * b2;
       }
-      od[o + 3] = 255;
+      if (o32) {
+        o32[Y * W + X] = toByte(r) | (toByte(g) << 8) | (toByte(b) << 16) | 0xff000000;
+      } else {
+        od[o] = r;
+        od[o + 1] = g;
+        od[o + 2] = b;
+        od[o + 3] = 255;
+      }
     }
   }
   return out;
