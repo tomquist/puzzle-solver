@@ -1,29 +1,35 @@
 /**
- * SVG overlay of the feedback screen: every detected outline – also the ones the results hide
- * (dashed, dimmed) – and the user's marks as numbered dots. In "missed piece" mode a tap anywhere
- * adds a point (a tap on a point removes it); in the other modes a tap on an outline marks it.
+ * SVG overlay of the feedback screen: every detected region filled in its result-screen colour
+ * (sure green, unsure amber, assembled blue; found-but-hidden grey hatched), so pieces the app did
+ * not find are the ones left untouched, and the user's marks as numbered dots on top. In "missed
+ * piece" mode a tap anywhere reports the point (a tap on a point removes it); in the other modes a
+ * tap on a region marks it.
  */
+import { useId } from 'react';
 import type { Point } from '../../../cv/geometry';
 import type { FeedbackMark, FeedbackMarkKind } from '../../../feedback/format';
 import type { ScanResult } from '../../../model/types';
-import { isRegionMark } from '../../lib/feedbackMarks';
+import { isRegionMark, type DetectionTone } from '../../lib/feedbackMarks';
 import { polygonPath, regionCenter } from '../../lib/overlay';
 
 export function FeedbackOverlay({
   result,
-  hidden,
+  tones,
   marks,
   mode,
+  pendingRegionId,
   scale,
   onRegion,
   onPoint,
   onRemove,
 }: {
   result: ScanResult;
-  /** Regions the result screens don't show. */
-  hidden: Set<number>;
+  /** How each region is shown in the results ('hidden' = not shown). */
+  tones: Map<number, DetectionTone>;
   marks: FeedbackMark[];
   mode: FeedbackMarkKind;
+  /** Region the "this piece was found" note is about. */
+  pendingRegionId?: number;
   /** Screen px per photo px. */
   scale: number;
   onRegion: (regionId: number) => void;
@@ -41,7 +47,10 @@ export function FeedbackOverlay({
   const centers = new Map(result.regions.map((reg) => [reg.id, regionCenter(reg)]));
   // Largest first, so smaller outlines (and their touch targets) are on top.
   const ordered = [...result.regions].sort((a, b) => b.area - a.area);
-  const label = (id: number) => `${hidden.has(id) ? 'Outline not shown in results' : `Piece ${id}`}${markOf.has(id) ? ', marked' : ''}`;
+  const toneOf = (id: number): DetectionTone => tones.get(id) ?? 'hidden';
+  const label = (id: number) => `${toneOf(id) === 'hidden' ? 'Found but not shown' : `Piece ${id}`}${markOf.has(id) ? ', marked' : ''}`;
+  const hatch = `fb-hatch-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  const step = 7 / scale;
 
   return (
     <svg
@@ -59,18 +68,30 @@ export function FeedbackOverlay({
         onPoint({ x, y });
       }}
     >
+      <defs>
+        <pattern id={hatch} patternUnits="userSpaceOnUse" width={step} height={step} patternTransform="rotate(45)">
+          <rect width={step} height={step} fill="rgba(75, 85, 99, 0.45)" />
+          <rect width={step * 0.4} height={step} fill="rgba(229, 231, 235, 0.85)" />
+        </pattern>
+      </defs>
       <rect className="fb-bg" x={0} y={0} width={width} height={height} />
 
       {ordered.map((reg) => {
         const mk = markOf.get(reg.id);
+        const tone = toneOf(reg.id);
+        const isHidden = tone === 'hidden';
         const d = polygonPath(reg.contour);
-        const cls = ['fb-region', hidden.has(reg.id) && 'is-hidden', mk && `marked mk-${mk.kind}`].filter(Boolean).join(' ');
+        const c = centers.get(reg.id)!;
+        const cls = ['fb-region', isHidden ? 'is-hidden' : `st-${tone}`, mk && `marked mk-${mk.kind}`, pendingRegionId === reg.id && 'pending'].filter(Boolean).join(' ');
         return (
           <g
             key={reg.id}
             className={cls}
             data-testid={`fb-region-${reg.id}`}
-            data-hidden={hidden.has(reg.id) ? 'true' : 'false'}
+            data-hidden={isHidden ? 'true' : 'false'}
+            data-tone={tone}
+            data-cx={Math.round(c.x)}
+            data-cy={Math.round(c.y)}
             {...(pointMode
               ? {}
               : {
@@ -90,10 +111,11 @@ export function FeedbackOverlay({
                 })}
           >
             <path d={d} className="fb-under" vectorEffect="non-scaling-stroke" />
-            <path d={d} className="fb-fill" />
+            {/* Inline style: beats the stylesheet's fill, which marks and the pending note override. */}
+            <path d={d} className="fb-fill" style={isHidden && !mk && pendingRegionId !== reg.id ? { fill: `url(#${hatch})` } : undefined} />
             <path d={d} className="fb-line" vectorEffect="non-scaling-stroke" />
             {/* ≥ 44 px touch target, so small outlines are easy to hit. */}
-            {!pointMode && <circle className="hit" cx={centers.get(reg.id)!.x} cy={centers.get(reg.id)!.y} r={hit} data-testid={`fb-hit-${reg.id}`} />}
+            {!pointMode && <circle className="hit" cx={c.x} cy={c.y} r={hit} data-testid={`fb-hit-${reg.id}`} />}
           </g>
         );
       })}

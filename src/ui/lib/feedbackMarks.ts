@@ -2,8 +2,10 @@
  * Editing the marks of a feedback file (pure): one mark per detected region (tapping it again in
  * the same mode removes it, another mode replaces it), any number of "missed piece" points.
  */
-import type { CellRef } from '../../model/types';
+import { pointInPolygon } from '../../cv/polygon';
+import type { CellRef, DetectedRegion, GridSpec, ScanResult } from '../../model/types';
 import type { FeedbackMark, FeedbackMarkKind } from '../../feedback/format';
+import { buildScanItems } from './items';
 
 export type RegionMarkKind = Exclude<FeedbackMarkKind, 'missed'>;
 
@@ -16,7 +18,7 @@ export interface MarkKindInfo {
 }
 
 export const MARK_KINDS: MarkKindInfo[] = [
-  { kind: 'missed', label: 'Missed piece', help: 'Tap a piece that has no outline.' },
+  { kind: 'missed', label: 'Missed piece', help: 'Tap each piece the app didn’t find.' },
   { kind: 'not_a_piece', label: 'Not a piece', help: 'Tap an outline around something that isn’t a piece (shadow, glare, table).' },
   { kind: 'merged', label: 'Several pieces', help: 'Tap an outline that covers more than one piece.' },
   { kind: 'bad_outline', label: 'Wrong outline', help: 'Tap a piece whose outline doesn’t follow its edge.' },
@@ -41,6 +43,15 @@ export function toggleRegionMark(marks: FeedbackMark[], kind: RegionMarkKind, re
   const i = markIndexForRegion(marks, regionId);
   if (i < 0) return [...marks, { kind, regionId }];
   if (marks[i].kind === kind) return removeMark(marks, i);
+  const next = [...marks];
+  next[i] = { kind, regionId };
+  return next;
+}
+
+/** Mark a region with `kind` (adds it, or changes the kind of its existing mark; never removes). */
+export function setRegionMark(marks: FeedbackMark[], kind: RegionMarkKind, regionId: number): FeedbackMark[] {
+  const i = markIndexForRegion(marks, regionId);
+  if (i < 0) return [...marks, { kind, regionId }];
   const next = [...marks];
   next[i] = { kind, regionId };
   return next;
@@ -74,3 +85,46 @@ export function areaName(x: number, y: number, width: number, height: number): s
   const third = (v: number, size: number) => Math.min(2, Math.max(0, Math.floor((v / Math.max(1, size)) * 3)));
   return AREAS[third(y, height)][third(x, width)];
 }
+
+/** How the result screens treat a detected region: the colour it gets on the feedback photo. */
+export type DetectionTone = 'confident' | 'ambiguous' | 'patch' | 'hidden';
+
+export function detectionTones(result: ScanResult, grid: GridSpec): Map<number, DetectionTone> {
+  const { items } = buildScanItems(result, grid);
+  const tones = new Map<number, DetectionTone>();
+  for (const item of items) for (const id of item.regionIds) tones.set(id, item.kind === 'assembled' ? 'patch' : item.status);
+  // Everything else (no usable match, weak assembled groups) is found but not shown.
+  for (const r of result.regions) if (!tones.has(r.id)) tones.set(r.id, 'hidden');
+  return tones;
+}
+
+/** The detected region under a photo point (the smallest one when outlines overlap). */
+export function regionAt(result: ScanResult, x: number, y: number): DetectedRegion | undefined {
+  let best: DetectedRegion | undefined;
+  for (const r of result.regions) {
+    const b = r.bbox;
+    if (x < b.x || y < b.y || x > b.x + b.width || y > b.y + b.height || r.contour.length < 3) continue;
+    if (pointInPolygon({ x, y }, r.contour) && (!best || r.area < best.area)) best = r;
+  }
+  return best;
+}
+
+/** "This piece was …" */
+export function foundText(tone: DetectionTone): string {
+  switch (tone) {
+    case 'confident':
+      return 'found';
+    case 'ambiguous':
+      return 'found (unsure)';
+    case 'patch':
+      return 'found (in an assembled group)';
+    case 'hidden':
+      return 'found but not shown';
+  }
+}
+
+/** Better marks than "missed" for a piece the app did find (a found-but-hidden piece has no place to be wrong). */
+export function alternativesFor(tone: DetectionTone): RegionMarkKind[] {
+  return tone === 'hidden' ? ['bad_outline', 'merged'] : ['wrong_place', 'bad_outline', 'merged'];
+}
+

@@ -2854,13 +2854,49 @@ body:has(.action-bar) .snackbar {
   align-items: center;
   gap: 6px;
 }
-.fb-key line {
-  stroke: var(--text-2);
-  stroke-width: 2;
+.fb-swatch {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 2px solid var(--st);
+  background: color-mix(in srgb, var(--st) 45%, transparent);
 }
-.fb-key line.dashed {
-  stroke-dasharray: 4 3;
-  opacity: 0.7;
+.fb-swatch.is-hidden {
+  border: 2px dashed #9ca3af;
+  background: repeating-linear-gradient(45deg, #9ca3af 0 2px, transparent 2px 5px);
+}
+.fb-photo-hint {
+  margin: 0;
+  color: var(--text-2);
+  font-weight: 600;
+}
+.fb-found-note {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 8px 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  background: var(--warn-soft);
+}
+.fb-found-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.fb-found-head p {
+  flex: 1 1 auto;
+  margin: 10px 0 0;
+}
+.fb-found-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.fb-found-kind {
+  gap: 6px;
+  padding: 0 12px;
 }
 
 /* Photo overlay */
@@ -2881,46 +2917,53 @@ body:has(.action-bar) .snackbar {
 }
 .fb-under {
   fill: none;
-  stroke: rgba(0, 0, 0, 0.45);
-  stroke-width: 3;
+  stroke: rgba(0, 0, 0, 0.55);
+  stroke-width: 4;
   stroke-linejoin: round;
 }
-.fb-fill {
-  fill: #fff;
-  fill-opacity: 0.05;
+/* Found regions: tinted fill + outline in the result screen's colours. */
+.fb-region .fb-fill {
+  fill: var(--st);
+  fill-opacity: 0.42;
 }
-.fb-line {
+.fb-region .fb-line {
   fill: none;
-  stroke: #fff;
-  stroke-width: 1.5;
-  stroke-opacity: 0.9;
+  stroke: var(--st);
+  stroke-width: 2.25;
   stroke-linejoin: round;
 }
+/* Found but not shown: grey hatching (fill set inline), dashed grey outline. */
 .fb-region.is-hidden {
-  opacity: 0.7;
+  --st: #9ca3af;
+}
+.fb-region.is-hidden .fb-fill {
+  fill-opacity: 1;
 }
 .fb-region.is-hidden .fb-line {
+  stroke: #e5e7eb;
   stroke-dasharray: 5 4;
-}
-.fb-region.is-hidden .fb-under {
-  stroke-opacity: 0.5;
 }
 .mode-region .fb-region:hover .fb-fill,
 .fb-region:focus-visible .fb-fill {
-  fill-opacity: 0.22;
-}
-.fb-region.marked {
-  opacity: 1;
+  fill-opacity: 0.6;
 }
 .fb-region.marked .fb-line {
   stroke: var(--mk);
-  stroke-width: 3;
-  stroke-opacity: 1;
+  stroke-width: 3.5;
   stroke-dasharray: none;
 }
 .fb-region.marked .fb-fill {
   fill: var(--mk);
-  fill-opacity: 0.28;
+  fill-opacity: 0.45;
+}
+/* The region a "this piece was found" note is about. */
+.fb-region.pending .fb-line {
+  stroke: #fff;
+  stroke-width: 3.5;
+  stroke-dasharray: 7 4;
+}
+.fb-region.pending .fb-fill {
+  fill-opacity: 0.7;
 }
 .fb-region .hit,
 .fb-mark .fb-hit {

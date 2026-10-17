@@ -44,14 +44,69 @@ function expectJpeg(img: FeedbackImage | undefined) {
   expect([bytes[0], bytes[1]]).toEqual([0xff, 0xd8]);
 }
 
-/** Id of the first outline with the given visibility on the feedback photo. */
-async function regionId(page: Page, hidden: boolean, skip: number[] = []): Promise<number> {
-  const ids = await page
-    .locator(`[data-testid^="fb-region-"][data-hidden="${hidden}"]`)
-    .evaluateAll((els) => els.map((e) => Number(e.getAttribute('data-testid')!.replace('fb-region-', ''))));
-  const id = ids.find((i) => !skip.includes(i));
-  expect(id, `a ${hidden ? 'hidden' : 'visible'} outline`).toBeDefined();
-  return id!;
+interface PhotoRegion {
+  id: number;
+  hidden: boolean;
+  tone: string;
+  /** Centre as a fraction of the photo. */
+  fx: number;
+  fy: number;
+  /** Bounding box as fractions of the photo. */
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/** Detected regions as drawn on the feedback photo. */
+async function photoRegions(page: Page): Promise<PhotoRegion[]> {
+  return page.getByTestId('fb-photo').evaluate((svg) => {
+    const vb = (svg as SVGSVGElement).viewBox.baseVal;
+    return [...svg.querySelectorAll('[data-testid^="fb-region-"]')].map((g) => {
+      const bb = (g.querySelector('.fb-line') as SVGGraphicsElement).getBBox();
+      return {
+        id: Number(g.getAttribute('data-testid')!.slice('fb-region-'.length)),
+        hidden: g.getAttribute('data-hidden') === 'true',
+        tone: g.getAttribute('data-tone') ?? '',
+        fx: Number(g.getAttribute('data-cx')) / vb.width,
+        fy: Number(g.getAttribute('data-cy')) / vb.height,
+        x0: bb.x / vb.width,
+        y0: bb.y / vb.height,
+        x1: (bb.x + bb.width) / vb.width,
+        y1: (bb.y + bb.height) / vb.height,
+      };
+    });
+  });
+}
+
+/** Points (fractions of the photo) well away from every detected region and from each other. */
+async function emptySpots(page: Page, n: number): Promise<{ fx: number; fy: number }[]> {
+  const regions = await photoRegions(page);
+  const box = (await page.getByTestId('fb-photo').boundingBox())!;
+  const mx = 26 / box.width;
+  const my = 26 / box.height;
+  const spots: { fx: number; fy: number }[] = [];
+  for (let fy = 0.04; fy < 0.8 && spots.length < n; fy += 0.02) {
+    for (let fx = 0.04; fx < 0.8 && spots.length < n; fx += 0.02) {
+      const free = regions.every((r) => fx < r.x0 - mx || fx > r.x1 + mx || fy < r.y0 - my || fy > r.y1 + my);
+      const apart = spots.every((p) => Math.hypot((p.fx - fx) * box.width, (p.fy - fy) * box.height) > 60);
+      if (free && apart) spots.push({ fx, fy });
+    }
+  }
+  expect(spots, 'empty spots on the photo').toHaveLength(n);
+  return spots;
+}
+
+/** Tap the feedback photo at a point given as fractions of the photo. */
+async function tapPhoto(page: Page, fx: number, fy: number) {
+  const photo = page.getByTestId('fb-photo');
+  const box = (await photo.boundingBox())!;
+  await photo.click({ position: { x: fx * box.width, y: fy * box.height } });
+}
+
+/** Regions whose centre is easy to tap (not under the zoom buttons in the bottom-right corner). */
+function tappable(regions: PhotoRegion[]): PhotoRegion[] {
+  return regions.filter((r) => r.fx < 0.8 || r.fy < 0.75);
 }
 
 test('scan feedback: marks of every kind, comment, file with photos and marks', async ({ page }, info) => {
@@ -72,40 +127,74 @@ test('scan feedback: marks of every kind, comment, file with photos and marks', 
   const photo = page.getByTestId('fb-photo');
   await expect(photo).toBeVisible();
 
-  // All outlines are drawn, including the ones the result screen hides.
-  expect(await page.locator('[data-testid^="fb-region-"]').count()).toBeGreaterThan(5);
-  expect(await page.locator('[data-testid^="fb-region-"][data-hidden="true"]').count()).toBeGreaterThan(0);
+  // Every detection is coloured like on the result screen; the hidden ones are hatched grey.
+  await expect(page.getByTestId('fb-photo-hint')).toHaveText('Coloured = found by the app. Tap Missed piece and then any piece without colour.');
+  await expect(page.getByTestId('fb-key')).toContainText('Found but not shown');
+  const regions = await photoRegions(page);
+  expect(regions.length).toBeGreaterThan(5);
+  expect(regions.filter((r) => r.hidden).length).toBeGreaterThan(0);
+  expect(new Set(regions.map((r) => r.tone))).toEqual(new Set(['confident', 'ambiguous', 'patch', 'hidden']));
+  const fillOf = (sel: string) => page.locator(sel).first().evaluate((el) => getComputedStyle(el).fill);
+  expect(await fillOf('.fb-region.st-confident .fb-fill')).toBe('rgb(34, 197, 94)');
+  expect(await fillOf('.fb-region.st-ambiguous .fb-fill')).toBe('rgb(245, 158, 11)');
+  expect(await fillOf('.fb-region.is-hidden .fb-fill')).toMatch(/^url\(/);
 
-  // Missed piece (default mode): tap twice, then tap the second marker to remove it again.
+  // Missed piece (default mode) on empty spots: tap twice, then tap the second marker to remove it.
   await expect(page.getByTestId('fb-mode-missed')).toHaveAttribute('aria-checked', 'true');
-  const box = (await photo.boundingBox())!;
-  await photo.click({ position: { x: box.width * 0.06, y: box.height * 0.08 } });
-  await photo.click({ position: { x: box.width * 0.5, y: box.height * 0.08 } });
+  const [spot, spot2] = await emptySpots(page, 2);
+  await tapPhoto(page, spot.fx, spot.fy);
+  await tapPhoto(page, spot2.fx, spot2.fy);
   await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(2);
   await page.getByTestId('fb-missed-1').click();
   await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(1);
 
-  // Not a piece – on an outline the results hide.
-  const hiddenId = await regionId(page, true);
+  // "Missed" on a piece the app did find: a note instead of a mark, with better marks one tap away.
+  const shown = tappable(regions.filter((r) => !r.hidden && r.tone !== 'patch'));
+  const [a, b, c] = shown.map((r) => r.id);
+  expect(c, 'three tappable found pieces').toBeDefined();
+  const regionB = shown[1];
+  await tapPhoto(page, regionB.fx, regionB.fy);
+  const note = page.getByTestId('fb-found-note');
+  await expect(note).toBeVisible();
+  await expect(note).toContainText(regionB.tone === 'ambiguous' ? 'This piece was found (unsure)' : 'This piece was found');
+  await expect(note).toContainText('use Wrong place or Wrong outline instead?');
+  await expect(page.getByTestId(`fb-region-${b}`)).toHaveClass(/pending/);
+  await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(1);
+  await shot(page, info, '0-found-note');
+  await page.getByTestId('fb-found-bad_outline').click();
+  await expect(note).toHaveCount(0);
+  await expect(page.getByTestId('fb-mark-1')).toHaveAttribute('data-kind', 'bad_outline');
+  // … or added anyway (then removed again from the list).
+  await tapPhoto(page, shown[2].fx, shown[2].fy);
+  await page.getByTestId('fb-found-missed').click();
+  await expect(page.getByTestId('fb-mark-2')).toHaveAttribute('data-kind', 'missed');
+  await page.getByTestId('fb-remove-2').click();
+  await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(2);
+  // A found-but-hidden piece says so; dismissing adds nothing.
+  const hiddenRegion = tappable(regions.filter((r) => r.hidden)).sort((p, q) => (q.x1 - q.x0) * (q.y1 - q.y0) - (p.x1 - p.x0) * (p.y1 - p.y0))[0];
+  await tapPhoto(page, hiddenRegion.fx, hiddenRegion.fy);
+  await expect(note).toContainText('This piece was found but not shown');
+  await expect(page.getByTestId('fb-found-wrong_place')).toHaveCount(0);
+  await page.getByTestId('fb-found-dismiss').click();
+  await expect(note).toHaveCount(0);
+  await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(2);
+
+  // Not a piece – on a region the results hide.
+  const hiddenId = hiddenRegion.id;
   await page.getByTestId('fb-mode-not_a_piece').click();
   await page.getByTestId(`fb-hit-${hiddenId}`).click();
-  // Several pieces / wrong outline / wrong place on visible pieces; a second tap removes a mark.
-  const a = await regionId(page, false);
-  const b = await regionId(page, false, [a]);
-  const c = await regionId(page, false, [a, b]);
+  // Several pieces / wrong place on found pieces; a second tap removes a mark.
   await page.getByTestId('fb-mode-merged').click();
+  await page.getByTestId(`fb-hit-${a}`).click();
+  await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(4);
   await page.getByTestId(`fb-hit-${a}`).click();
   await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(3);
   await page.getByTestId(`fb-hit-${a}`).click();
-  await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(2);
-  await page.getByTestId(`fb-hit-${a}`).click();
-  await page.getByTestId('fb-mode-bad_outline').click();
-  await page.getByTestId(`fb-hit-${b}`).click();
   await page.getByTestId('fb-mode-wrong_place').click();
   await page.getByTestId(`fb-hit-${c}`).click();
   await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(5);
-  await expect(page.getByTestId('fb-mark-1')).toContainText('Not a piece');
-  await expect(page.getByTestId('fb-mark-1')).toContainText('not shown in results');
+  await expect(page.getByTestId('fb-mark-2')).toContainText('Not a piece');
+  await expect(page.getByTestId('fb-mark-2')).toContainText('found but not shown');
   await shot(page, info, '1-marks');
 
   // The right place for the wrongly placed piece (optional).
@@ -144,23 +233,23 @@ test('scan feedback: marks of every kind, comment, file with photos and marks', 
   for (const p of scan.placements) expect(regionIds.has(p.regionId)).toBe(true);
 
   // Marks: one of each kind, in photo coordinates / on existing regions.
-  expect(bundle.marks.map((m) => m.kind)).toEqual(['missed', 'not_a_piece', 'merged', 'bad_outline', 'wrong_place']);
+  expect(bundle.marks.map((m) => m.kind)).toEqual(['missed', 'bad_outline', 'not_a_piece', 'merged', 'wrong_place']);
   for (const m of bundle.marks) {
     if (m.kind === 'missed') {
       expect(m.x).toBeGreaterThanOrEqual(0);
       expect(m.x).toBeLessThanOrEqual(scan.result.width);
       expect(m.y).toBeGreaterThanOrEqual(0);
       expect(m.y).toBeLessThanOrEqual(scan.result.height);
-      // Tapped at ~6 % / 8 % of the photo.
-      expect(Math.abs(m.x / scan.result.width - 0.06)).toBeLessThan(0.03);
-      expect(Math.abs(m.y / scan.result.height - 0.08)).toBeLessThan(0.03);
+      // Where it was tapped – on no detected region.
+      expect(Math.abs(m.x / scan.result.width - spot.fx)).toBeLessThan(0.02);
+      expect(Math.abs(m.y / scan.result.height - spot.fy)).toBeLessThan(0.02);
     } else {
       expect(regionIds.has(m.regionId)).toBe(true);
     }
   }
-  expect(bundle.marks[1]).toEqual({ kind: 'not_a_piece', regionId: hiddenId });
-  expect(bundle.marks[2]).toEqual({ kind: 'merged', regionId: a });
-  expect(bundle.marks[3]).toEqual({ kind: 'bad_outline', regionId: b });
+  expect(bundle.marks[1]).toEqual({ kind: 'bad_outline', regionId: b });
+  expect(bundle.marks[2]).toEqual({ kind: 'not_a_piece', regionId: hiddenId });
+  expect(bundle.marks[3]).toEqual({ kind: 'merged', regionId: a });
   const wrong = bundle.marks[4];
   expect(wrong.kind === 'wrong_place' && wrong.regionId === c && wrong.correct).toBeTruthy();
   if (wrong.kind === 'wrong_place' && wrong.correct) {
