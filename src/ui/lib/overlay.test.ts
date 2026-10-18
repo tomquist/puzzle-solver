@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DetectedRegion } from '../../model/types';
-import { cellAt, cellRect, clampPan, cropAround, fitTransform, gridPath, paddedBox, polygonCentroid, polygonPath, regionCenter, upArrow, zoomAt, trimmedSegment, badgeNotch, connectionCurve, sideVector } from './overlay';
+import { cellAt, cellRect, clampPan, cropAround, fitTransform, gridPath, paddedBox, polygonCentroid, polygonPath, regionCenter, upArrow, zoomAt, trimmedSegment, badgeNotch, connectionCurve, groupCellCenter, groupCellSize, sideVector } from './overlay';
 
 describe('polygons', () => {
   it('builds SVG path data', () => {
@@ -124,5 +124,27 @@ describe('connection curves', () => {
     const c = connectionCurve({ center: { x: 0, y: 0 }, reach: 5 }, { center: { x: 0, y: 50 }, reach: 5 })!;
     expect(c.from).toEqual({ x: 0, y: 5 });
     expect(c.to).toEqual({ x: 0, y: 45 });
+  });
+});
+
+describe('cells of a placed group', () => {
+  const cells = [{ row: 2, col: 2 }, { row: 2, col: 3 }, { row: 3, col: 2 }, { row: 3, col: 3 }];
+  it('offsets a member cell from the group centre along the puzzle axes', () => {
+    // Upright: the bottom-right cell lies half a cell right and down of the centre.
+    const p = groupCellCenter({ x: 100, y: 100 }, cells, { row: 3, col: 3 }, 0, 40);
+    expect(p.x).toBeCloseTo(120, 6);
+    expect(p.y).toBeCloseTo(120, 6);
+    // Needs a quarter turn clockwise to stand upright: in the photo the puzzle's right points up and
+    // its bottom points right, so the bottom-right member lies right of and above the centre.
+    const q = groupCellCenter({ x: 100, y: 100 }, cells, { row: 3, col: 3 }, 90, 40);
+    expect(q.x).toBeCloseTo(120, 6);
+    expect(q.y).toBeCloseTo(80, 6);
+  });
+
+  it('measures a cell by the members\' body size, else by area per cell', () => {
+    const piece = (id: number, body: number) => ({ id, kind: 'piece', bbox: { x: 0, y: 0, width: 1, height: 1 }, contour: [], area: body * body, touchesBorder: false, orientationDeg: 0, issues: [], shape: { bodySize: body } }) as unknown as DetectedRegion;
+    expect(groupCellSize([piece(1, 40), piece(2, 50), piece(3, 44)], 3)).toBe(44);
+    const patch = { id: 4, kind: 'patch', bbox: { x: 0, y: 0, width: 1, height: 1 }, contour: [], area: 6400, touchesBorder: false, orientationDeg: 0, issues: [] } as DetectedRegion;
+    expect(groupCellSize([patch], 4)).toBe(40);
   });
 });

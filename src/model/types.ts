@@ -207,8 +207,9 @@ export interface FitHint {
  * - 'assembled': physically joined in the photo (an assembled grid/patch). Either one 'patch'
  *   region or several touching piece regions whose placements are mutually consistent. The user
  *   places it as one unit.
- * - 'neighbors': loose pieces (not touching in the photo) whose placements are adjacent cells, i.e.
- *   they will connect once placed.
+ * - 'neighbors': loose pieces (not touching in the photo) and whole assembled groups whose
+ *   placements are adjacent cells, i.e. they will connect once placed (an assembled group's member
+ *   regions are listed with it).
  */
 export type GroupKind = 'assembled' | 'neighbors';
 

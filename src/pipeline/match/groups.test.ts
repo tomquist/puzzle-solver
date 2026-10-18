@@ -72,6 +72,24 @@ describe('buildGroups', () => {
     expect(g.id).toBe(1);
   });
 
+  it('links assembled groups to the pieces and groups they border once placed (whole pipeline)', () => {
+    // Two separately lying patches and a loose piece that border each other in the finished
+    // puzzle, plus an unrelated piece.
+    const patchA = [at(4, 6), at(4, 7), at(5, 6), at(5, 7)];
+    const patchB = [at(4, 8), at(5, 8)];
+    const { photo } = renderPiecesPhoto(ref, cut, [patchA, at(6, 7), patchB, at(12, 2)], { seed: 6, scale: 1.3, noiseSigma: 3, blurSigma: 0.7 });
+    const { result } = analyzeScan(index, photo, { maxSide: Math.max(photo.width, photo.height) });
+    const groups = result.groups ?? [];
+    const cellsText = (g: { cells: { row: number; col: number }[] }) => g.cells.map((c) => `${c.row},${c.col}`).sort();
+    expect(groups.filter((g) => g.kind === 'assembled').map(cellsText).sort()).toEqual([['4,6', '4,7', '5,6', '5,7'], ['4,8', '5,8']]);
+    const nb = groups.filter((g) => g.kind === 'neighbors');
+    expect(nb.length).toBe(1);
+    // One neighbour group: both patches (all their regions) and the loose piece, not the unrelated one.
+    expect(cellsText(nb[0])).toEqual(['4,6', '4,7', '4,8', '5,6', '5,7', '5,8', '6,7']);
+    const assembledIds = groups.filter((g) => g.kind === 'assembled').flatMap((g) => g.regionIds);
+    for (const id of assembledIds) expect(nb[0].regionIds).toContain(id);
+  });
+
   it('assembles touching piece regions, rescuing a weak member from its neighbours', () => {
     // As if segmentation had split a 2×3 grid at its seams into six touching piece regions.
     const grid = [at(9, 11), at(9, 12), at(9, 13), at(10, 11), at(10, 12), at(10, 13)];

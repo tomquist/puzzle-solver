@@ -122,7 +122,29 @@ describe('neighbour links', () => {
       }),
       grid,
     );
-    expect(r.links).toEqual([{ a: 'r1', b: 'r2', source: 'fit', sideA: 'right', sideB: 'left' }]);
+    expect(r.links).toEqual([{ a: 'r1', b: 'r2', source: 'fit', sideA: 'right', sideB: 'left', cellA: { row: 2, col: 2 }, cellB: { row: 2, col: 3 } }]);
+  });
+
+  it('links an assembled group to its neighbours through the member cell that touches them', () => {
+    const cells = [{ row: 2, col: 2 }, { row: 2, col: 3 }, { row: 3, col: 2 }, { row: 3, col: 3 }];
+    const r = buildScanItems(
+      scan({
+        regions: [region(1, 'patch'), region(2), region(3, 'patch')],
+        matches: [match(1, 'confident', [place(2, 2)]), match(2, 'confident', [place(4, 3)]), match(3, 'confident', [place(2, 4)])],
+        groups: [
+          { id: 1, kind: 'assembled', regionIds: [1], cells, bounds: boundsOf(cells), x: 0, y: 0, confidence: 0.9 },
+          { id: 2, kind: 'assembled', regionIds: [3], cells: [{ row: 2, col: 4 }, { row: 3, col: 4 }], bounds: { row0: 2, col0: 4, row1: 3, col1: 4 }, x: 0, y: 0, confidence: 0.9 },
+          { id: 3, kind: 'neighbors', regionIds: [1, 2, 3], cells: [], bounds: { row0: 2, col0: 2, row1: 4, col1: 4 }, x: 0, y: 0, confidence: 0.7 },
+        ],
+      }),
+      grid,
+    );
+    expect(r.links).toEqual([
+      // The loose piece below the group touches its bottom-right member.
+      { a: 'g1', b: 'r2', source: 'group', sideA: 'bottom', sideB: 'top', cellA: { row: 3, col: 3 }, cellB: { row: 4, col: 3 } },
+      // The two groups touch side by side.
+      { a: 'g1', b: 'g2', source: 'group', sideA: 'right', sideB: 'left', cellA: { row: 2, col: 3 }, cellB: { row: 2, col: 4 } },
+    ]);
   });
 
   it('does not use fits when the scan has groups', () => {
@@ -199,8 +221,8 @@ describe('placed candidate', () => {
 
 describe('touchingSides', () => {
   it('names the sides through which adjacent cells touch', () => {
-    expect(touchingSides([{ row: 3, col: 4 }], [{ row: 3, col: 5 }])).toEqual({ sideA: 'right', sideB: 'left' });
-    expect(touchingSides([{ row: 3, col: 4 }], [{ row: 2, col: 4 }])).toEqual({ sideA: 'top', sideB: 'bottom' });
+    expect(touchingSides([{ row: 3, col: 4 }], [{ row: 3, col: 5 }])).toEqual({ sideA: 'right', sideB: 'left', cellA: { row: 3, col: 4 }, cellB: { row: 3, col: 5 } });
+    expect(touchingSides([{ row: 3, col: 4 }], [{ row: 2, col: 4 }])).toEqual({ sideA: 'top', sideB: 'bottom', cellA: { row: 3, col: 4 }, cellB: { row: 2, col: 4 } });
     expect(touchingSides([{ row: 3, col: 4 }], [{ row: 5, col: 4 }])).toBeUndefined();
   });
 });

@@ -223,6 +223,28 @@ export function sideVector(side: PuzzleSide, rotationDeg: number): Point {
   }
 }
 
+/**
+ * Photo position of one cell of a placed assembled group: offset from the group's photo centre
+ * (the mean of its cells) along the group's puzzle axes, `cellPx` photo pixels per cell.
+ */
+export function groupCellCenter(center: Point, cells: CellRef[], cell: CellRef, rotationDeg: number, cellPx: number): Point {
+  const meanRow = cells.reduce((s, c) => s + c.row, 0) / cells.length;
+  const meanCol = cells.reduce((s, c) => s + c.col, 0) / cells.length;
+  const right = sideVector('right', rotationDeg);
+  const down = sideVector('bottom', rotationDeg);
+  const dc = (cell.col - meanCol) * cellPx;
+  const dr = (cell.row - meanRow) * cellPx;
+  return { x: center.x + right.x * dc + down.x * dr, y: center.y + right.y * dc + down.y * dr };
+}
+
+/** Photo pixels per cell of a group: its pieces' body size, or its area spread over its cells. */
+export function groupCellSize(members: DetectedRegion[], cellCount: number): number {
+  const bodies = members.filter((m) => m.kind === 'piece' && m.shape).map((m) => m.shape!.bodySize).sort((a, b) => a - b);
+  if (bodies.length > 0) return bodies[bodies.length >> 1];
+  const area = members.reduce((s, m) => s + m.area, 0);
+  return Math.sqrt(Math.max(1, area / Math.max(1, cellCount)));
+}
+
 export interface CurveEnd {
   center: Point;
   /** Distance from `center` to where the curve attaches (half the body size for a piece edge). */

@@ -1,6 +1,15 @@
 {
   "reviewed": "2026-10-18",
-  "marks": {},
+  "marks": {
+    "1": {
+      "verdict": "ok",
+      "note": "piece #29 (dark mauve with pink-red spots) shown at r26c14, a dark blue-green area with white ornament lines and no pink: clearly wrong; the app was unsure (0.31)"
+    },
+    "2": {
+      "verdict": "unsure",
+      "note": "piece #21 (blue-grey with pink spots) shown at r27c14; colours broadly similar, cannot confirm by eye; the user knows it does not fit there; the app was unsure (0.13)"
+    }
+  },
   "objects": [
     {
       "x": 778,
@@ -201,5 +210,5 @@
       "note": "assembled pair"
     }
   ],
-  "note": "No marks sent. Every region checked by eye: 42 loose pieces and 6 assembled groups (pattern continues across the joins), none missed, none false. Points are the deepest interior points of those verified regions."
+  "note": "Sent twice: first without marks, then with two wrong-place marks (this file). Segmentation fully correct: 42 loose pieces and 6 assembled groups (pattern continues across the joins), none missed, none false. Points are the deepest interior points of those verified regions."
 }

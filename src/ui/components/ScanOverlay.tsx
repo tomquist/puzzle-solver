@@ -5,9 +5,9 @@
  * optional thin connection lines between pieces that end up next to each other.
  */
 import type { Rect } from '../../cv/image';
-import type { ScanResult } from '../../model/types';
+import type { DetectedRegion, ScanResult } from '../../model/types';
 import type { ItemLink, ItemPlacement, ScanItem } from '../lib/items';
-import { badgeNotch, connectionCurve, polygonPath, regionSize, sideVector, type CurveEnd } from '../lib/overlay';
+import { badgeNotch, connectionCurve, groupCellCenter, groupCellSize, polygonPath, regionSize, sideVector, type CurveEnd } from '../lib/overlay';
 
 export interface OverlayItem {
   item: ScanItem;
@@ -111,18 +111,26 @@ export function ScanOverlay({
           of one piece to the matching edge of the other. */}
       {showConnections &&
         links.map((l) => {
-          const end = (key: string, side: ItemLink['sideA']): CurveEnd | undefined => {
+          const end = (key: string, side: ItemLink['sideA'], cell: ItemLink['cellA']): CurveEnd | undefined => {
             const o = overlayByKey.get(key);
             if (!o) return undefined;
-            const region = o.item.kind === 'piece' ? byId.get(o.item.regionIds[0]) : undefined;
             const rot = o.placement?.rotationDeg;
-            if (region && side && rot !== undefined) {
-              return { center: o.item.center, reach: regionSize(region) / 2, dir: sideVector(side, rot) };
+            if (side && rot !== undefined) {
+              const dir = sideVector(side, rot);
+              if (o.item.kind === 'piece') {
+                const region = byId.get(o.item.regionIds[0]);
+                if (region) return { center: o.item.center, reach: regionSize(region) / 2, dir };
+              } else if (cell && o.placement && o.placement.cells.length > 0) {
+                // An assembled group: from the member piece that touches the other item.
+                const members = o.item.regionIds.map((id) => byId.get(id)).filter((m): m is DetectedRegion => !!m);
+                const px = groupCellSize(members, o.placement.cells.length);
+                return { center: groupCellCenter(o.item.center, o.placement.cells, cell, rot, px), reach: px / 2, dir };
+              }
             }
             return { center: o.item.center, reach: r * 1.25 };
           };
-          const a = end(l.a, l.sideA);
-          const b = end(l.b, l.sideB);
+          const a = end(l.a, l.sideA, l.cellA);
+          const b = end(l.b, l.sideB, l.cellB);
           const curve = a && b ? connectionCurve(a, b) : null;
           if (!curve) return null;
           return (
