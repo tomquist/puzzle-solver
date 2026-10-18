@@ -94,6 +94,8 @@ export interface ScanRecord {
   height: number;
   result: ScanResult;
   label?: string;
+  /** Build (git commit) of the app that analysed the photo; missing for scans saved before it was recorded. */
+  appVersion?: string;
 }
 
 // ---------------------------------------------------------------------------------------------

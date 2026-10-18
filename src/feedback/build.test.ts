@@ -75,6 +75,11 @@ describe('buildFeedbackBundle', () => {
     expect(b.box!.quad).toEqual([{ x: 1, y: 2 }, { x: 3, y: 2 }, { x: 3, y: 4 }, { x: 1, y: 4 }]);
     expect(b.scan!.photo).toMatchObject({ width: 4, height: 3, type: 'image/jpeg' });
     expect(b.scan!.placements).toHaveLength(2);
+    // The result's own build and time (the app may have updated since the scan).
+    expect(b.scan!.analysedAt).toBe(2);
+    expect(b.scan!.appVersion).toBeUndefined();
+    const stamped = buildFeedbackBundle({ createdAt: 42, app, puzzle, scan: { record: { ...scan, appVersion: 'old123' }, photo: { bytes: bytes(7), type: 'image/jpeg', width: 4, height: 3 } }, marks: [] });
+    expect(stamped.scan!.appVersion).toBe('old123');
     expect(b.marks).toEqual([{ kind: 'missed', x: 1, y: 2 }, { kind: 'not_a_piece', regionId: 9 }]);
     expect(b.comment).toBe('two pieces missed');
     // Valid feedback file.

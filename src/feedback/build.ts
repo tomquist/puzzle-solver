@@ -74,6 +74,8 @@ export function buildFeedbackBundle(input: FeedbackInputs): FeedbackBundle {
     bundle.scan = {
       photo: image(input.scan.photo),
       result: input.scan.record.result,
+      ...(input.scan.record.appVersion ? { appVersion: input.scan.record.appVersion } : {}),
+      analysedAt: input.scan.record.createdAt,
       placements: placementsForScan(input.progress, input.scan.record.id),
     };
   }
