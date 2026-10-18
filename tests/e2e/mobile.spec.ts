@@ -163,10 +163,13 @@ test('mobile audit: every main screen', async ({ page }, info) => {
   await expect(page.getByTestId('send-feedback')).toBeVisible();
   const fbPhoto = page.getByTestId('fb-photo');
   await expect(fbPhoto).toBeVisible();
+  // First visit: "How to mark" is open above the mode picker.
+  await expect(page.getByTestId('fb-howto')).toBeVisible();
+  await a.check('15d0-feedback-how-to');
   const hiddenRegion = await page.locator('[data-testid^="fb-region-"][data-hidden="true"]').first().getAttribute('data-testid');
   await page.getByTestId('fb-mode-not_a_piece').click();
   await page.getByTestId(hiddenRegion!.replace('fb-region-', 'fb-hit-')).click();
-  // "Missed piece" on a piece the app found → the inline note.
+  // "Piece not found" on a piece the app found → the inline note.
   await page.getByTestId('fb-mode-missed').click();
   const centre = await fbPhoto.evaluate((svg) => {
     const vb = (svg as SVGSVGElement).viewBox.baseVal;
@@ -190,6 +193,12 @@ test('mobile audit: every main screen', async ({ page }, info) => {
   await a.check('15d2-feedback-right-place');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toBeHidden();
+  // "Outline off" on pieces the user joined → a gentle hint under the photo.
+  const joinedRegion = await page.locator('[data-testid^="fb-region-"][data-tone="patch"]').first().getAttribute('data-testid');
+  await page.getByTestId('fb-mode-bad_outline').click();
+  await page.getByTestId(joinedRegion!.replace('fb-region-', 'fb-hit-')).click();
+  await expect(page.getByTestId('fb-hint')).toBeVisible();
+  await a.check('15d3-feedback-hint');
   await page.getByTestId('fb-create').click();
   await expect(page.getByTestId('fb-download')).toBeVisible({ timeout: 30_000 });
   await a.check('15e-feedback-file');

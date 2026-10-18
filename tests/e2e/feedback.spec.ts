@@ -127,8 +127,10 @@ test('scan feedback: marks of every kind, comment, file with photos and marks', 
   const photo = page.getByTestId('fb-photo');
   await expect(photo).toBeVisible();
 
-  // Every detection is coloured like on the result screen; the hidden ones are hatched grey.
-  await expect(page.getByTestId('fb-photo-hint')).toHaveText('Coloured = found by the app. Tap Missed piece and then any piece without colour.');
+  // One instruction for the chosen mode. Every detection is coloured like on the result screen;
+  // the hidden ones are hatched grey.
+  await expect(page.getByTestId('fb-help')).toHaveText('A piece without a coloured outline. Tap the middle of the piece.');
+  await expect(page.getByTestId('fb-key')).toContainText('Assembled (pieces you joined)');
   await expect(page.getByTestId('fb-key')).toContainText('Found but not shown');
   const regions = await photoRegions(page);
   expect(regions.length).toBeGreaterThan(5);
@@ -139,7 +141,7 @@ test('scan feedback: marks of every kind, comment, file with photos and marks', 
   expect(await fillOf('.fb-region.st-ambiguous .fb-fill')).toBe('rgb(245, 158, 11)');
   expect(await fillOf('.fb-region.is-hidden .fb-fill')).toMatch(/^url\(/);
 
-  // Missed piece (default mode) on empty spots: tap twice, then tap the second marker to remove it.
+  // Piece not found (default mode) on empty spots: tap twice, then tap the second marker to remove it.
   await expect(page.getByTestId('fb-mode-missed')).toHaveAttribute('aria-checked', 'true');
   const [spot, spot2] = await emptySpots(page, 2);
   await tapPhoto(page, spot.fx, spot.fy);
@@ -148,7 +150,7 @@ test('scan feedback: marks of every kind, comment, file with photos and marks', 
   await page.getByTestId('fb-missed-1').click();
   await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(1);
 
-  // "Missed" on a piece the app did find: a note instead of a mark, with better marks one tap away.
+  // "Piece not found" on a piece the app did find: a note instead of a mark, with better marks one tap away.
   const shown = tappable(regions.filter((r) => !r.hidden && r.tone !== 'patch'));
   const [a, b, c] = shown.map((r) => r.id);
   expect(c, 'three tappable found pieces').toBeDefined();
@@ -157,7 +159,7 @@ test('scan feedback: marks of every kind, comment, file with photos and marks', 
   const note = page.getByTestId('fb-found-note');
   await expect(note).toBeVisible();
   await expect(note).toContainText(regionB.tone === 'ambiguous' ? 'This piece was found (unsure)' : 'This piece was found');
-  await expect(note).toContainText('use Wrong place or Wrong outline instead?');
+  await expect(note).toContainText('use Wrong place or Outline off instead?');
   await expect(page.getByTestId(`fb-region-${b}`)).toHaveClass(/pending/);
   await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(1);
   await shot(page, info, '0-found-note');
@@ -182,8 +184,9 @@ test('scan feedback: marks of every kind, comment, file with photos and marks', 
   // Not a piece – on a region the results hide.
   const hiddenId = hiddenRegion.id;
   await page.getByTestId('fb-mode-not_a_piece').click();
+  await expect(page.getByTestId('fb-help')).toHaveText('An outline with no piece inside – table, shadow, glare or a gap. Tap inside the outline.');
   await page.getByTestId(`fb-hit-${hiddenId}`).click();
-  // Several pieces / wrong place on found pieces; a second tap removes a mark.
+  // Pieces stuck together / wrong place on found pieces; a second tap removes a mark.
   await page.getByTestId('fb-mode-merged').click();
   await page.getByTestId(`fb-hit-${a}`).click();
   await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(4);
@@ -193,8 +196,10 @@ test('scan feedback: marks of every kind, comment, file with photos and marks', 
   await page.getByTestId('fb-mode-wrong_place').click();
   await page.getByTestId(`fb-hit-${c}`).click();
   await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(5);
+  await expect(page.getByTestId('fb-mark-1')).toContainText('Outline off');
   await expect(page.getByTestId('fb-mark-2')).toContainText('Not a piece');
   await expect(page.getByTestId('fb-mark-2')).toContainText('found but not shown');
+  await expect(page.getByTestId('fb-mark-3')).toContainText('Pieces stuck together');
   await shot(page, info, '1-marks');
 
   // The right place for the wrongly placed piece (optional).
@@ -268,6 +273,161 @@ test('scan feedback: marks of every kind, comment, file with photos and marks', 
   // Changing anything makes the file stale again.
   await page.getByTestId('fb-comment').fill('Dark table.');
   await expect(page.getByTestId('fb-create')).toBeVisible();
+});
+
+async function openScanFeedback(page: Page) {
+  await createPuzzle(page);
+  await page.getByTestId('photo-upload').setInputFiles(asset('starry-night.jpg'));
+  await expect(page.getByTestId('scan-result')).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId('scan-feedback-link').click();
+  await expect(page.getByTestId('fb-photo')).toBeVisible();
+}
+
+/**
+ * Make a found piece's region `factor` times as large in the stored scan (scaled about its centre),
+ * like two loose pieces the app took for one – the mock pipeline never merges pieces.
+ */
+async function enlargeRegion(page: Page, regionId: number, factor: number) {
+  const scanId = decodeURIComponent(new URL(page.url()).hash.split('/')[4]);
+  await page.evaluate(
+    async ({ scanId, regionId, factor }) => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open('puzzle-solver');
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      const store = db.transaction('scans', 'readwrite').objectStore('scans');
+      const scan = await new Promise<{ result: { regions: { id: number; area: number; contour: { x: number; y: number }[]; bbox: { x: number; y: number; width: number; height: number } }[] } }>(
+        (resolve) => {
+          const req = store.get(scanId);
+          req.onsuccess = () => resolve(req.result);
+        },
+      );
+      const r = scan.result.regions.find((x) => x.id === regionId)!;
+      const k = Math.sqrt(factor);
+      const cx = r.bbox.x + r.bbox.width / 2;
+      const cy = r.bbox.y + r.bbox.height / 2;
+      r.contour = r.contour.map((p) => ({ x: cx + (p.x - cx) * k, y: cy + (p.y - cy) * k }));
+      r.bbox = { x: cx - (r.bbox.width * k) / 2, y: cy - (r.bbox.height * k) / 2, width: r.bbox.width * k, height: r.bbox.height * k };
+      r.area = Math.round(r.area * factor);
+      await new Promise((resolve) => {
+        const req = store.put(scan);
+        req.onsuccess = resolve;
+      });
+      db.close();
+    },
+    { scanId, regionId, factor },
+  );
+}
+
+test('marking help and hints: plain categories, "How to mark" remembered collapsed, gentle hints on "Outline off"', async ({ page }, info) => {
+  await openScanFeedback(page);
+
+  // Every category says what it means and how to place it; choosing one is one tap.
+  const modes = page.getByRole('radiogroup', { name: 'What’s wrong?' });
+  await expect(modes.getByRole('radio')).toHaveText(['Piece not found', 'Not a piece', 'Pieces stuck together', 'Outline off', 'Wrong place']);
+  await expect(modes.locator('svg.fb-picto')).toHaveCount(5);
+  const help = page.getByTestId('fb-help');
+  await modes.getByRole('radio', { name: 'Pieces stuck together' }).click();
+  await expect(modes.getByRole('radio', { name: 'Pieces stuck together' })).toHaveAttribute('aria-checked', 'true');
+  await expect(help).toHaveText('One outline around two or more loose pieces. Tap inside the outline.');
+  await modes.getByRole('radio', { name: 'Outline off' }).click();
+  await expect(help).toHaveText('One piece, but its outline cuts part of it off or takes in table. Tap inside the outline.');
+  await modes.getByRole('radio', { name: 'Wrong place' }).click();
+  await expect(help).toHaveText('The piece is shown in the wrong spot of the puzzle. Tap the piece; you can then show the right spot.');
+
+  // "How to mark" is open on the first visit, with the rules for choosing.
+  const toggle = page.getByTestId('fb-howto-toggle');
+  const howTo = page.getByTestId('fb-howto');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(howTo).toBeVisible();
+  const rules = page.getByTestId('fb-rules').getByRole('listitem');
+  await expect(rules).toHaveText([
+    'No piece inside → Not a piece, even if the outline is odd.',
+    'Two or more loose pieces inside → Pieces stuck together, even if the outline is off too.',
+    'One piece, but the outline is off → Outline off.',
+    'Blue = pieces you’ve already joined: one outline around them is right. Mark it only if they are really loose or the outline is off.',
+  ]);
+  await expect(howTo).toContainText('Zoom with two fingers or the + / − buttons.');
+  await expect(howTo).toContainText('Tap a mark again to remove it.');
+  await howTo.scrollIntoViewIfNeeded();
+  await shot(page, info, '5-how-to-mark');
+  await page.getByTestId('fb-howto-close').click();
+  await expect(howTo).toHaveCount(0);
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  // Remembered collapsed on the next visit – one tap away.
+  await page.reload();
+  await expect(page.getByTestId('fb-photo')).toBeVisible();
+  await expect(howTo).toHaveCount(0);
+  await toggle.click();
+  await expect(howTo).toBeVisible();
+  await toggle.click();
+  await expect(howTo).toHaveCount(0);
+  // Marking with it open counts as seen too: it stays open now and starts collapsed next time.
+  await page.evaluate(() => localStorage.removeItem('puzzle-solver:prefs'));
+  await page.reload();
+  await expect(howTo).toBeVisible();
+  const [spot] = await emptySpots(page, 1);
+  await tapPhoto(page, spot.fx, spot.fy);
+  await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(1);
+  await expect(howTo).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId('fb-photo')).toBeVisible();
+  await expect(howTo).toHaveCount(0);
+
+  // "Outline off" on pieces the user joined (blue): a reminder that one outline is right – once.
+  const regions = await photoRegions(page);
+  const blue = regions.filter((r) => r.tone === 'patch');
+  expect(blue.length, 'two assembled regions').toBeGreaterThanOrEqual(2);
+  await page.getByTestId('fb-mode-bad_outline').click();
+  const hint = page.getByTestId('fb-hint');
+  await page.getByTestId(`fb-hit-${blue[0].id}`).click();
+  await expect(hint).toHaveAttribute('data-hint', 'assembled');
+  await expect(hint).toContainText('Blue = pieces you joined: one outline around them is right.');
+  await page.getByTestId('fb-hint-remove').click();
+  await expect(hint).toHaveCount(0);
+  await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(0);
+  await page.getByTestId(`fb-hit-${blue[1].id}`).click();
+  await expect(page.getByTestId('fb-mark-0')).toHaveAttribute('data-kind', 'bad_outline');
+  await expect(hint).toHaveCount(0);
+  // An ordinary piece with its outline off: no hint.
+  const shown = tappable(regions.filter((r) => r.tone === 'confident' || r.tone === 'ambiguous'));
+  await page.getByTestId(`fb-hit-${shown[0].id}`).click();
+  await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(2);
+  await expect(hint).toHaveCount(0);
+
+  // A region clearly larger than one piece: "Outline off" suggests "Pieces stuck together".
+  const big = shown[1];
+  await enlargeRegion(page, big.id, 3);
+  await page.reload();
+  await expect(page.getByTestId('fb-photo')).toBeVisible();
+  // "Piece not found" on it: the note puts "Pieces stuck together" first.
+  await tapPhoto(page, big.fx, big.fy);
+  await expect(page.getByTestId('fb-found-note')).toContainText('use Pieces stuck together or Outline off instead?');
+  await page.getByTestId('fb-found-dismiss').click();
+  await page.getByTestId('fb-mode-bad_outline').click();
+  await page.getByTestId(`fb-hit-${big.id}`).click();
+  await expect(hint).toHaveAttribute('data-hint', 'several');
+  await expect(hint).toContainText('Looks like more than one piece – Pieces stuck together?');
+  await shot(page, info, '6-hint-several');
+  // The hint goes with its mark; marking again brings it back (it was not dismissed).
+  await page.getByTestId('fb-remove-0').click();
+  await expect(hint).toHaveCount(0);
+  await page.getByTestId(`fb-hit-${big.id}`).click();
+  await expect(hint).toHaveAttribute('data-hint', 'several');
+  await page.getByTestId('fb-hint-merged').click();
+  await expect(hint).toHaveCount(0);
+  await expect(page.getByTestId('fb-mark-0')).toHaveAttribute('data-kind', 'merged');
+  // Changed back to "Outline off" and the hint dismissed: not offered again on this visit.
+  await page.getByTestId(`fb-hit-${big.id}`).click();
+  await expect(page.getByTestId('fb-mark-0')).toHaveAttribute('data-kind', 'bad_outline');
+  await page.getByTestId('fb-hint-dismiss').click();
+  await expect(hint).toHaveCount(0);
+  await page.getByTestId(`fb-hit-${big.id}`).click();
+  await expect(page.locator('[data-testid^="fb-mark-"]')).toHaveCount(0);
+  await page.getByTestId(`fb-hit-${big.id}`).click();
+  await expect(page.getByTestId('fb-mark-0')).toHaveAttribute('data-kind', 'bad_outline');
+  await expect(hint).toHaveCount(0);
 });
 
 test('settings feedback: box photo and puzzle picture without a scan', async ({ page }, info) => {
