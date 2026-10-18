@@ -1,0 +1,21 @@
+{
+  "reviewed": "2026-10-18",
+  "marks": {
+    "1": {
+      "verdict": "ok",
+      "note": "region is table between two dark pieces, not a piece"
+    },
+    "2": {
+      "verdict": "ok",
+      "note": "outline cuts through a pink piece and runs into the olive cloth"
+    },
+    "3": {
+      "verdict": "ok",
+      "note": "region takes in an assembled group, a dark piece and table"
+    },
+    "4": {
+      "verdict": "unsure",
+      "note": "outline follows a strip of three pieces whose joins look assembled; right if they are loose"
+    }
+  }
+}
