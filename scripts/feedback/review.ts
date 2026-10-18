@@ -9,7 +9,9 @@
  * Keys are the 1-based mark numbers of the inspector (M1, M2, …). Verdicts: 'ok' (the mark is
  * right), 'wrong' (the user's mistake), 'unsure'. Once a file has a review only its 'ok' marks
  * count in the metrics. `parts` (merged marks): how many regions the marked region really holds,
- * counting loose pieces and assembled groups (which stay one region each).
+ * counting loose pieces and assembled groups (which stay one region each). `kind`: the right kind
+ * when the user picked the wrong one for a real problem (e.g. "outline off" on glare with no piece
+ * inside: not_a_piece); the mark is then judged as that kind (region marks only).
  *
  * `objects` (optional) is a complete answer key for the photo: one point (photo pixels, well inside)
  * for every loose piece and every assembled group, found by checking the photo by eye, not taken
@@ -24,6 +26,8 @@ export type MarkVerdict = 'ok' | 'wrong' | 'unsure';
 export interface MarkReview {
   verdict: MarkVerdict;
   parts?: number;
+  /** The kind the mark should have had (region marks only); it is judged as this kind. */
+  kind?: 'not_a_piece' | 'merged' | 'bad_outline' | 'wrong_place';
   note?: string;
 }
 
@@ -56,6 +60,7 @@ export function readReview(feedbackPath: string): FeedbackReview | undefined {
   const review = JSON.parse(readFileSync(path, 'utf8')) as FeedbackReview;
   for (const [key, m] of Object.entries(review.marks ?? {})) {
     if (!/^\d+$/.test(key) || !['ok', 'wrong', 'unsure'].includes(m.verdict)) throw new Error(`${path}: bad review entry "${key}"`);
+    if (m.kind !== undefined && !['not_a_piece', 'merged', 'bad_outline', 'wrong_place'].includes(m.kind)) throw new Error(`${path}: bad kind in review entry "${key}"`);
   }
   for (const o of review.objects ?? []) if (!Number.isFinite(o.x) || !Number.isFinite(o.y)) throw new Error(`${path}: bad object ${JSON.stringify(o)}`);
   return review;

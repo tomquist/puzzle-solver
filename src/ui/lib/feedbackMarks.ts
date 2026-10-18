@@ -171,6 +171,15 @@ export function looksLikeSeveral(region: DetectedRegion, pieceArea: number | und
  */
 export type MarkHint = 'assembled' | 'several';
 
+/**
+ * The marks a hint offers instead, most likely first. A region much bigger than one piece holds
+ * several pieces – or none (glare, a shadow); without a usable match ('hidden') none is likelier.
+ */
+export function hintKinds(hint: MarkHint, tone: DetectionTone): RegionMarkKind[] {
+  if (hint === 'assembled') return ['merged'];
+  return tone === 'hidden' ? ['not_a_piece', 'merged'] : ['merged', 'not_a_piece'];
+}
+
 export function markHint(kind: RegionMarkKind, region: DetectedRegion, tone: DetectionTone, pieceArea: number | undefined): MarkHint | undefined {
   if (kind !== 'bad_outline') return undefined;
   if (tone === 'patch') return 'assembled';

@@ -1,0 +1,15 @@
+{
+  "reviewed": "2026-10-18",
+  "marks": {
+    "1": { "verdict": "ok", "kind": "not_a_piece", "note": "region is bright glare on the table with no piece inside; marked as outline off, judged as not a piece" },
+    "2": { "verdict": "ok", "kind": "not_a_piece", "note": "region is mostly glare on the table plus the knob of the piece below (which belongs to that piece); judged as not a piece" },
+    "3": { "verdict": "ok", "note": "the green/red piece's outline takes in a large patch of glare on the table below it" }
+  },
+  "objects": [
+    { "x": 549, "y": 804, "note": "dark piece with pink" },
+    { "x": 1170, "y": 760, "note": "green piece with a red top" },
+    { "x": 1547, "y": 1107, "note": "purple/flower piece" },
+    { "x": 820, "y": 1310, "note": "dark blue camouflage piece" },
+    { "x": 930, "y": 1704, "note": "brown/yellow piece" }
+  ]
+}

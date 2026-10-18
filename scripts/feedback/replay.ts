@@ -261,8 +261,11 @@ export function replayFeedback(bundle: FeedbackBundle, name: string, opts: Repla
     return parts.join(', ');
   };
 
-  bundle.marks.forEach((mark, k) => {
+  bundle.marks.forEach((given, k) => {
     const index = k + 1;
+    // A reviewed kind correction (the user picked the wrong kind for a real problem).
+    const fix = opts.review?.marks[String(index)]?.kind;
+    const mark: FeedbackMark = fix && given.kind !== 'missed' && fix !== given.kind ? { kind: fix, regionId: given.regionId } : given;
     if (mark.kind === 'missed') {
       const at = { x: mark.x * s, y: mark.y * s };
       // Taps land a few px off: a region within TAP_TOLERANCE body sizes counts as tapped.

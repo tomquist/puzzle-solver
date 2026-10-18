@@ -1,0 +1,15 @@
+{
+  "reviewed": "2026-10-18",
+  "marks": {
+    "1": { "verdict": "ok", "note": "outline takes in a band of table around the dark piece and a wispy table patch on its right" },
+    "2": { "verdict": "ok", "note": "outline runs 20-40 px outside the piece edge (table/soft shadow taken in)" },
+    "3": { "verdict": "ok", "note": "outline runs outside the piece edge on all sides (table/soft shadow taken in)" }
+  },
+  "objects": [
+    { "x": 943, "y": 662, "note": "dark grey piece (M3)" },
+    { "x": 589, "y": 996, "note": "dark piece with a light stripe (same halo, not marked)" },
+    { "x": 1349, "y": 1016, "note": "green piece with a red top (same halo, not marked)" },
+    { "x": 551, "y": 1728, "note": "dark blue piece (M1)" },
+    { "x": 1289, "y": 1609, "note": "camouflage piece (M2)" }
+  ]
+}
