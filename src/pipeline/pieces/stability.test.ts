@@ -1,13 +1,14 @@
 /**
- * Stability of the segmentation on dense layouts: the same photo with a little extra sensor noise or
- * re-encoded as JPEG must give (nearly) the same regions. Every decision that depends on the data
- * (threshold, table colours, reference size, splits) flips on such scenes if it is not robust.
+ * Stability of the segmentation on dense layouts: the same photo with a little extra sensor noise,
+ * re-encoded as JPEG, or decoded by another JPEG decoder (a browser's smooth chroma upsampling instead
+ * of jpeg-js's replication) must give (nearly) the same regions. Every decision that depends on the
+ * data (threshold, table colours, reference size, splits) flips on such scenes if it is not robust.
  */
 import { describe, expect, it } from 'vitest';
 import type { RGBAImage } from '../../cv/image';
 import { resizeRGBA } from '../../cv/resize';
 import { loadTestAsset } from '../../testing/nodeImageIO';
-import { generateJigsaw, jpegRoundTrip, renderPiecesPhoto, Rng } from '../../testing/synth';
+import { chromaResample, generateJigsaw, jpegRoundTrip, renderPiecesPhoto, Rng } from '../../testing/synth';
 import { segmentPieces } from './segment';
 import type { Segmentation } from './types';
 
@@ -73,7 +74,7 @@ function agreement(a: Int32Array, b: Int32Array): number {
 }
 
 describe('segmentPieces stability', () => {
-  it('gives the same regions on a dense scene with extra noise or JPEG re-encoding', () => {
+  it('gives the same regions on a dense scene with extra noise, JPEG re-encoding or another decoder', () => {
     const lines: string[] = [];
     for (const seed of [1, 2, 4]) {
       const { photo, truth } = denseScene(seed);
@@ -89,7 +90,14 @@ describe('segmentPieces stability', () => {
         expect(Math.abs(seg.regions.length - base.regions.length)).toBeLessThanOrEqual(Math.max(2, 0.1 * base.regions.length));
         expect(agree).toBeGreaterThanOrEqual(0.8);
       }
+      // The same phone JPEG (colour at half resolution) decoded by jpeg-js (colour replicated over
+      // 2×2 pixels) and by a browser (colour interpolated): the decoder must not matter.
+      const replicated = labelMap(segmentPieces(chromaResample(photo, 'replicate')), W, H);
+      const interpolated = labelMap(segmentPieces(chromaResample(photo, 'fancy')), W, H);
+      const decoders = Math.min(agreement(replicated, interpolated), agreement(interpolated, replicated));
+      lines.push(`seed ${seed} decoders: agreement ${decoders.toFixed(2)}`);
+      expect(decoders).toBeGreaterThanOrEqual(0.95);
     }
     console.log(`stability on dense scenes (truth ≈ 29 items):\n${lines.join('\n')}`);
-  }, 60_000);
+  }, 120_000);
 });

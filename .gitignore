@@ -6,3 +6,4 @@ playwright-report/
 .debug/
 *.local
 .DS_Store
+.claude/worktrees/
