@@ -3,7 +3,9 @@
  * unavailable in private modes). Pure apart from the storage passed in.
  */
 export interface ViewOptions {
-  /** Small "up" notch on the number badges. */
+  /** Numbers and outlines on the photo (off: only the selected piece is marked). */
+  labels: boolean;
+  /** Small tick outside each piece on its "up" side. */
   turnHints: boolean;
   /** Thin lines between pieces that end up next to each other. */
   connections: boolean;
@@ -22,7 +24,7 @@ export interface AppPrefs {
 }
 
 export const DEFAULT_PREFS: AppPrefs = {
-  view: { turnHints: true, connections: true, unsure: true, edgesOnly: false },
+  view: { labels: true, turnHints: true, connections: true, unsure: true, edgesOnly: false },
   keepScreenOn: true,
   dismissed: [],
 };
@@ -45,6 +47,7 @@ export function parsePrefs(raw: string | null | undefined): AppPrefs {
     const d = DEFAULT_PREFS.view;
     return {
       view: {
+        labels: bool(v.labels, d.labels),
         turnHints: bool(v.turnHints, d.turnHints),
         connections: bool(v.connections, d.connections),
         unsure: bool(v.unsure, d.unsure),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DetectedRegion } from '../../model/types';
-import { cellAt, cellRect, clampPan, cropAround, fitTransform, gridPath, paddedBox, polygonCentroid, polygonPath, regionCenter, upArrow, zoomAt, trimmedSegment, badgeNotch, connectionCurve, groupCellCenter, groupCellSize, sideVector } from './overlay';
+import { cellAt, cellRect, clampPan, cropAround, fitTransform, gridPath, paddedBox, polygonCentroid, polygonPath, regionCenter, upArrow, zoomAt, trimmedSegment, connectionCurve, groupCellCenter, groupCellSize, sideVector, transformForRect, unionRect } from './overlay';
 
 describe('polygons', () => {
   it('builds SVG path data', () => {
@@ -67,22 +67,26 @@ describe('zoom & pan', () => {
     expect(clampPan({ scale: 1, x: 30, y: -500 }, 200, 200, 100, 100)).toEqual({ scale: 1, x: 0, y: -100 });
     expect(clampPan({ scale: 0.25, x: 0, y: 0 }, 200, 200, 100, 100)).toEqual({ scale: 0.25, x: 25, y: 25 });
   });
+  it('shows a content rectangle as large as it fits, within the zoom limits', () => {
+    // 100 × 100 rect in a 200 × 200 viewport of 1000 × 1000 content → scale 2, centred on (450, 450).
+    expect(transformForRect({ x: 400, y: 400, width: 100, height: 100 }, 1000, 1000, 200, 200, 0.2, 5)).toEqual({ scale: 2, x: -800, y: -800 });
+    // Never zoomed in past maxScale (a small picture is not blown up).
+    expect(transformForRect({ x: 400, y: 400, width: 10, height: 10 }, 1000, 1000, 200, 200, 0.2, 2.5).scale).toBe(2.5);
+    // Near the content's edge the view stays inside the content.
+    expect(transformForRect({ x: -50, y: -50, width: 100, height: 100 }, 1000, 1000, 200, 200, 0.2, 5)).toEqual({ scale: 2, x: 0, y: 0 });
+  });
+  it('unites rectangles', () => {
+    expect(unionRect([{ x: 0, y: 5, width: 10, height: 10 }, { x: 20, y: 0, width: 5, height: 5 }])).toEqual({ x: 0, y: 0, width: 25, height: 15 });
+    expect(unionRect([])).toBeUndefined();
+  });
 });
 
-describe('connections and turn notches', () => {
+describe('connections', () => {
   it('trims connection lines to the badge edges', () => {
     const s = trimmedSegment({ x: 0, y: 0 }, { x: 100, y: 0 }, 10, 20)!;
     expect(s.from).toEqual({ x: 10, y: 0 });
     expect(s.to).toEqual({ x: 80, y: 0 });
     expect(trimmedSegment({ x: 0, y: 0 }, { x: 15, y: 0 }, 10)).toBeNull();
-  });
-  it('points the badge notch to the piece top', () => {
-    const [tip] = badgeNotch({ x: 50, y: 50 }, 10, 0);
-    expect(tip.x).toBeCloseTo(50);
-    expect(tip.y).toBeCloseTo(50 - 15.5);
-    const [tip90] = badgeNotch({ x: 50, y: 50 }, 10, 90); // needs a clockwise turn: top is on the left
-    expect(tip90.x).toBeCloseTo(50 - 15.5);
-    expect(tip90.y).toBeCloseTo(50);
   });
 });
 

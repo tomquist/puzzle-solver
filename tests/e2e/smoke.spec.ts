@@ -90,8 +90,11 @@ test('create a puzzle, scan pieces, see results, and find it again after reload'
     await shot(page, info, '10-issue-highlight');
   }
 
-  // Piece detail.
+  // A list item selects the piece (the photo stays visible); its details are one tap away.
   await page.locator('[data-testid^="piece-item-"]').first().click();
+  await expect(page.getByTestId('selection-bar')).toBeVisible();
+  await shot(page, info, '11-piece-selected');
+  await page.getByTestId('selection-details').click();
   const sheet = page.getByRole('dialog');
   await expect(sheet).toBeVisible();
   await shot(page, info, '11-piece-detail');
@@ -107,6 +110,10 @@ test('create a puzzle, scan pieces, see results, and find it again after reload'
   }
   await page.keyboard.press('Escape');
   await expect(sheet).toBeHidden();
+  // Closing the details keeps the selection; Esc again clears it.
+  await expect(page.getByTestId('selection-bar')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('action-bar')).toBeVisible();
 
   // Mark all confident as placed (with undo snackbar).
   const placeAll = page.getByTestId('place-all');
@@ -165,6 +172,9 @@ test('create a puzzle, scan pieces, see results, and find it again after reload'
   await expect(page.locator('[data-testid^="item-"]').first()).toBeVisible();
   await shot(page, info, '18-scan-result-dark');
   await page.locator('[data-testid^="piece-item-"]').nth(1).click();
+  await expect(page.getByTestId('selection-bar')).toBeVisible();
+  await shot(page, info, '18b-scan-result-selected-dark');
+  await page.getByTestId('selection-details').click();
   await expect(page.getByRole('dialog')).toBeVisible();
   await shot(page, info, '19-piece-detail-dark');
 

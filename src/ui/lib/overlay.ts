@@ -177,6 +177,29 @@ export function centerOn(p: Point, scale: number, vw: number, vh: number): ViewT
 }
 
 /**
+ * Transform that shows content rectangle `r` as large as it fits (scale clamped to
+ * [minScale, maxScale]), centred on it and kept within the content (cw × ch).
+ */
+export function transformForRect(r: Rect, cw: number, ch: number, vw: number, vh: number, minScale: number, maxScale: number): ViewTransform {
+  if (r.width <= 0 || r.height <= 0 || vw <= 0 || vh <= 0) return { scale: minScale, x: 0, y: 0 };
+  const scale = Math.min(maxScale, Math.max(minScale, Math.min(vw / r.width, vh / r.height)));
+  return clampPan(centerOn({ x: r.x + r.width / 2, y: r.y + r.height / 2 }, scale, vw, vh), cw, ch, vw, vh);
+}
+
+/** Bounding box of several rectangles (undefined for none). */
+export function unionRect(rects: Rect[]): Rect | undefined {
+  if (rects.length === 0) return undefined;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const r of rects) {
+    x0 = Math.min(x0, r.x);
+    y0 = Math.min(y0, r.y);
+    x1 = Math.max(x1, r.x + r.width);
+    y1 = Math.max(y1, r.y + r.height);
+  }
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
+
+/**
  * Segment from `a` to `b` shortened by `trimA` / `trimB` at its ends (so a connection line starts
  * at the edge of a badge instead of its centre). Null when the badges overlap.
  */
@@ -188,19 +211,6 @@ export function trimmedSegment(a: Point, b: Point, trimA: number, trimB = trimA)
   const ux = dx / len;
   const uy = dy / len;
   return { from: { x: a.x + ux * trimA, y: a.y + uy * trimA }, to: { x: b.x - ux * trimB, y: b.y - uy * trimB } };
-}
-
-/**
- * A small notch on the ring of a number badge (centre `c`, radius `r`) pointing at the piece's
- * "up" direction in the photo: a subtle turn hint instead of a big arrow.
- */
-export function badgeNotch(c: Point, r: number, rotationDeg: number): [Point, Point, Point] {
-  const u = upVector(rotationDeg);
-  const n = { x: -u.y, y: u.x };
-  const tip = { x: c.x + u.x * r * 1.55, y: c.y + u.y * r * 1.55 };
-  const base = { x: c.x + u.x * r * 0.8, y: c.y + u.y * r * 0.8 };
-  const hw = r * 0.5;
-  return [tip, { x: base.x + n.x * hw, y: base.y + n.y * hw }, { x: base.x - n.x * hw, y: base.y - n.y * hw }];
 }
 
 /**

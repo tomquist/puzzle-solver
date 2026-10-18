@@ -1,17 +1,19 @@
 /**
  * Guided placing mode for one scan: one item at a time – assembled grids first, then sure pieces
  * in a sweep across the picture (neighbours back to back), then unsure ones. Each step shows the
- * item in the photo ("Pick up #4"), where it goes (picture turned like it lies, cells outlined)
- * and one instruction line. Placed ✓ records progress and moves on; Skip / Not here / swipe /
- * arrow keys navigate. The screen stays on.
+ * item in the photo with its surroundings so it can be found on the table ("Pick up #4"; tap for
+ * an upright close-up), one instruction line, what it joins, and where it goes: the box picture
+ * around the target with a few cells of context (pinch to zoom) and an overview of the whole
+ * picture. Placed ✓ records progress and moves on; Skip / Not here / swipe / arrow keys navigate.
+ * The screen stays on.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { cellKey, type ScanRecord } from '../../../model/types';
 import { describeCell } from '../../../pipeline/grid';
 import { haptic, isCoarsePointer } from '../../../platform/device';
 import { EmptyState, ErrorState, Spinner } from '../../components/Feedback';
 import { IconBack, IconCheck, IconChevron, IconScan } from '../../components/Icons';
-import { PhotoItemCrop, TargetView } from '../../components/ItemVisuals';
+import { PickupView, TargetZoomView } from '../../components/ItemVisuals';
 import { itemTone } from '../../components/ScanOverlay';
 import { TopBar } from '../../components/TopBar';
 import { usePuzzle } from '../../context/PuzzleContext';
@@ -20,7 +22,7 @@ import { useAsync } from '../../hooks/useAsync';
 import { useBitmap, useStoredBlob } from '../../hooks/useObjectUrl';
 import { usePrefs, useWakeLock } from '../../hooks/usePrefs';
 import { plural } from '../../lib/format';
-import { cellsText, linkedTo, nextFreeCandidate, placingOrder, type ItemPlacement, type ScanItem } from '../../lib/items';
+import { cellsText, connectionsOf, describeConnections, itemKindText, nextFreeCandidate, placingOrder, type ItemPlacement, type ScanItem } from '../../lib/items';
 import { placeCells } from '../../lib/progress';
 import { turnInstruction } from '../../lib/rotation';
 import { href } from '../../lib/routes';
@@ -134,10 +136,10 @@ function PlacingView({ scan }: { scan: ScanRecord }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [next, prev]);
 
-  // Swipe left / right on the step.
+  // Swipe left / right on the step (not on the box picture: there it pans).
   const swipe = useRef<{ x: number; y: number } | null>(null);
   const onPointerDown = (e: ReactPointerEvent) => {
-    swipe.current = { x: e.clientX, y: e.clientY };
+    swipe.current = e.target instanceof Element && e.target.closest('.zoompan') ? null : { x: e.clientX, y: e.clientY };
   };
   const onPointerUp = (e: ReactPointerEvent) => {
     const s = swipe.current;
@@ -151,7 +153,7 @@ function PlacingView({ scan }: { scan: ScanRecord }) {
     }
   };
 
-  const neighbours = useMemo(() => (item ? linkedTo(item.key, links).map((k) => byKey.get(k)).filter((x): x is ScanItem => !!x) : []), [item, links, byKey]);
+  const joins = item ? describeConnections(connectionsOf(item.key, links), (k) => byKey.get(k)?.label) : '';
   const placedNow = item ? isPlacedItem(item) : false;
   const total = sequence.length;
   const back = href.scan(puzzle.id, scan.id);
@@ -213,22 +215,37 @@ function PlacingView({ scan }: { scan: ScanRecord }) {
         ) : item && p ? (
           <div className="place-step" onPointerDown={onPointerDown} onPointerUp={onPointerUp} data-testid={`step-${item.key}`}>
             <div className="place-pick">
-              <PhotoItemCrop item={item} regions={result.regions} photo={photo} photoWidth={result.width} photoHeight={result.height} size={112} label={`#${item.label} in your photo`} />
+              <PickupView
+                key={item.key}
+                item={item}
+                regions={result.regions}
+                photo={photo}
+                photoWidth={result.width}
+                photoHeight={result.height}
+                rotationDeg={p.rotationDeg}
+                size={260}
+                label={`#${item.label} in your photo`}
+              />
               <div className="place-pick-text">
                 <span className="eyebrow">Pick up</span>
                 <div className="place-title">
                   <span className={`num-badge st-${itemTone(item)}`}>{item.label}</span>
-                  <span>{item.kind === 'assembled' ? `Assembled grid · ${item.pieceCount} pieces` : item.edge ? 'Edge piece' : 'Piece'}</span>
+                  <span data-testid="place-kind">{itemKindText(item)}</span>
                 </div>
                 {item.status === 'ambiguous' && <span className="status-chip st-ambiguous">Unsure – check the picture</span>}
                 {placedNow && <span className="status-chip st-confident">Placed</span>}
+                <span className="muted xsmall">Tap the photo to zoom in on it.</span>
               </div>
             </div>
             <p className="place-line" data-testid="instruction">
               {instructionLine(item, p, puzzle.grid.rows, puzzle.grid.cols)}
             </p>
-            {neighbours.length > 0 && <p className="muted small place-next-to">Goes next to {neighbours.map((n) => `#${n.label}`).join(', ')}</p>}
-            <TargetView placement={p} grid={puzzle.grid} reference={reference} size={360} label={`Where #${item.label} goes, turned the way it lies`} />
+            {joins && (
+              <p className="muted small place-next-to" data-testid="place-joins">
+                {joins}
+              </p>
+            )}
+            <TargetZoomView key={`${item.key}:${p.x},${p.y}`} placement={p} grid={puzzle.grid} reference={reference} label={`Box picture around where #${item.label} goes`} />
             <div className="step-nav">
               <button className="icon-btn" onClick={prev} disabled={index === 0} aria-label="Previous">
                 <IconBack />

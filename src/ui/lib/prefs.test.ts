@@ -20,7 +20,7 @@ describe('prefs', () => {
 
   it('round-trips through storage', () => {
     const s = new MemStorage();
-    const p = { view: { turnHints: false, connections: false, unsure: true, edgesOnly: true }, keepScreenOn: false, dismissed: ['placing-hint'] };
+    const p = { view: { labels: false, turnHints: false, connections: false, unsure: true, edgesOnly: true }, keepScreenOn: false, dismissed: ['placing-hint'] };
     savePrefs(s, p);
     expect(JSON.parse(s.getItem(PREFS_KEY)!)).toEqual(p);
     expect(loadPrefs(s)).toEqual(p);

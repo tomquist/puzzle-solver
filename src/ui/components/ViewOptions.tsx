@@ -5,7 +5,8 @@ import type { ViewOptions as Options } from '../lib/prefs';
 import { IconSettings } from './Icons';
 
 const TOGGLES: { key: keyof Options; label: string; hint: string }[] = [
-  { key: 'turnHints', label: 'Turn hints', hint: 'Small notch on each number pointing up' },
+  { key: 'labels', label: 'Labels', hint: 'Numbers and outlines on the photo. Hold the photo to peek without them.' },
+  { key: 'turnHints', label: 'Turn hints', hint: 'Small tick at the side of each piece that goes up' },
   { key: 'connections', label: 'Connections', hint: 'Lines between pieces that go together' },
   { key: 'unsure', label: 'Unsure pieces', hint: 'Show pieces whose place is uncertain' },
   { key: 'edgesOnly', label: 'Edge pieces only', hint: 'Hide interior pieces' },
@@ -21,7 +22,11 @@ export function ViewOptionsButton() {
     const onDown = (e: PointerEvent) => {
       if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault(); // handled: Esc closes only this popover
+      setOpen(false);
+    };
     document.addEventListener('pointerdown', onDown);
     document.addEventListener('keydown', onKey);
     return () => {
