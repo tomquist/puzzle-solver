@@ -30,11 +30,18 @@ to be analysed. Everything runs locally in the browser – no server, no upload.
    and take one photo. A live quality meter (sharpness/exposure) helps before pressing the shutter.
 2. **Analyse** (Web Worker): quality checks → segmentation → per-region shape analysis → matching
    against the reference → fit detection.
-3. **Results** – the photo with every piece outlined and numbered, colour-coded by confidence, with
-   an arrow showing which way is "up". The reference shows numbered markers at the matched
-   locations. Tapping a piece shows its top candidates side by side with the matching reference
-   crop (rotated the same way as the piece lies), the piece type (corner/edge/interior) and the
-   rotation needed. Neighbouring pieces and pieces that fit a patch are listed.
+3. **Results** – the photo with every piece thinly outlined (no fill) and a small number label
+   placed just outside the outline (`ui/lib/labels.ts`), colour-coded by confidence; a small tick
+   outside the outline marks the side that is "up". Press-and-hold shows the clean photo. Tapping
+   a piece selects it: its connection lines are drawn strongly, the pieces it joins are ringed,
+   everything else fades, and a bar replaces the action bar with where it goes and its connections
+   in words; the details sheet adds the box picture around the target, the piece type
+   (corner/edge/interior), the rotation needed and the other candidates. The reference shows
+   numbered markers at the matched locations.
+   The guided placing mode shows one item at a time: the photo around it (3–4 piece sizes, corner
+   marks; tap for an upright close-up), the turn, and the upright box picture around the target
+   (about 7 × 7 cells, at most 2.5× the picture's resolution, pinch to zoom) with an overview of
+   the whole picture (`ui/lib/framing.ts`).
 4. **Confirm** – marking a piece as placed records its cell in the solving progress; placed cells
    are shaded on the reference and de-prioritised in later matches.
 5. **Quality feedback** – blurry, dark, glare, low contrast, too small, touching pieces, pieces cut

@@ -48,6 +48,9 @@ export function ReferenceOverlay({
 }) {
   const r = grid ? Math.max(markerRadius(grid, width, height), 11 / scale) : 12 / scale;
   const byKey = new Map(markers.map((m) => [m.key, m]));
+  // With a selection, its links and the markers it joins stay, everything else fades.
+  const selected = selectedKey && byKey.has(selectedKey) ? selectedKey : undefined;
+  const linked = new Set(selected ? links.flatMap((l) => (l.a === selected ? [l.b] : l.b === selected ? [l.a] : [])) : []);
   const block = (b: CellBounds) => {
     const a = cellRect({ row: b.row0, col: b.col0 }, grid!, width, height);
     const z = cellRect({ row: b.row1, col: b.col1 }, grid!, width, height);
@@ -87,8 +90,9 @@ export function ReferenceOverlay({
         const b = byKey.get(l.b);
         const seg = a && b ? trimmedSegment(a, b, r) : null;
         if (!seg) return null;
+        const active = !!selected && (l.a === selected || l.b === selected);
         return (
-          <g key={`${l.a}-${l.b}`} className="link">
+          <g key={`${l.a}-${l.b}`} className={`link${active ? ' active' : selected ? ' faded' : ''}`}>
             <line className="link-under" x1={seg.from.x} y1={seg.from.y} x2={seg.to.x} y2={seg.to.y} vectorEffect="non-scaling-stroke" />
             <line className="link-line" x1={seg.from.x} y1={seg.from.y} x2={seg.to.x} y2={seg.to.y} vectorEffect="non-scaling-stroke" />
           </g>
@@ -97,7 +101,7 @@ export function ReferenceOverlay({
       {markers.map((m) => (
         <g
           key={m.key}
-          className={`marker st-${m.tone}${selectedKey === m.key ? ' selected' : ''}`}
+          className={`marker st-${m.tone}${selected === m.key ? ' selected' : linked.has(m.key) ? ' linked' : selected ? ' faded' : ''}`}
           onClick={onMarker ? () => onMarker(m.key) : undefined}
           role={onMarker ? 'button' : undefined}
           aria-label={onMarker ? `Where ${m.label} goes` : undefined}

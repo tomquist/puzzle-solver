@@ -129,8 +129,14 @@ test('mobile audit: every main screen', async ({ page }, info) => {
   await page.keyboard.press('Escape');
   await page.getByRole('radio', { name: 'Photo' }).click();
 
-  // A piece that has a suggested place (so the sheet shows its Placed / Not this one actions).
-  await page.locator('[data-testid^="piece-item-"]').first().click();
+  // Select a piece with connections from the list: the selection bar replaces the action bar.
+  const linkedKey = (await page.getByTestId('link').first().getAttribute('data-a')) ?? '';
+  await page.locator(linkedKey ? `[data-testid="piece-item-${linkedKey}"]` : '[data-testid^="piece-item-"]').first().click();
+  await expect(page.getByTestId('selection-bar')).toBeVisible();
+  await a.check('13a-scan-result-selected');
+
+  // Its details (it has a suggested place, so the sheet shows its Placed / Not this one actions).
+  await page.getByTestId('selection-details').click();
   await expect(page.getByRole('dialog')).toBeVisible();
   await a.check('13-piece-detail');
   await page.getByRole('dialog').getByTestId('mark-placed').click();
@@ -138,11 +144,15 @@ test('mobile audit: every main screen', async ({ page }, info) => {
   await a.check('14-piece-detail-placed-snackbar');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toBeHidden();
+  await page.getByTestId('selection-clear').click();
 
   // Guided placing mode: every step until the finish card.
   await page.getByTestId('start-placing').click();
   await expect(page.getByTestId('placing')).toBeVisible();
   await a.check('15a-placing-step');
+  await page.getByTestId('pickup').click();
+  await expect(page.getByTestId('pickup')).toHaveAttribute('aria-pressed', 'true');
+  await a.check('15a2-placing-closeup');
   let unsureChecked = false;
   for (let i = 0; i < 40 && !(await page.getByTestId('placing-done').isVisible()); i++) {
     if (!unsureChecked && (await page.getByTestId('not-here').isVisible())) {

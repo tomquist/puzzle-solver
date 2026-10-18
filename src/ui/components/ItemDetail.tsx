@@ -1,20 +1,20 @@
 /**
- * Detail sheet for one item (a piece or an assembled grid): where it was in the photo, where it
- * goes (picture turned like the item lies), how to turn it, alternatives, neighbours, notes, and
- * Placed / Not this one.
+ * Detail sheet for one item (a piece or an assembled grid): where it lies in the photo, how to turn
+ * it, which items it joins (in words), where it goes in the box picture (with context and an
+ * overview), alternatives, notes, and Placed / Not this one.
  */
 import type { DetectedRegion, GridSpec, ScanResult } from '../../model/types';
 import { describeCell } from '../../pipeline/grid';
-import { cellsText, itemTitle, type ItemPlacement, type ScanItem } from '../lib/items';
+import { cellsText, describeConnections, itemKindText, itemTitle, SIDE_PHRASE, type Connection, type ItemPlacement, type ScanItem } from '../lib/items';
+import { cropAround } from '../lib/overlay';
 import { borderText, localToPuzzleTurns, pieceKindLabel, STATUS_LABEL } from '../lib/pieces';
 import { CropCanvas } from './CropCanvas';
-import { IconCheck, IconClose } from './Icons';
-import { ConfidenceBar, PhotoItemCrop, TargetView, TurnInstruction } from './ItemVisuals';
+import { IconCheck, IconChevron, IconClose } from './Icons';
+import { ConfidenceBar, PickupView, TargetContext, TurnInstruction, type ReferenceImage } from './ItemVisuals';
 import { PieceIcon } from './PieceIcon';
 import { IssueList } from './Quality';
 import { itemTone } from './ScanOverlay';
 import { Sheet } from './Sheet';
-import { cropAround } from '../lib/overlay';
 
 export interface ItemDetailProps {
   item: ScanItem;
@@ -23,10 +23,10 @@ export interface ItemDetailProps {
   result: ScanResult;
   grid: GridSpec;
   photo: CanvasImageSource | undefined;
-  reference: { bitmap?: ImageBitmap; url?: string; width: number; height: number } | undefined;
+  reference: ReferenceImage | undefined;
   placed: boolean;
-  /** Linked items (pieces that go next to this one). */
-  neighbours: ScanItem[];
+  /** Items this one joins (shown ones only), with the side of this item they join. */
+  connections: (Connection & { item: ScanItem })[];
   onReject(): void;
   onChoose(candidateIndex: number): void;
   onPlace(placement: ItemPlacement): void;
@@ -35,12 +35,14 @@ export interface ItemDetailProps {
   onClose(): void;
 }
 
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
 export function placementWhere(item: ScanItem, p: ItemPlacement, grid: GridSpec): string {
   return item.kind === 'assembled' ? cellsText(p) : describeCell(p.cells[0] ?? { row: p.bounds.row0, col: p.bounds.col0 }, grid);
 }
 
 export function ItemDetail(props: ItemDetailProps) {
-  const { item, candidateIndex, result, grid, photo, reference, placed, neighbours } = props;
+  const { item, candidateIndex, result, grid, photo, reference, placed, connections } = props;
   const current: ItemPlacement | undefined = item.candidates[candidateIndex];
   const tone = itemTone(item);
   const members = result.regions.filter((r) => item.regionIds.includes(r.id));
@@ -50,6 +52,7 @@ export function ItemDetail(props: ItemDetailProps) {
   const border = single?.shape && current?.rotationDeg !== undefined ? borderText(single, current.rotationDeg) : '';
   const issues = members.flatMap((m) => m.issues).filter((v, i, a) => a.indexOf(v) === i);
   const heading = item.status === 'ambiguous' && candidateIndex === 0 ? 'Probably goes here' : 'Goes here';
+  const joins = describeConnections(connections, (k) => connections.find((c) => c.key === k)?.item.label);
 
   return (
     <Sheet
@@ -85,14 +88,24 @@ export function ItemDetail(props: ItemDetailProps) {
     >
       <div className="pd-top">
         <figure className="pd-piece">
-          <PhotoItemCrop item={item} regions={result.regions} photo={photo} photoWidth={result.width} photoHeight={result.height} size={150} label={`${itemTitle(item)} in your photo`} />
+          <PickupView
+            key={item.key}
+            item={item}
+            regions={result.regions}
+            photo={photo}
+            photoWidth={result.width}
+            photoHeight={result.height}
+            rotationDeg={current?.rotationDeg}
+            size={200}
+            label={`${itemTitle(item)} in your photo`}
+          />
           <figcaption>In your photo</figcaption>
         </figure>
         <div className="pd-facts">
           <div className="pd-kind">
             {sides && <PieceIcon sides={sides} rotationDeg={iconTurn} size={52} title="Piece shape (finished orientation)" />}
             <div>
-              <div className="pd-kind-label">{item.kind === 'assembled' ? `Assembled grid · ${item.pieceCount} pieces` : single ? pieceKindLabel(single) : 'Piece'}</div>
+              <div className="pd-kind-label">{single ? pieceKindLabel(single) : itemKindText(item)}</div>
               <div className={`status-chip st-${item.status}`}>{STATUS_LABEL[item.status]}</div>
             </div>
           </div>
@@ -106,16 +119,31 @@ export function ItemDetail(props: ItemDetailProps) {
         </div>
       </div>
 
+      {connections.length > 0 && (
+        <section className="pd-section" data-testid="detail-connections">
+          <h3>Connections</h3>
+          <p className="pd-joins">{joins}.</p>
+          <ul className="fit-list">
+            {connections.map((c) => (
+              <li key={c.key}>
+                <button className="fit-row" onClick={() => props.onOpen(c.key)}>
+                  <span className={`num-badge st-${itemTone(c.item)}`}>{c.item.label}</span>
+                  <span className="fit-row-text">{c.side ? capitalize(SIDE_PHRASE[c.side]) : 'Next to it'}</span>
+                  <IconChevron size={18} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {current ? (
         <section className="pd-section">
           <h3>{heading}</h3>
-          <div className="cand big">
-            <TargetView placement={current} grid={grid} reference={reference} size={220} label={`Box picture where ${itemTitle(item)} goes, turned like it lies`} />
-            <div className="cand-info">
-              <div className="cand-where">{placementWhere(item, current, grid)}</div>
-              <div className="muted small">Picture turned to match your {item.kind === 'assembled' ? 'grid' : 'piece'}.</div>
-              <ConfidenceBar value={current.confidence} />
-            </div>
+          <TargetContext key={`${item.key}-${candidateIndex}`} placement={current} grid={grid} reference={reference} size={360} label={`Box picture around where ${itemTitle(item)} goes`} />
+          <div className="cand-info">
+            <div className="cand-where">{placementWhere(item, current, grid)}</div>
+            <ConfidenceBar value={current.confidence} />
           </div>
         </section>
       ) : (
@@ -131,10 +159,10 @@ export function ItemDetail(props: ItemDetailProps) {
           <div className="cand-strip">
             {item.candidates.map((p, i) => {
               if (i === candidateIndex || !reference) return null;
-              const c = cropAround(p.x, p.y, grid, reference.width, reference.height, 2.2);
+              const c = cropAround(p.x, p.y, grid, reference.width, reference.height, 3);
               return (
                 <button key={i} className="cand-mini" onClick={() => props.onChoose(i)} aria-label={`Use place ${i + 1}: ${cellsText(p)}`}>
-                  <CropCanvas source={reference.bitmap} rotated={{ ...c, rotationDeg: -(p.rotationDeg ?? 0) }} size={96} label={`Picture around ${cellsText(p)}`} />
+                  <CropCanvas source={reference.bitmap} rotated={{ ...c, rotationDeg: 0 }} size={96} label={`Picture around ${cellsText(p)}`} />
                   <span className="cand-mini-cell">
                     r{p.bounds.row0 + 1} · c{p.bounds.col0 + 1}
                   </span>
@@ -143,21 +171,6 @@ export function ItemDetail(props: ItemDetailProps) {
               );
             })}
           </div>
-        </section>
-      )}
-
-      {neighbours.length > 0 && (
-        <section className="pd-section">
-          <h3>Goes next to</h3>
-          <ul className="fit-list">
-            {neighbours.map((n) => (
-              <li key={n.key}>
-                <button className="link-btn" onClick={() => props.onOpen(n.key)}>
-                  {n.kind === 'assembled' ? `Assembled grid #${n.label}` : `Piece #${n.label}`}
-                </button>
-              </li>
-            ))}
-          </ul>
         </section>
       )}
 

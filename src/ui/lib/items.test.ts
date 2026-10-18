@@ -1,6 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import type { DetectedRegion, Placement, RegionMatch, ScanResult } from '../../model/types';
-import { boundsOf, buildScanItems, cellsText, isHiddenRegion, itemCounts, linkedTo, placingOrder, type ScanItem, touchingSides, nextFreeCandidate } from './items';
+import {
+  boundsOf,
+  buildScanItems,
+  cellsText,
+  connectionGroups,
+  connectionsOf,
+  describeConnections,
+  isHiddenRegion,
+  itemCounts,
+  itemKindText,
+  itemTitle,
+  linkedTo,
+  listLabels,
+  placingOrder,
+  type ItemLink,
+  type ScanItem,
+  touchingSides,
+  nextFreeCandidate,
+} from './items';
 
 const grid = { rows: 8, cols: 10 };
 
@@ -198,6 +216,53 @@ describe('texts', () => {
   it('describes single cells and ranges', () => {
     expect(cellsText({ cells: [], bounds: { row0: 4, col0: 11, row1: 4, col1: 11 }, x: 0, y: 0, confidence: 1 })).toBe('row 5, column 12');
     expect(cellsText({ cells: [], bounds: { row0: 2, col0: 4, row1: 3, col1: 6 }, x: 0, y: 0, confidence: 1 })).toBe('rows 3–4, columns 5–7');
+  });
+
+  const base: Omit<ScanItem, 'kind' | 'pieceCount' | 'edge'> = { key: 'g1', label: 12, regionIds: [12], status: 'confident', candidates: [], center: { x: 0, y: 0 }, bbox: { x: 0, y: 0, width: 1, height: 1 } };
+  it('names grids with a correct plural and reads a one-cell group as a piece', () => {
+    expect(itemKindText({ ...base, kind: 'assembled', pieceCount: 3, edge: false })).toBe('Assembled grid · 3 pieces');
+    expect(itemTitle({ ...base, kind: 'assembled', pieceCount: 3, edge: false })).toBe('Assembled grid #12');
+    expect(itemKindText({ ...base, kind: 'assembled', pieceCount: 1, edge: false })).toBe('Piece');
+    expect(itemKindText({ ...base, kind: 'assembled', pieceCount: 1, edge: true })).toBe('Edge piece');
+    expect(itemTitle({ ...base, kind: 'assembled', pieceCount: 1, edge: false })).toBe('Piece #12');
+    expect(itemKindText({ ...base, kind: 'piece', pieceCount: 1, edge: false })).toBe('Piece');
+  });
+});
+
+describe('connections in words', () => {
+  const links: ItemLink[] = [
+    { a: 'r9', b: 'r4', source: 'group', sideA: 'left', sideB: 'right' },
+    { a: 'r4', b: 'r14', source: 'group', sideA: 'bottom', sideB: 'top' },
+    { a: 'r4', b: 'r20', source: 'fit' },
+    { a: 'r2', b: 'r4', source: 'group', sideA: 'bottom', sideB: 'top' },
+    { a: 'r7', b: 'r8', source: 'group', sideA: 'right', sideB: 'left' },
+  ];
+  const labelOf = (k: string) => Number(k.slice(1));
+
+  it('lists the linked items with the side they join, top → right → bottom → left, unknown last', () => {
+    expect(connectionsOf('r4', links)).toEqual([
+      { key: 'r2', side: 'top' },
+      { key: 'r9', side: 'right' },
+      { key: 'r14', side: 'bottom' },
+      { key: 'r20', side: undefined },
+    ]);
+    expect(connectionsOf('r1', links)).toEqual([]);
+  });
+
+  it('describes them in words', () => {
+    expect(describeConnections(connectionsOf('r4', links), labelOf)).toBe('Joins #2 above, #9 on its right side, #14 below; next to #20');
+    expect(describeConnections(connectionsOf('r7', links), labelOf)).toBe('Joins #8 on its right side');
+    expect(describeConnections(connectionsOf('r8', links), labelOf)).toBe('Joins #7 on its left side');
+    expect(describeConnections([{ key: 'r20' }, { key: 'r21' }], labelOf)).toBe('Goes next to #20 and #21');
+    expect(describeConnections([], labelOf)).toBe('');
+    // Items that are not shown (no label) are left out.
+    expect(describeConnections([{ key: 'r3', side: 'top' }], () => undefined)).toBe('');
+  });
+
+  it('groups several items on one side', () => {
+    const conns = [{ key: 'r3', side: 'right' as const }, { key: 'r5', side: 'right' as const }, { key: 'r6', side: 'top' as const }];
+    expect(connectionGroups(conns)).toEqual([{ side: 'right', keys: ['r3', 'r5'] }, { side: 'top', keys: ['r6'] }]);
+    expect(listLabels([3, 5, 6])).toBe('#3, #5 and #6');
   });
 });
 

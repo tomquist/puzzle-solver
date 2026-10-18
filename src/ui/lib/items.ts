@@ -9,6 +9,7 @@
 import type { Point } from '../../cv/geometry';
 import type { Rect } from '../../cv/image';
 import { cellKey, type CellRef, type DetectedRegion, type GridSpec, type ProgressRecord, type PuzzleSide, type RegionMatch, type ScanResult } from '../../model/types';
+import { plural } from './format';
 import { cellsForPlacement, matchFor } from './pieces';
 import { regionCenter } from './overlay';
 
@@ -317,6 +318,55 @@ export function linkedTo(key: string, links: ItemLink[]): string[] {
   return links.flatMap((l) => (l.a === key ? [l.b] : l.b === key ? [l.a] : []));
 }
 
+/** An item linked to another one, and the side of that other item (finished orientation) it joins. */
+export interface Connection {
+  key: string;
+  side?: PuzzleSide;
+}
+
+const SIDE_ORDER: PuzzleSide[] = ['top', 'right', 'bottom', 'left'];
+
+/** The items linked to `key` with the side of `key` they join: top, right, bottom, left, then unknown sides. */
+export function connectionsOf(key: string, links: ItemLink[]): Connection[] {
+  const out: Connection[] = links.flatMap((l) => (l.a === key ? [{ key: l.b, side: l.sideA }] : l.b === key ? [{ key: l.a, side: l.sideB }] : []));
+  const rank = (c: Connection) => (c.side ? SIDE_ORDER.indexOf(c.side) : SIDE_ORDER.length);
+  return out.sort((x, y) => rank(x) - rank(y));
+}
+
+/** Connections grouped by side, in the order of connectionsOf (`side` undefined = side unknown). */
+export function connectionGroups(conns: Connection[]): { side?: PuzzleSide; keys: string[] }[] {
+  const groups: { side?: PuzzleSide; keys: string[] }[] = [];
+  for (const c of conns) {
+    const g = groups.find((x) => x.side === c.side);
+    if (g) g.keys.push(c.key);
+    else groups.push({ side: c.side, keys: [c.key] });
+  }
+  return groups;
+}
+
+/** Where the other item joins, from the item's point of view: "on its right side", "below". */
+export const SIDE_PHRASE: Record<PuzzleSide, string> = { top: 'above', right: 'on its right side', bottom: 'below', left: 'on its left side' };
+
+/** "#3", "#3 and #4", "#3, #4 and #5". */
+export function listLabels(labels: (number | string)[]): string {
+  const t = labels.map((l) => `#${l}`);
+  return t.length <= 1 ? (t[0] ?? '') : `${t.slice(0, -1).join(', ')} and ${t[t.length - 1]}`;
+}
+
+/**
+ * The connections of an item in words: "Joins #9 on its right side, #14 below"; links without a
+ * known side read "next to #20" ("Goes next to #20" when no side is known at all). '' when none.
+ */
+export function describeConnections(conns: Connection[], labelOf: (key: string) => number | string | undefined): string {
+  const groups = connectionGroups(conns)
+    .map((g) => ({ side: g.side, labels: g.keys.map(labelOf).filter((l): l is number | string => l !== undefined) }))
+    .filter((g) => g.labels.length > 0);
+  const sided = groups.filter((g) => g.side).map((g) => `${listLabels(g.labels)} ${SIDE_PHRASE[g.side!]}`);
+  const loose = groups.find((g) => !g.side);
+  if (!sided.length) return loose ? `Goes next to ${listLabels(loose.labels)}` : '';
+  return `Joins ${sided.join(', ')}${loose ? `; next to ${listLabels(loose.labels)}` : ''}`;
+}
+
 /** "row 5, column 12" style text for a placement (ranges for assembled grids). */
 export function cellsText(p: ItemPlacement): string {
   const { row0, col0, row1, col1 } = p.bounds;
@@ -325,8 +375,19 @@ export function cellsText(p: ItemPlacement): string {
   return `${rows}, ${cols}`;
 }
 
+/** An assembled grid of two or more pieces (a one-cell group reads as a piece). */
+export function isGrid(item: ScanItem): boolean {
+  return item.kind === 'assembled' && item.pieceCount > 1;
+}
+
 export function itemTitle(item: ScanItem): string {
-  return item.kind === 'assembled' ? `Assembled grid #${item.label}` : `Piece #${item.label}`;
+  return isGrid(item) ? `Assembled grid #${item.label}` : `Piece #${item.label}`;
+}
+
+/** "Assembled grid · 3 pieces", "Edge piece" or "Piece". */
+export function itemKindText(item: ScanItem): string {
+  if (isGrid(item)) return `Assembled grid · ${plural(item.pieceCount, 'piece')}`;
+  return item.edge ? 'Edge piece' : 'Piece';
 }
 
 export interface ItemCounts {

@@ -19,11 +19,16 @@ puzzles are stored in the browser (IndexedDB).
    parts of the box; they are aligned automatically and merged into a higher-resolution reference.
 4. **Scan pieces.** Spread 10–40 pieces on a plain background that contrasts with them, not touching,
    and take one photo from directly above. Already assembled patches can be in the photo too.
-5. **Read the result.** Every piece is outlined and numbered: green = confident, amber = unsure,
-   red = no reliable match, blue = patch. The arrow on each piece points to "up" in the finished
-   puzzle. Tap a piece to compare it with the best candidate locations, see whether it is a corner
-   or edge piece, which neighbours it fits, and mark it as placed.
-6. **Come back any time.** Puzzles, scans and progress stay in your browser. Use *Settings → Export*
+5. **Read the result.** Every piece gets a thin outline and a small number next to it (so the piece
+   itself stays visible): green = confident, amber = unsure, blue = assembled grid; a small tick
+   marks the side that goes up. Tap a piece to select it: its connection lines and the pieces it
+   joins light up, everything else fades, and a bar at the bottom says where it goes and what it
+   joins ("Joins #9 on its right side, #14 below"); *Details* compares it with the box picture and
+   marks it as placed. Press and hold the photo to see it without any labels.
+6. **Place them.** *Start placing* walks through the pieces one by one: the piece in your photo
+   with its surroundings (tap for an upright close-up), how to turn it, and where it goes – the
+   box picture around the spot (pinch to zoom) with an overview of the whole picture.
+7. **Come back any time.** Puzzles, scans and progress stay in your browser. Use *Settings → Export*
    to back up or move a puzzle to another device.
 
 It is built for phones: open the page on your phone and use *Add to Home Screen* to install it as
