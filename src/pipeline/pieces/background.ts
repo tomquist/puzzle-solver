@@ -11,7 +11,8 @@
  */
 import { rgbToLab } from '../../cv/color';
 import { solveLinear } from '../../cv/geometry';
-import { createGray, type GrayImage, type Mask, type RGBAImage } from '../../cv/image';
+import { labelComponents } from '../../cv/components';
+import { createGray, createMask, type GrayImage, type Mask, type RGBAImage } from '../../cv/image';
 import { dilate } from '../../cv/morphology';
 import type { BackgroundModel, LocalTableGrid } from './types';
 import { median, quantile } from './util';
@@ -72,6 +73,37 @@ export function backgroundAt(model: Pick<BackgroundModel, 'coefficients' | 'widt
     c[0] += r[0]; c[1] += r[1]; c[2] += r[2];
   }
   return c;
+}
+
+/**
+ * Chroma (a, b) and its spread of every table colour at photo pixel (x, y): the main surface (with
+ * local corrections) and the further table colours under the lighting there.
+ */
+export function tableChromasAt(fit: BackgroundFit, x: number, y: number): { a: number; b: number; sa: number; sb: number }[] {
+  const main = backgroundAt(fit, x, y);
+  const out = [{ a: main[1], b: main[2], sa: fit.sigma[1], sb: fit.sigma[2] }];
+  const u = norm(x, fit.width), v = norm(y, fit.height);
+  for (let k = 0; k < fit.palette.length; k++) {
+    const c = paletteAt(fit, k, u, v);
+    out.push({ a: c[1], b: c[2], sa: fit.palette[k].sigma[1], sb: fit.palette[k].sigma[2] });
+  }
+  return out;
+}
+
+/**
+ * Distance (sigmas) of chroma (a, b) from what a table colour can look like under other lighting:
+ * its chroma scaled between neutral (deep shadow, glare) and 1.25 times; the nearest of `colours`.
+ */
+export function tableChromaDistance(colours: readonly { a: number; b: number; sa: number; sb: number }[], a: number, b: number): number {
+  let best = Infinity;
+  for (const c of colours) {
+    const pa = a / c.sa, pb = b / c.sb, qa = c.a / c.sa, qb = c.b / c.sb;
+    const len2 = qa * qa + qb * qb;
+    const t = len2 > 1e-9 ? Math.max(0, Math.min(1.25, (pa * qa + pb * qb) / len2)) : 0;
+    const d = Math.hypot(pa - t * qa, pb - t * qb);
+    if (d < best) best = d;
+  }
+  return best;
 }
 
 /** Bilinear interpolation of the local residual grid at photo pixel (x, y). */
@@ -521,6 +553,46 @@ function fitOwnLight(s: Samples, fit: BackgroundFit, idx: readonly number[], p: 
   return [g[0], g[1], g[2]];
 }
 
+/** Share of a candidate table colour in piece-sized areas from which, unless surfaces hold more, it is no table colour. */
+const PIECE_BLOB_SHARE = 0.2;
+/** Smallest share of the photo of a component that shows a surface (larger than any piece lying there). */
+const SURFACE_MIN_SHARE = 0.015;
+/** Smallest share of the photo of a component that may be a piece (smaller ones are pattern elements or specks). */
+const BLOB_MIN_SHARE = 0.0015;
+
+/**
+ * Where a candidate table colour shows on the photo (samples closer to it than to the main surface,
+ * within 3 sigmas), split by the size of the connected areas it forms: `surface`, the share in
+ * areas larger than any piece (a second table, a cloth, the floor, the boards of a floor), and
+ * `blob`, the share in piece-sized areas (pieces in that colour, scattered over the table). Pattern
+ * elements and specks, smaller still, count for neither.
+ */
+function colourLayout(s: Samples, fit: BackgroundFit, p: PaletteColour): { surface: number; blob: number } {
+  const m = createMask(s.gw, s.gh);
+  const k = fit.coefficients;
+  let n = 0;
+  for (let i = 0; i < s.n; i++) {
+    const u = s.u[i], v = s.v[i];
+    const f = lightFactor(fit, u, v, p.refL) * ownLight(p, u, v);
+    const L = s.lab[i * 3], a = s.lab[i * 3 + 1], b = s.lab[i * 3 + 2];
+    const dp = distance(L, a, b, f * (p.color[0] + 16) - 16, f * p.color[1], f * p.color[2], 1 / p.sigma[0], 1 / p.sigma[1], 1 / p.sigma[2]);
+    if (dp >= 3) continue;
+    const dm = distance(L, a, b, evalPoly(k[0], u, v), evalPoly(k[1], u, v), evalPoly(k[2], u, v), 1 / fit.sigma[0], 1 / fit.sigma[1], 1 / fit.sigma[2]);
+    if (dp >= dm) continue;
+    m.data[i] = 1;
+    n++;
+  }
+  if (n === 0) return { surface: 0, blob: 0 };
+  const { stats } = labelComponents(m, 8);
+  let surface = 0, blob = 0;
+  for (const st of stats) {
+    const share = st.area / s.n;
+    if (share >= SURFACE_MIN_SHARE) surface += st.area;
+    else if (share >= BLOB_MIN_SHARE) blob += st.area;
+  }
+  return { surface: surface / n, blob: blob / n };
+}
+
 /** Noise and texture of a set of samples: robust spread of the differences between neighbouring members. */
 function localSpread(s: Samples, idx: readonly number[]): [number, number, number] {
   const member = new Uint8Array(s.n);
@@ -580,7 +652,8 @@ function sampleDistance(s: Samples, i: number, fit: BackgroundFit): number {
  * as compact colour clusters in the border band that the smooth main surface does not explain. Up
  * to two are added, each the densest colour of the unexplained band samples (lighting-compensated,
  * so one paint under a gradient stays one colour), covering ≥ 10 % of the band with a spread like
- * plain paint (pieces lying on the border are too varied and too small a share).
+ * plain paint and laid out like a table (a surface or a fine pattern, not piece-sized blobs: many
+ * pieces in one colour lying on the border look like a colour cluster too).
  */
 function findPalette(s: Samples, fit: BackgroundFit): void {
   const band: number[] = [];
@@ -604,8 +677,9 @@ function findPalette(s: Samples, fit: BackgroundFit): void {
     return [(s.lab[i * 3] + 16) / f - 16, s.lab[i * 3 + 1] / f, s.lab[i * 3 + 2] / f];
   };
   const mainSigma: [number, number, number] = [fit.sigma[0], fit.sigma[1], fit.sigma[2]];
-  for (let round = 0; round < 2; round++) {
-    const out = band.filter((i) => sampleDistance(s, i, fit) >= 3.5);
+  const ignored = new Uint8Array(s.n);
+  for (let round = 0; round < 3 && fit.palette.length < 2; round++) {
+    const out = band.filter((i) => !ignored[i] && sampleDistance(s, i, fit) >= 3.5);
     if (out.length < PALETTE_MIN_SHARE * band.length) break;
     // Densest colour: 4-unit Lab bins, counted over each bin's 3×3×3 neighbourhood.
     const pts = out.map((i) => comp(i, meanL));
@@ -668,6 +742,14 @@ function findPalette(s: Samples, fit: BackgroundFit): void {
     // neighbouring samples showing it (a lighting gradient adds nothing to them, print does).
     const localSigma = localSpread(s, litMembers.length >= members.length ? litMembers : members);
     if (localSigma[1] > 2 * mainSigma[1] + 1 || localSigma[2] > 2 * mainSigma[2] + 1 || localSigma[0] > 2 * mainSigma[0] + 1.5) break;
+    // A table colour forms a surface (or a fine pattern); a colour that shows mainly as piece-sized
+    // blobs is the print of pieces lying on the border (dark pieces scattered over a light table),
+    // not table. Its samples are left out of the further search.
+    const lay = colourLayout(s, fit, colour);
+    if (lay.blob >= PIECE_BLOB_SHARE && lay.blob > lay.surface) {
+      for (const i of out) if (within(colour.color, lit(i, colour), 16)) ignored[i] = 1;
+      continue;
+    }
     fit.palette.push(colour);
   }
   if (fit.palette.length === 0) return;

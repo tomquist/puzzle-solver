@@ -222,6 +222,17 @@ const SCENARIOS: Scenario[] = [
       pairs: { count: 10, gap: [-3, 2] }, secondSurface: {}, jpegQuality: 85,
     }),
   },
+  // From real feedback (two surfaces, dark grey pieces): many pieces in dark greys of the table
+  // colour scattered over a light grey table, next to an olive cloth. The dark grey is a piece
+  // colour, not a further table colour, even where many of them lie along the photo border.
+  {
+    name: 'wave-dark-grey-two-surfaces',
+    painting: 'great-wave', grid: { rows: 20, cols: 30 }, items: { singles: 36 }, seeds: [35],
+    render: (rng) => ({
+      ...standard(rng), background: [168, 171, 176], illumination: 0.15, margin: 4, packing: 1.7,
+      darkPieces: { share: 0.6, level: 0.4 }, secondSurface: { color: [142, 134, 82] }, jpegQuality: 85,
+    }),
+  },
 ];
 
 const COLUMNS = [

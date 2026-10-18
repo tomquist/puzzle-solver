@@ -541,6 +541,24 @@
         "neighborPrecision": 1,
         "neighborRecall": 0.643,
         "hiddenRate": 0.089
+      },
+      "wave-dark-grey-two-surfaces": {
+        "segRecall": 0.972,
+        "segPrecision": 1,
+        "shapeRate": 0.917,
+        "kindAccuracy": 1,
+        "top1": 0.667,
+        "top3": 0.694,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 0.333,
+        "warnings": 1,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 0.333,
+        "hiddenRate": 0.028
       }
     },
     "box": {
@@ -580,6 +598,12 @@
         "missedFound": 0.786,
         "objectRecall": 1,
         "objectClean": 0.688,
+        "objectPrecision": 1
+      },
+      "2026-10-18-two-surfaces-letters-1500pc.json": {
+        "missedFound": 0.643,
+        "objectRecall": 1,
+        "objectClean": 0.588,
         "objectPrecision": 1
       },
       "2026-10-18-wood-planks-1500pc.json": {
