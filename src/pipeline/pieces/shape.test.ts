@@ -6,7 +6,7 @@ import { fillPolygon } from '../../cv/raster';
 import { resizeRGBA } from '../../cv/resize';
 import { loadTestAsset } from '../../testing/nodeImageIO';
 import { generateJigsaw, renderPiecesPhoto, truthPieceShape, type PieceTruth } from '../../testing/synth';
-import { analyzePieceShape, bodyOrientation, dominantOrientation, orientationHistogram, sideProfile } from './shape';
+import { analyzePieceShape, bodyOrientation, dominantOrientation, orientationHistogram, sideProfile, sideProfilesAt } from './shape';
 import { cornerError, quarterAngleError, sideAngleError } from './testkit';
 
 /** Rasterise an outline and trace it back, like the segmentation does. */
@@ -132,6 +132,27 @@ describe('analyzePieceShape', () => {
     const per = (performance.now() - t0) / outlines.length;
     console.log(`analyzePieceShape: ${per.toFixed(2)} ms per piece (body ≈ ${(2.2 * 80).toFixed(0)} px)`);
     expect(per).toBeLessThan(15);
+  });
+});
+
+describe('sideProfilesAt', () => {
+  it('reproduces the analysed profiles at the found corners and follows corners moved along the outline', () => {
+    const ref = resizeRGBA(loadTestAsset('starry-night'), 640, 507);
+    const cut = generateJigsaw(5, 5, 500, 500, 3);
+    const { truth } = renderPiecesPhoto(ref, cut, [12], { seed: 2, scale: 1.2 });
+    const c = tracedOutline(truth[0].outline);
+    const shape = analyzePieceShape(c)!;
+    const same = sideProfilesAt(c, shape.corners)!;
+    for (let i = 0; i < 4; i++) {
+      expect(same[i].length).toBeCloseTo(shape.sides[i].length, 9);
+      expect(same[i].profile).toEqual(shape.sides[i].profile);
+    }
+    // Corner 1 moved 4 px clockwise: side 0 grows (its end runs past the corner), side 1 shrinks.
+    const moved = sideProfilesAt(c, shape.corners, [0, 4, 0, 0])!;
+    expect(moved[0].profile).not.toEqual(shape.sides[0].profile);
+    expect(moved[1].length).toBeLessThan(shape.sides[1].length - 2);
+    expect(moved[2].profile).toEqual(shape.sides[2].profile);
+    expect(sideProfilesAt([], shape.corners)).toBeNull();
   });
 });
 

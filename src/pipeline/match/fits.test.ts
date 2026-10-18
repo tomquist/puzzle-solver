@@ -4,7 +4,7 @@ import type { DetectedRegion, FitHint, RegionMatch } from '../../model/types';
 import { loadTestAsset } from '../../testing/nodeImageIO';
 import { generateJigsaw, perturbReference, truthPieceShape, type JigsawCut, type PieceTruth } from '../../testing/synth';
 import { puzzleSideOf, profileMismatch } from './fits';
-import { buildReferenceIndex, findFits, matchRegions, type ReferenceIndex } from './index';
+import { buildReferenceIndex, findFits, matchRegions, sampleEdgeStrips, type EdgeStrips, type MatchInput, type ReferenceIndex } from './index';
 import { inputFromTruth, renderScenario } from './testkit';
 
 function regionFromTruth(cut: JigsawCut, t: PieceTruth, id: number, orientationDeg: number): DetectedRegion {
@@ -39,6 +39,7 @@ describe('findFits', () => {
   let regions: DetectedRegion[];
   let matches: RegionMatch[];
   let truth: PieceTruth[];
+  let inputs: MatchInput[];
   const at = (r: number, c: number) => r * cols + c;
 
   beforeAll(() => {
@@ -54,7 +55,7 @@ describe('findFits', () => {
     ];
     const scene = renderScenario(ref, cut, { seed: 8, items, scale: [1.25, 1.25] });
     truth = scene.truth;
-    const inputs = truth.map((t, i) => inputFromTruth(scene.photo, cut, t, i + 1, { withShape: true }));
+    inputs = truth.map((t, i) => inputFromTruth(scene.photo, cut, t, i + 1, { withShape: true }));
     regions = truth.map((t, i) => regionFromTruth(cut, t, i + 1, inputs[i].orientationDeg));
     matches = matchRegions(index, inputs);
   });
@@ -114,6 +115,35 @@ describe('findFits', () => {
     for (const h of hints) {
       const ok = (find([h], 1, 2) ?? find([h], 3, 4)) !== undefined;
       expect(ok).toBe(true);
+    }
+  });
+
+  it('finds the same shape-only hints comparing sides with DTW and colour strips', () => {
+    const vague: RegionMatch[] = matches.map((m, i) => ({
+      regionId: m.regionId,
+      status: 'ambiguous',
+      candidates: [{ row: (i * 7) % rows, col: (i * 3) % cols, x: 0, y: 0, rotationDeg: truth[i].rotationDeg, score: 0.3, confidence: 0.2 }],
+    }));
+    const strips = new Map<number, EdgeStrips>();
+    truth.forEach((t, i) => {
+      if (t.pieces.length !== 1) return;
+      const input = inputs[i];
+      strips.set(i + 1, sampleEdgeStrips(input.image, input.mask, input.origin, t.outline, regions[i].shape!)!);
+    });
+    for (const opts of [{ shape: 'dtw' as const }, { shape: 'dtw-levelled' as const }]) {
+      const hints = findFits(regions, vague, { rows, cols }, opts);
+      expect(find(hints, 1, 2)?.reason).toBe('shape');
+      expect(sideOf(find(hints, 1, 2)!, 1)).toBe('right');
+      expect(find(hints, 3, 4)?.reason).toBe('shape');
+      expect(sideOf(find(hints, 3, 4)!, 4)).toBe('top');
+      for (const h of hints) expect((find([h], 1, 2) ?? find([h], 3, 4)) !== undefined).toBe(true);
+    }
+    // Colour joins the comparison: the brush strokes make the strips of a true pair only roughly
+    // alike, which can cost a perfect shape match its margin – but it never invents a fit.
+    for (const opts of [{ shape: 'dtw' as const, strips }, { shape: 'dtw-levelled' as const, strips }, { strips }]) {
+      const hints = findFits(regions, vague, { rows, cols }, opts);
+      expect(hints.length).toBeGreaterThan(0);
+      for (const h of hints) expect((find([h], 1, 2) ?? find([h], 3, 4)) !== undefined).toBe(true);
     }
   });
 

@@ -9,6 +9,8 @@
 export { buildReferenceIndex } from './referenceIndex';
 export { matchRegion, cellAt, matchConfidence, CONFIDENT_THRESHOLD } from './matchRegion';
 export { matchRegions, estimateColorCorrection } from './colorCorrection';
-export { findFits, puzzleSideOf, profileMismatch } from './fits';
+export { findFits, puzzleSideOf, profileMismatch, sideMismatch, type FitOptions, type ShapeMetric } from './fits';
+export { sampleEdgeStrips, type EdgeStrips } from './edgeStrips';
+export { dtwDistance, profileMismatchDtw, stripMismatch } from './sideCompare';
 export { buildGroups, type GroupOptions } from './groups';
 export type { MatchInput, MatchOptions, ReferenceIndex, RefLevel } from './types';

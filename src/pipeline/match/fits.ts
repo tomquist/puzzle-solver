@@ -1,7 +1,13 @@
 /**
  * Fit hints between regions of one scan: by location (best placements in neighbouring cells), by
  * shape (complementary tab/blank profiles) or both.
+ *
+ * Two sides are compared by shape – point by point (default) or with DTW, see sideCompare.ts – and,
+ * when the pieces' colour strips are given, by the colours just inside them. The comparison is
+ * expressed in units of the point-wise profile RMS, so the thresholds below apply to every variant.
  */
+import type { EdgeStrips } from './edgeStrips';
+import { profileMismatchDtw, stripMismatch } from './sideCompare';
 import {
   cellKey,
   type CellRef,
@@ -22,6 +28,34 @@ const MIN_PLACEMENT_CONFIDENCE = 0.5;
 const MAX_PROFILE_RMS = 0.035;
 const MAX_LENGTH_RATIO = 1.1;
 const MAX_HINTS_PER_REGION = 3;
+
+/** How side shapes are compared: point-wise RMS, banded DTW, or banded DTW after removing a tilt ('dtw-levelled'). */
+export type ShapeMetric = 'rms' | 'dtw' | 'dtw-levelled';
+
+export interface FitOptions {
+  /** Side shape comparison (default 'rms'). */
+  shape?: ShapeMetric;
+  /** DTW band in profile samples (default 1 for 'dtw', 2 for 'dtw-levelled'). */
+  band?: number;
+  /** Colour strips of single pieces by region id (see `sampleEdgeStrips`): colour then joins the side comparison. */
+  strips?: ReadonlyMap<number, EdgeStrips>;
+  /** Share of colour in the side distance when strips are given (default {@link COLOUR_SHARE}). */
+  colourShare?: number;
+  /**
+   * Side distances by profile (the PieceShape's own arrays), filled and reused by every call with
+   * these options: pass one for repeated calls on the same scan (DTW costs ~2 µs per pair of sides).
+   */
+  cache?: WeakMap<readonly number[], Map<readonly number[], number>>;
+}
+
+/**
+ * Median distance of two unrelated complementary sides per comparison (synthetic scans,
+ * bench/sides.eval.ts): the scale on which shape and colour are combined. True partners score
+ * about 0.65 (RMS) or 0.45 (DTW, colour) of it.
+ */
+const TYPICAL_DISTANCE: Record<ShapeMetric | 'colour', number> = { rms: 0.057, dtw: 0.031, 'dtw-levelled': 0.02, colour: 17 };
+/** Default share of colour in the combined side distance. */
+export const COLOUR_SHARE = 0.5;
 
 /** Puzzle side (0 top … 3 left) of local side `i` of a shape after rotating the region by `rotationDeg`. */
 export function puzzleSideOf(shape: PieceShape, rotationDeg: number, i: number): number {
@@ -51,15 +85,54 @@ export function profileMismatch(a: readonly number[], b: readonly number[]): num
   return Math.sqrt(s / n);
 }
 
+/** One side of a single piece, as compared by {@link sideDistance}. */
+interface SideOf {
+  regionId: number;
+  shape: PieceShape;
+  i: number;
+}
+
+/**
+ * Mismatch of two sides in units of the point-wise profile RMS (0 = perfect fit): their profiles
+ * compared as `opts.shape` says and, when both colour strips are given, their strips, each relative
+ * to its typical value for unrelated sides, mixed by the colour share. Plain RMS by default.
+ */
+export function sideMismatch(pa: readonly number[], pb: readonly number[], ca: Float32Array | undefined, cb: Float32Array | undefined, opts: Omit<FitOptions, 'strips'> = {}): number {
+  const metric = opts.shape ?? 'rms';
+  const shape =
+    metric === 'rms' ? profileMismatch(pa, pb)
+    : metric === 'dtw' ? profileMismatchDtw(pa, pb, opts.band ?? 1)
+    : profileMismatchDtw(pa, pb, opts.band ?? 2, true);
+  const unit = TYPICAL_DISTANCE.rms / TYPICAL_DISTANCE[metric];
+  if (!ca || !cb) return shape * unit;
+  const w = opts.colourShare ?? COLOUR_SHARE;
+  return (1 - w) * shape * unit + w * stripMismatch(ca, cb) * (TYPICAL_DISTANCE.rms / TYPICAL_DISTANCE.colour);
+}
+
+/** {@link sideMismatch} of two sides of single pieces, with their strips from `opts.strips` (memoised in `opts.cache`). */
+function sideDistance(a: SideOf, b: SideOf, opts: FitOptions): number {
+  const pa = a.shape.sides[a.i].profile, pb = b.shape.sides[b.i].profile;
+  let row = opts.cache?.get(pa);
+  const known = row?.get(pb);
+  if (known !== undefined) return known;
+  const strip = (s: SideOf) => opts.strips?.get(s.regionId)?.sides[s.i];
+  const d = sideMismatch(pa, pb, strip(a), strip(b), opts);
+  if (opts.cache) {
+    if (!row) opts.cache.set(pa, (row = new Map()));
+    row.set(pb, d);
+  }
+  return d;
+}
+
 /** Shape agreement of two touching sides: 1 = perfect fit, 0 = incompatible, null = unknown. */
-function sideFit(sa: PieceShape, ia: number, sb: PieceShape, ib: number): number | null {
-  const A = sa.sides[ia], B = sb.sides[ib];
+function sideFit(a: SideOf, b: SideOf, opts: FitOptions): number | null {
+  const A = a.shape.sides[a.i], B = b.shape.sides[b.i];
   const comp = complementary(A.kind, B.kind);
   if (comp === null) return null;
   if (!comp) return 0;
   const ratio = Math.max(A.length, B.length) / Math.max(1e-6, Math.min(A.length, B.length));
   if (ratio > MAX_LENGTH_RATIO * 1.1) return 0.2;
-  const rms = profileMismatch(A.profile, B.profile);
+  const rms = sideDistance(a, b, opts);
   return Math.max(0.2, Math.min(1, 1.5 - rms / (2 * MAX_PROFILE_RMS)));
 }
 
@@ -76,7 +149,7 @@ interface Placed {
  * complementary, closely matching sides (only when unambiguous), merged into 'location+shape' when
  * both agree. At most a few hints per region, best first.
  */
-export function findFits(regions: DetectedRegion[], matches: RegionMatch[], grid: GridSpec): FitHint[] {
+export function findFits(regions: DetectedRegion[], matches: RegionMatch[], grid: GridSpec, opts: FitOptions = {}): FitHint[] {
   const byId = new Map(matches.map((m) => [m.regionId, m]));
   const placed: Placed[] = [];
   for (const region of regions) {
@@ -111,7 +184,11 @@ export function findFits(regions: DetectedRegion[], matches: RegionMatch[], grid
       const sa = A.region.kind === 'piece' ? A.region.shape : undefined;
       const sb = B.region.kind === 'piece' ? B.region.shape : undefined;
       if (sa && sb) {
-        const fit = sideFit(sa, localSideAt(sa, A.rotationDeg, side), sb, localSideAt(sb, B.rotationDeg, opposite(side)));
+        const fit = sideFit(
+          { regionId: A.region.id, shape: sa, i: localSideAt(sa, A.rotationDeg, side) },
+          { regionId: B.region.id, shape: sb, i: localSideAt(sb, B.rotationDeg, opposite(side)) },
+          opts,
+        );
         if (fit !== null) {
           // Contradicting sides: either a placement or the side classification is wrong; two very
           // confident placements make a misread side more likely.
@@ -142,7 +219,7 @@ export function findFits(regions: DetectedRegion[], matches: RegionMatch[], grid
       if (o.p === s.p || !complementary(s.shape.sides[s.i].kind, o.shape.sides[o.i].kind)) continue;
       const la = s.shape.sides[s.i].length, lb = o.shape.sides[o.i].length;
       if (Math.max(la, lb) / Math.min(la, lb) > MAX_LENGTH_RATIO) continue;
-      const d = profileMismatch(s.shape.sides[s.i].profile, o.shape.sides[o.i].profile);
+      const d = sideDistance({ regionId: s.p.region.id, shape: s.shape, i: s.i }, { regionId: o.p.region.id, shape: o.shape, i: o.i }, opts);
       if (d < d1) {
         d2 = d1;
         d1 = d;

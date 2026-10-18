@@ -41,6 +41,10 @@ objective.
 - Matching: top-1 / top-3 cell accuracy, rotation accuracy, confidence calibration (confident ⇒
   correct rate), patch placement accuracy.
 - Fits: precision/recall of neighbour hints.
+- Side retrieval (`bench/sides.eval.ts`): for every true pair of mating sides, how often the partner
+  is the closest (top-1) or among the five closest (top-5) complementary sides of the scan, per side
+  comparison (shape RMS / DTW, colour strips, combined) – with the detected corners and with every
+  corner moved 2–5 % of the side along the outline (simulated real-photo corner error).
 - Timing per stage (budget per scan on Node, as a proxy for phones).
 
 Each scenario family varies seeds, paintings, grid sizes (24 → 2000 pieces), scale, rotation, noise,
