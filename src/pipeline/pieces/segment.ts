@@ -1338,10 +1338,11 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   const diag = opts.diagnostics;
 
   /** Score → threshold → texture → morphology → candidates → reference size → strands removed. */
-  const pass = (model: BackgroundFit) => {
+  const pass = (model: BackgroundFit, prev?: { high: number; low: number; separability: number }) => {
     const score = foregroundScore(scored, model);
     lap('score');
-    const th = chooseThreshold(score);
+    const th0 = chooseThreshold(score);
+    const th = prev && globalThis.process?.env?.THKEEP ? prev : th0;
     let fg = hysteresis(score, th.high, th.low);
     lap('threshold');
     if (diag) Object.assign(diag, { score, high: th.high, low: th.low, colour: cloneMask(fg), minArea });
@@ -1454,7 +1455,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     lap('local');
     if (local) {
       fit = { ...fit, local };
-      p = pass(fit);
+      p = pass(fit, p.th);
     }
   }
   const { score, th, texOnly, preClose, ref } = p;
