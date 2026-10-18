@@ -1,0 +1,106 @@
+{
+  "reviewed": "2026-10-18",
+  "marks": {
+    "1": {
+      "verdict": "ok",
+      "parts": 2,
+      "note": "two loose pieces touching (pink/green and pink/dark), plus a slice of the piece below"
+    },
+    "2": {
+      "verdict": "ok",
+      "parts": 2,
+      "note": "dark red/pink piece and green piece touching"
+    },
+    "3": {
+      "verdict": "ok",
+      "parts": 2,
+      "note": "two green pieces touching corner to corner"
+    },
+    "4": {
+      "verdict": "ok",
+      "parts": 2,
+      "note": "dark red piece and the green piece above it, plus a slice of the next piece"
+    }
+  },
+  "objects": [
+    {
+      "x": 520,
+      "y": 460,
+      "note": "pink/green piece, top left of the chain (M1)"
+    },
+    {
+      "x": 880,
+      "y": 520,
+      "note": "pink/dark piece touching it (M1)"
+    },
+    {
+      "x": 1590,
+      "y": 600,
+      "note": "wood-grain piece on its own"
+    },
+    {
+      "x": 780,
+      "y": 820,
+      "note": "green piece with a pink knob, below the first pair"
+    },
+    {
+      "x": 640,
+      "y": 1090,
+      "note": "dark red piece (M4)"
+    },
+    {
+      "x": 480,
+      "y": 1480,
+      "note": "dark red/pink piece (M2)"
+    },
+    {
+      "x": 760,
+      "y": 1380,
+      "note": "green piece touching it (M2)"
+    },
+    {
+      "x": 1120,
+      "y": 1400,
+      "note": "green/pink piece (M3)"
+    },
+    {
+      "x": 1240,
+      "y": 1640,
+      "note": "green piece below it (M3)"
+    },
+    {
+      "x": 700,
+      "y": 1770,
+      "note": "dark red/pink piece"
+    },
+    {
+      "x": 1040,
+      "y": 1940,
+      "note": "green piece at the bottom"
+    },
+    {
+      "x": 460,
+      "y": 40,
+      "unsure": true,
+      "note": "magenta piece cut off by the top edge"
+    },
+    {
+      "x": 100,
+      "y": 1560,
+      "unsure": true,
+      "note": "assembled strip at the left edge, cut off"
+    },
+    {
+      "x": 80,
+      "y": 1280,
+      "unsure": true,
+      "note": "top of the assembled strip at the left edge"
+    },
+    {
+      "x": 60,
+      "y": 1930,
+      "unsure": true,
+      "note": "magenta bottom of the assembled strip at the left edge"
+    }
+  ]
+}

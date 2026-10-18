@@ -6,7 +6,10 @@ detections, merged pieces, wrong outlines, wrong places), confirmed placements a
 puzzle picture and box photo.
 
 - `npm run feedback:inspect -- test-corpus/feedback/<file>.json` re-runs the current pipeline on the
-  file and writes annotated images to `.debug/feedback/` plus a summary.
+  file and writes annotated images to `.debug/feedback/` plus a summary. Files from Chromium
+  browsers are decoded with Playwright's Chromium (`--decoder auto`, the default): JPEG decoders
+  differ by a level or two, which can change segmentation, and since the app analyses the stored
+  JPEG this reproduces exactly what the phone saw. The benchmark uses jpeg-js.
 - `npm run bench` replays every file here and checks the corrections stay fixed
   (bench/feedback.eval.ts, gated by bench/baseline.json).
 
@@ -34,3 +37,6 @@ skipped.
 | `2026-10-18-spread-stone-table-1500pc.json` | About 64 loose pieces spread out on a grey-beige stone-like table, few touching, soft shadow at the bottom left; 1 region reported as not a piece (a darker patch of table) | 1/1 mark ok; complete answer key (64 objects, 1 unsure) |
 | `2026-10-18-two-surfaces-grey-pieces-1500pc.json` | Olive cloth on the left, light grey-blue table on the right; large assembled blocks; grey and dark pieces on the light table (all 14 marked as missed) and outlines that leave out the dark parts of pieces on the cloth (6 marked) | 20/20 marks ok; answer key for the light table's lower right (x 1000–1800, y 1200–2400: 20 objects, 4 unsure) |
 | `2026-10-18-two-surfaces-letters-1500pc.json` | Same table as the previous file, rearranged, with the LOVE LETTERS title strip; a dark blue-grey (the grey pieces' colour) was learned as a second table colour, so grey pieces vanish (14 marked missed) and dark parts of pink pieces are cut off (32 marked bad outlines) | 43 marks ok, 3 unsure (near-correct outlines); answer key for the light table's lower right (x 1050–1800, y 1300–2400: 23 objects, 6 unsure) |
+| `2026-10-18-two-surfaces-third-1500pc.json` | Third photo of the two-surface table; analysed on the phone with 87fd698: 70 regions there, 59 in the replay of the stored JPEG (a table-swallowing region at the bottom right appears only in the replay); 4 outlines marked | 3 marks ok, 1 unsure |
+| `2026-10-18-touching-chain-closeup-1500pc.json` | Close-up (pieces ~260 px) of 11 loose pieces in a touching chain on a darker grey table; 4 regions marked as merged (2 pieces each) | 4/4 marks ok with part counts; complete answer key (15 objects, 4 unsure) |
+| `2026-10-18-pale-pieces-light-table-1500pc.json` | Pale mauve/grey pieces on a light grey table (low contrast), a large assembled block on the left; a dark colour (Lab 36,4,3, 26 % inside) learned as table; 10 missed pieces and 33 fragment outlines marked | 43/43 marks ok; answer key for the loose pieces (x 500–1700, y 600–2000: 14 objects, 2 unsure) |
