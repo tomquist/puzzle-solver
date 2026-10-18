@@ -845,6 +845,7 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
     const halo = wrap >= HALO_WRAP && Math.min(edgeScore[a], edgeScore[b]) < high;
     // Two neighbours both well below a piece that make one together: one piece given two markers.
     const halves = !viaGap && area[a] < HALF_PART * ra && area[b] < HALF_PART * ra && area[a] + area[b] <= 1.35 * ra;
+    if (globalThis.process?.env?.SPLITDBG) globalThis.console.log('  pair', a, b, (area[a] / ra).toFixed(2), (area[b] / ra).toFixed(2), 'crease', crease.toFixed(1), 'mixed', mixed, 'viaGap', viaGap, 'conf', ca.toFixed(2), cb.toFixed(2), 'second', c.secondPeak.toFixed(2), 'grid', onOneGrid(pa, pb, c, body), 'halves', halves, 'halo', halo, 'len', v.length); // DBG
     if (!evidence || halves || halo || onOneGrid(pa, pb, c, body)) root[find(a)] = find(b);
   }
   const groups = new Map<number, number[]>();
@@ -852,6 +853,7 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
     const r = find(l);
     groups.set(r, [...(groups.get(r) ?? []), l]);
   }
+  if (globalThis.process?.env?.SPLITDBG) globalThis.console.log('EDGE', JSON.stringify(c.bbox), 'k', k, 'viaGap', viaGap, 'parts', live.map((l) => (area[l] / ra).toFixed(2)).join(','), 'groups', groups.size, 'outer', outer.map((a) => a.toFixed(0)).join(','), 'cluster', c.orientation.toFixed(0), 'mixed', mixed); // DBG
   if (groups.size < 2) return null;
   const out: Candidate[] = [];
   for (const members of groups.values()) {
@@ -1348,7 +1350,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   // blocks of up to 16×16 px (outlines are snapped to brightness edges below; specks of one or two
   // such blocks are noise).
   const blockiness = chromaBlockiness(photo);
-  const blocky = blockiness >= JPEG_BLOCKINESS;
+  const blocky = globalThis.process?.env?.BLK ? globalThis.process.env.BLK === '1' : blockiness >= JPEG_BLOCKINESS; // DBG
   const minArea = opts.minArea ?? Math.max(blocky ? JPEG_MIN_AREA : 48, Math.round(5e-5 * W * H));
 
   const timings = opts.timings;
@@ -1365,7 +1367,8 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   // A phone JPEG stores colour at half resolution: its pixel-level colour noise (and how a decoder
   // upsamples the colour) carries no information, so the colour is averaged over 3×3 pixels while
   // the brightness stays sharp. Replays decoded differently, or re-encoded, then score alike.
-  const scored = smoothing > 0 ? boxBlurRGB(photo, smoothing) : blocky ? smoothChroma(photo, 1) : photo;
+  const SCM = globalThis.process?.env?.SC; // DBG
+  const scored = SCM ? (SCM === 'sc2' ? smoothChroma(smoothing > 0 ? boxBlurRGB(photo, smoothing) : photo, 2) : SCM === 'sc1' ? smoothChroma(smoothing > 0 ? boxBlurRGB(photo, smoothing) : photo, 1) : photo) : smoothing > 0 ? boxBlurRGB(photo, smoothing) : blocky ? smoothChroma(photo, 1) : photo; // DBG
   let fit: BackgroundFit = fitBackground(scored);
   lap('background');
   const diag = opts.diagnostics;
@@ -1519,11 +1522,13 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
       const ra = refAreaAt(c), bodyAt = refBody * Math.sqrt(ra / refArea);
       // A clean four-corner outline clearly larger than a piece is two pieces side by side.
       const confidentSingle = c.shape !== null && c.shape.confidence >= 0.7 && c.shape.bodySize <= 1.2 * bodyAt;
+      if (globalThis.process?.env?.SPLITDBG && c.area > 1.4 * ra) globalThis.console.log('TRY', JSON.stringify(c.bbox), (c.area / ra).toFixed(2), 'confSingle', confidentSingle, c.shape?.confidence.toFixed(2), 'from', from); // DBG
       if (c.area <= 1.4 * ra || confidentSingle) return null;
       for (let k = from; k < NECK_RADII.length; k++) {
         // Every part at least half a piece: the opening only cuts contacts clearly narrower than a
         // piece body (pieces of an assembled patch touch along whole sides).
         const parts = splitAtNecks(c, Math.max(2, NECK_RADII[k] * bodyAt), 0.3 * ra, 0.5 * ra);
+        if (globalThis.process?.env?.SPLITDBG && parts) globalThis.console.log('NECK', JSON.stringify(c.bbox), NECK_RADII[k], (c.area / ra).toFixed(2), parts.map((p) => (maskArea(p.mask) / ra).toFixed(2)).join(',')); // DBG
         if (!parts) continue;
         const out: Candidate[] = [];
         for (const p of parts) {

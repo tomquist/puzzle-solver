@@ -852,6 +852,53 @@ function clutterZones(objs: ClutterObject[], W: number, H: number, margin: numbe
   });
 }
 
+/**
+ * Decoder variation of a photo: its colour as a JPEG stores it (YCbCr, chroma averaged over 2×2
+ * pixels, 4:2:0) and upsampled again either by replicating each chroma sample ('replicate', as
+ * jpeg-js does) or by the triangle filter of libjpeg-turbo's "fancy" upsampling ('fancy', as
+ * browsers do). Brightness is kept per pixel. Two variants of the same photo differ by about one
+ * level on average and by up to a few dozen at colour edges, like two decoders of one file.
+ */
+export function chromaResample(img: RGBAImage, mode: 'replicate' | 'fancy'): RGBAImage {
+  const { width: w, height: h, data: src } = img;
+  const cw = (w + 1) >> 1, chh = (h + 1) >> 1;
+  const Y = new Float32Array(w * h);
+  const cb = new Float32Array(cw * chh), cr = new Float32Array(cw * chh), cnt = new Float32Array(cw * chh);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const p = (y * w + x) * 4, r = src[p], g = src[p + 1], b = src[p + 2];
+      Y[y * w + x] = 0.299 * r + 0.587 * g + 0.114 * b;
+      const k = (y >> 1) * cw + (x >> 1);
+      cb[k] += -0.168736 * r - 0.331264 * g + 0.5 * b;
+      cr[k] += 0.5 * r - 0.418688 * g - 0.081312 * b;
+      cnt[k]++;
+    }
+  }
+  for (let k = 0; k < cb.length; k++) { cb[k] /= cnt[k]; cr[k] /= cnt[k]; }
+  const out = new Uint8ClampedArray(w * h * 4);
+  const at = (a: Float32Array, cx: number, cy: number) => a[Math.min(chh - 1, Math.max(0, cy)) * cw + Math.min(cw - 1, Math.max(0, cx))];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let u: number, v: number;
+      if (mode === 'replicate') {
+        u = at(cb, x >> 1, y >> 1);
+        v = at(cr, x >> 1, y >> 1);
+      } else {
+        // Nearest chroma sample weighted 3/4, the next one towards this pixel 1/4, per axis.
+        const cx = x >> 1, cy = y >> 1, nx = x & 1 ? cx + 1 : cx - 1, ny = y & 1 ? cy + 1 : cy - 1;
+        u = (9 * at(cb, cx, cy) + 3 * at(cb, nx, cy) + 3 * at(cb, cx, ny) + at(cb, nx, ny)) / 16;
+        v = (9 * at(cr, cx, cy) + 3 * at(cr, nx, cy) + 3 * at(cr, cx, ny) + at(cr, nx, ny)) / 16;
+      }
+      const l = Y[y * w + x], o = (y * w + x) * 4;
+      out[o] = Math.round(l + 1.402 * v);
+      out[o + 1] = Math.round(l - 0.344136 * u - 0.714136 * v);
+      out[o + 2] = Math.round(l + 1.772 * u);
+      out[o + 3] = src[o + 3];
+    }
+  }
+  return { width: w, height: h, data: out };
+}
+
 /** Phone-style JPEG round trip: 4:2:0 chroma subsampling, then jpeg-js at `quality`. */
 export function jpegRoundTrip(img: RGBAImage, quality: number): RGBAImage {
   const { width: w, height: h } = img;
