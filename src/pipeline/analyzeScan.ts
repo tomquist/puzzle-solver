@@ -22,8 +22,15 @@ export interface SideComparison {
   colourShare?: number;
 }
 
-/** Side comparison of the fit hints unless the caller chooses one: profiles point by point. */
-export const DEFAULT_SIDE_COMPARISON: SideComparison = { shape: 'rms', colour: false };
+/**
+ * Side comparison of the fit hints unless the caller chooses one: DTW of the profiles with the tilt
+ * of a misplaced corner removed. In bench/sides.eval.ts the true partner is among the five closest
+ * sides more often than point by point (0.49 vs 0.40; first as often), and with corners a few
+ * pixels off it holds up better (top-1 0.11 vs 0.05, top-5 0.33 vs 0.19); the scan benchmark keeps
+ * no wrong shape hint. Colour strips stay off: they find partners well on synthetic scans but add
+ * no correct hint there, and real photos are untested.
+ */
+export const DEFAULT_SIDE_COMPARISON: SideComparison = { shape: 'dtw-levelled', colour: false };
 
 export interface AnalyzeScanOptions {
   placedCells?: CellRef[];

@@ -262,14 +262,14 @@ sliding search and their dominant orientation; irregular-cut puzzles use the sli
 **Fits** – two regions fit when their best placements are adjacent cells with consistent
 rotations (location), and/or when complementary sides (tab ↔ blank) have matching profiles and
 lengths (shape). A loose piece fits a patch when its cell is adjacent to the patch's covered cells.
-Profiles are compared point by point ('rms'); `analyzeScan`'s `sides` option can choose dynamic
-time warping in a narrow Sakoe-Chiba band instead ('dtw'), optionally after removing the best
-straight line through their difference ('dtw-levelled', `sideCompare.ts`): a body corner found a few
-pixels off along the outline shifts the knob along the profile (warping absorbs it) and tilts the
-neighbouring side's baseline (the line absorbs it). Optionally (`sides.colour`) the Lab colour of a
-thin strip just inside each side (2–3.5 % of the body size in, `edgeStrips.ts`) joins the
-comparison, DTW-aligned with the partner's reversed strip, lightness counting half and a small
-lighting gain compensated.
+Profiles are compared with dynamic time warping in a ±2-sample Sakoe-Chiba band after removing the
+best straight line through their difference ('dtw-levelled', `sideCompare.ts`, the default of
+`analyzeScan`'s `sides` option): a body corner found a few pixels off along the outline shifts the
+knob along the profile (warping absorbs it) and tilts the neighbouring side's baseline (the line
+absorbs it). The option also offers plain DTW ('dtw') and the point-by-point RMS ('rms', findFits'
+own default). Optionally (`sides.colour`, off) the Lab colour of a thin strip just inside each side
+(2–3.5 % of the body size in, `edgeStrips.ts`) joins the comparison, DTW-aligned with the partner's
+reversed strip, lightness counting half and a small lighting gain compensated.
 `bench/sides.eval.ts` measures how often each comparison ranks the true partner first among a
 scan's sides, with and without simulated corner errors.
 
