@@ -3,7 +3,8 @@
  * - 'assembled': physically joined in the photo — a matched 'patch' region, or touching regions
  *   (pieces and/or patches) whose placements agree with how they lie next to each other in the
  *   photo. Weak members of such a group are placed from their confident neighbours.
- * - 'neighbors': loose pieces whose placements are adjacent cells (they will connect once placed).
+ * - 'neighbors': units that will connect once placed – loose pieces and whole assembled groups –
+ *   whose placements are adjacent cells.
  */
 import type { Point } from '../../cv/geometry';
 import { polygonCentroid, resampleContour } from '../../cv/polygon';
@@ -256,6 +257,8 @@ export function buildGroups(regions: DetectedRegion[], matches: RegionMatch[], f
   });
   const groups: RegionGroup[] = [];
   const inAssembled = new Set<number>();
+  /** Members of each assembled group, by member (an assembled group links to neighbours as one unit). */
+  const assembledMembers = new Map<number, number[]>();
   const makeGroup = (kind: RegionGroup['kind'], members: number[], confidence: number, rotations: boolean): RegionGroup | null => {
     const cells: CellRef[] = [];
     const seen = new Set<string>();
@@ -302,20 +305,28 @@ export function buildGroups(regions: DetectedRegion[], matches: RegionMatch[], f
     const g = makeGroup('assembled', members, anchor * (0.85 + 0.15 * layout), true);
     if (!g) continue;
     groups.push(g);
-    members.forEach((i) => inAssembled.add(i));
+    members.forEach((i) => {
+      inAssembled.add(i);
+      assembledMembers.set(i, members);
+    });
   }
 
-  // 4. Neighbours: loose single pieces linked by location hints (adjacent cells, compatible sides).
+  // 4. Neighbours: units – loose single pieces, and assembled groups as a whole (represented by
+  // their first member) – linked by location hints (adjacent cells, compatible sides).
   const idx = new Map(nodes.map((n, i) => [n.region.id, i]));
-  const loose = (i: number | undefined): i is number =>
-    i !== undefined && !inAssembled.has(i) && !touches.has(i) && nodes[i].region.kind === 'piece' && placed(nodes[i]);
+  const unitOf = (i: number | undefined): number | undefined => {
+    if (i === undefined) return undefined;
+    const group = assembledMembers.get(i);
+    if (group) return group[0];
+    return !touches.has(i) && nodes[i].region.kind === 'piece' && placed(nodes[i]) ? i : undefined;
+  };
   const nParent = nodes.map((_, i) => i);
   const nFind = (i: number): number => (nParent[i] === i ? i : (nParent[i] = nFind(nParent[i])));
   const edgeConf = new Map<number, number[]>();
   for (const h of fits) {
     if (h.reason === 'shape' || h.confidence < NEIGHBOR_HINT) continue;
-    const a = idx.get(h.a), b = idx.get(h.b);
-    if (!loose(a) || !loose(b)) continue;
+    const a = unitOf(idx.get(h.a)), b = unitOf(idx.get(h.b));
+    if (a === undefined || b === undefined || a === b) continue;
     nParent[nFind(a)] = nFind(b);
     for (const k of [a, b]) edgeConf.set(k, [...(edgeConf.get(k) ?? []), h.confidence]);
   }
@@ -325,9 +336,10 @@ export function buildGroups(regions: DetectedRegion[], matches: RegionMatch[], f
     if (!nComps.has(r)) nComps.set(r, []);
     nComps.get(r)!.push(i);
   }
-  for (const members of nComps.values()) {
-    if (members.length < 2) continue;
-    const confs = members.flatMap((i) => edgeConf.get(i) ?? []);
+  for (const units of nComps.values()) {
+    if (units.length < 2) continue;
+    const confs = units.flatMap((i) => edgeConf.get(i) ?? []);
+    const members = units.flatMap((u) => assembledMembers.get(u) ?? [u]);
     const g = makeGroup('neighbors', members, Math.min(...confs), true);
     if (g) groups.push(g);
   }

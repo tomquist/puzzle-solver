@@ -60,6 +60,9 @@ export interface ItemLink {
   sideA?: PuzzleSide;
   /** Side of `b` that touches `a`. */
   sideB?: PuzzleSide;
+  /** The touching cells of `a` and `b` (the member pieces a connection of a group starts at). */
+  cellA?: CellRef;
+  cellB?: CellRef;
 }
 
 export interface ScanItems {
@@ -114,15 +117,15 @@ function onBorder(cells: CellRef[], grid: GridSpec): boolean {
 
 const OPPOSITE: Record<PuzzleSide, PuzzleSide> = { top: 'bottom', right: 'left', bottom: 'top', left: 'right' };
 
-/** The sides through which two sets of cells touch (first adjacent pair), if they do. */
-export function touchingSides(a: CellRef[], b: CellRef[]): { sideA: PuzzleSide; sideB: PuzzleSide } | undefined {
+/** The sides (and cells) through which two sets of cells touch (first adjacent pair), if they do. */
+export function touchingSides(a: CellRef[], b: CellRef[]): { sideA: PuzzleSide; sideB: PuzzleSide; cellA: CellRef; cellB: CellRef } | undefined {
   for (const p of a) {
     for (const q of b) {
       const dr = q.row - p.row;
       const dc = q.col - p.col;
       if (Math.abs(dr) + Math.abs(dc) !== 1) continue;
       const sideA: PuzzleSide = dr === -1 ? 'top' : dr === 1 ? 'bottom' : dc === 1 ? 'right' : 'left';
-      return { sideA, sideB: OPPOSITE[sideA] };
+      return { sideA, sideB: OPPOSITE[sideA], cellA: p, cellB: q };
     }
   }
   return undefined;
