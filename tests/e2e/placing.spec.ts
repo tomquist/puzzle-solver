@@ -2,10 +2,12 @@
  * Scan result → guided placing mode (mock pipeline): no-match pieces hidden, assembled grids and
  * connections shown, view options remembered across reloads, the screen kept on, selecting a
  * piece (its connections highlighted, everything else faded), press-and-hold for the clean photo,
- * and the placing flow from the first step to the finish card.
+ * the placing flow from the first step to the finish card, and how to turn a piece (the cut-out
+ * turning upright, the "top" bar, plain words; "now → then" frames with reduced motion).
  */
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
+import { flowDirections, linkId } from '../../src/ui/lib/linkGraph';
 
 const asset = (name: string) => fileURLToPath(new URL(`../../test-assets/${name}`, import.meta.url));
 
@@ -51,14 +53,16 @@ async function act(page: Page, testId: string) {
 /** The selection colour (--sel) as computed. */
 const SELECTION_COLOUR = 'rgb(46, 230, 255)';
 
-/** Dash pattern, colour, opacity and drawn width (screen px) of a connection's line. */
+/** Dash pattern (screen px), colour, opacity, drawn width (screen px) and flow of a connection's line. */
 async function lineStyle(link: Locator) {
   return link.evaluate((g) => {
     const el = g.querySelector('.link-line') as SVGGraphicsElement;
     const svg = el.ownerSVGElement!;
     const scale = svg.getBoundingClientRect().width / svg.viewBox.baseVal.width;
     const cs = getComputedStyle(el);
-    return { dash: cs.strokeDasharray, stroke: cs.stroke, px: parseFloat(cs.strokeWidth) * scale, opacity: Number(getComputedStyle(g).opacity) };
+    const dash = cs.strokeDasharray === 'none' ? [] : cs.strokeDasharray.split(/[ ,]+/).map((v) => parseFloat(v) * scale);
+    const flow = (el.getAnimations() as CSSAnimation[]).map((a) => a.animationName);
+    return { dash, stroke: cs.stroke, px: parseFloat(cs.strokeWidth) * scale, opacity: Number(getComputedStyle(g).opacity), flow, direction: cs.animationDirection };
   });
 }
 
@@ -100,7 +104,7 @@ test('result screen: hidden no-matches, groups, connections, view options, wake 
   await expect(page.locator('[data-testid^="item-g"]')).toHaveCount(2);
   await expect(page.locator('[data-testid^="label-g"]')).toHaveCount(2);
   await expect(page.getByTestId('link').first()).toBeVisible();
-  const notches = page.locator('.turn-tick');
+  const notches = page.locator('.top-mark');
   expect(await notches.count()).toBeGreaterThan(0);
   // The list shows exactly the drawn items (hidden regions are neither drawn nor listed).
   const drawn = await page.locator('[data-testid^="item-"]').count();
@@ -111,22 +115,22 @@ test('result screen: hidden no-matches, groups, connections, view options, wake 
   // The screen is kept on while the result is visible.
   await expect.poll(async () => (await wake(page)).held).toBe(1);
 
-  // View options: turn hints and connections off, remembered across a reload.
+  // View options: top marks and connections off, remembered across a reload.
   await page.getByTestId('view-options').click();
   await shot(page, info, '02-view-options');
-  await page.getByRole('checkbox', { name: /Turn hints/ }).uncheck();
+  await page.getByRole('checkbox', { name: /Top marks/ }).uncheck();
   await page.getByRole('checkbox', { name: /Connections/ }).uncheck();
   await page.keyboard.press('Escape');
   await expect(notches).toHaveCount(0);
   await expect(page.getByTestId('link')).toHaveCount(0);
   await page.reload();
   await expect(page.locator('[data-testid^="item-"]').first()).toBeVisible();
-  await expect(page.locator('.turn-tick')).toHaveCount(0);
+  await expect(page.locator('.top-mark')).toHaveCount(0);
   await expect(page.getByTestId('link')).toHaveCount(0);
   // Unsure pieces can be hidden too.
   await page.getByTestId('view-options').click();
   await page.getByRole('checkbox', { name: /Unsure pieces/ }).uncheck();
-  await page.getByRole('checkbox', { name: /Turn hints/ }).check();
+  await page.getByRole('checkbox', { name: /Top marks/ }).check();
   await page.getByRole('checkbox', { name: /Connections/ }).check();
   await page.keyboard.press('Escape');
   await expect.poll(() => page.locator('[data-testid^="item-"]').count()).toBeLessThan(drawn);
@@ -162,13 +166,18 @@ test('result screen: select a piece to see its connections; hold the photo to se
   const bar = page.getByTestId('selection-bar');
   const opacity = (el: SVGElement | HTMLElement) => Number(getComputedStyle(el).opacity);
 
-  // Nothing selected: nothing is faded; lines are solid, about 2 screen px, readable.
+  // Nothing selected: nothing is faded; lines are dotted (about 3 px dashes, 4.5 px gaps on
+  // screen), about 1.5 screen px, readable, and flow toward the bigger side.
   await expect(page.locator('[data-testid^="item-"].faded')).toHaveCount(0);
   const line = await lineStyle(link);
-  expect(line.dash).toBe('none');
-  expect(line.px).toBeGreaterThan(1.5);
-  expect(line.px).toBeLessThan(2.5);
+  expect(line.dash).toHaveLength(2);
+  expect(line.dash[0]).toBeGreaterThan(2.5);
+  expect(line.dash[0]).toBeLessThan(3.5);
+  expect(line.px).toBeGreaterThan(1.2);
+  expect(line.px).toBeLessThan(1.8);
   expect(line.opacity).toBeGreaterThan(0.7);
+  expect(line.flow).toEqual(['link-flow']);
+  expect(line.direction).toBe((await link.getAttribute('data-flow')) === 'a' ? 'reverse' : 'normal');
 
   // Tap a piece on the photo: it is emphasised, its connections drawn strongly, the pieces it
   // joins outlined, everything else faded and the photo around them darkened – the photo stays
@@ -182,12 +191,14 @@ test('result screen: select a piece to see its connections; hold the photo to se
   const active = page.locator('[data-testid="link"][data-active="true"]');
   expect(await active.count()).toBeGreaterThan(0);
   await expect(active.first()).toHaveClass(/\bactive\b/);
-  // Selected lines: solid, about 4 screen px, in the selection colour, fully opaque.
+  // Selected lines: dotted, about 3 screen px, in the selection colour, fully opaque, a flow of
+  // their own.
   const sel = await lineStyle(active.first());
-  expect(sel.dash).toBe('none');
-  expect(sel.px).toBeGreaterThan(3.5);
-  expect(sel.px).toBeLessThan(4.5);
+  expect(sel.dash).toHaveLength(2);
+  expect(sel.px).toBeGreaterThan(2.5);
+  expect(sel.px).toBeLessThan(3.5);
   expect(sel.stroke).toBe(SELECTION_COLOUR);
+  expect(sel.flow).toEqual(['link-flow-sel']);
   await expect.poll(async () => (await lineStyle(active.first())).opacity).toBe(1);
   // The joined piece: outline in the selection colour, a tint, its label fully visible.
   const joined = page.getByTestId(`item-${other}`);
@@ -203,7 +214,7 @@ test('result screen: select a piece to see its connections; hold the photo to se
   expect(await faded.count()).toBeGreaterThan(0);
   await expect.poll(() => faded.first().evaluate(opacity)).toBeLessThanOrEqual(0.25);
   await expect(page.locator('[data-testid^="label-"].faded').first()).toBeAttached();
-  const inactive = page.locator('[data-testid="link"]:not([data-active])');
+  const inactive = page.locator('[data-testid="link"]:not([data-level])');
   if (await inactive.count()) await expect(inactive.first()).toHaveClass(/\bfaded\b/);
   await expect(photo).toBeInViewport();
   await shot(page, info, '01b-selected');
@@ -337,6 +348,108 @@ test('result screen: full-screen photo – select inside, close, the selection s
   await expect(fs).toHaveCount(0);
 });
 
+/**
+ * Chain four loose pieces of the stored mock scan (a "neighbors" group of them whose cells don't
+ * touch links them one after the other) and reload. Returns the chain's item keys in order.
+ */
+async function addChain(page: Page): Promise<string[]> {
+  const linked = new Set((await page.getByTestId('link').evaluateAll((gs) => gs.flatMap((g) => [g.getAttribute('data-a'), g.getAttribute('data-b')]))) as string[]);
+  const loose = (await page.locator('[data-testid="scan-overlay"] [data-testid^="item-r"]').evaluateAll((gs) => gs.map((g) => g.getAttribute('data-testid')!.slice(5)))).filter((k) => !linked.has(k));
+  expect(loose.length, 'loose pieces in the mock scan').toBeGreaterThanOrEqual(4);
+  const chain = loose.slice(0, 4);
+  await page.evaluate(async (regionIds) => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const r = indexedDB.open('puzzle-solver');
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+    const done = (req: IDBRequest) => new Promise((resolve) => (req.onsuccess = () => resolve(req.result)));
+    const store = db.transaction('scans', 'readwrite').objectStore('scans');
+    const [scan] = (await done(store.getAll())) as { result: { groups?: { id: number }[] } }[];
+    const groups = scan.result.groups ?? [];
+    groups.push({ id: Math.max(0, ...groups.map((g) => g.id)) + 1, kind: 'neighbors', regionIds, cells: [], bounds: { row0: 0, col0: 0, row1: 0, col1: 0 }, x: 0, y: 0, confidence: 0.5 } as { id: number });
+    scan.result.groups = groups;
+    await done(store.put(scan));
+    db.close();
+  }, chain.map((k) => Number(k.slice(1))));
+  await page.reload();
+  await expect(page.getByTestId('scan-result')).toBeVisible();
+  // The chain: three links, one after the other (unless two of the cells happen to touch).
+  for (let i = 1; i < chain.length; i++) {
+    await expect(page.locator(`[data-testid="link"][data-a="${chain[i - 1]}"][data-b="${chain[i]}"]`)).toHaveCount(1);
+  }
+  return chain;
+}
+
+test('result screen: a selection lights up its connections of connections, and lines flow to the bigger side', async ({ page }, info) => {
+  await createPuzzleAndScan(page);
+  const [k0, k1, k2, k3] = await addChain(page);
+  const levelOf = (k: string) => page.getByTestId(`item-${k}`).getAttribute('data-level');
+
+  // The lines of the chain flow toward its anchor (all single pieces: the one with the most links,
+  // then the first in the order) – as the pure function says.
+  const order = await page.locator('[data-testid="scan-overlay"] [data-testid^="item-"]').evaluateAll((gs) => gs.map((g) => g.getAttribute('data-testid')!.slice(5)));
+  const chainLinks = [
+    { a: k0, b: k1 },
+    { a: k1, b: k2 },
+    { a: k2, b: k3 },
+  ];
+  const expected = flowDirections(
+    order.filter((k) => [k0, k1, k2, k3].includes(k)).map((key) => ({ key, pieceCount: 1 })),
+    chainLinks,
+  );
+  for (const l of chainLinks) {
+    await expect(page.locator(`[data-testid="link"][data-a="${l.a}"][data-b="${l.b}"]`)).toHaveAttribute('data-flow', expected.get(linkId(l))!);
+  }
+
+  // Select the chain's end: its neighbour at level 1 (cyan, ring), the next ones at levels 2 and 3
+  // – lighter, thinner, no ring, but clearly not faded – and the lines between them to match.
+  await page.getByTestId(`label-${k0}`).click();
+  await expect(page.getByTestId(`item-${k0}`)).toHaveClass(/\bselected\b/);
+  expect(await levelOf(k1)).toBe('1');
+  expect(await levelOf(k2)).toBe('2');
+  expect(await levelOf(k3)).toBe('3');
+  await expect(page.getByTestId(`item-${k1}`)).toHaveClass(/\blinked\b/);
+  for (const k of [k2, k3]) {
+    await expect(page.getByTestId(`item-${k}`)).toHaveClass(/\blinked2\b/);
+    await expect(page.getByTestId(`item-${k}`)).not.toHaveClass(/\bfaded\b/);
+    await expect.poll(() => page.getByTestId(`label-${k}`).evaluate((el) => Number(getComputedStyle(el).opacity))).toBe(1);
+    await expect(page.getByTestId(`ring-${k}`)).toHaveCount(0);
+  }
+  await expect(page.getByTestId(`ring-${k1}`)).toBeVisible();
+  const lv2 = page.locator(`[data-testid="link"][data-a="${k1}"][data-b="${k2}"]`);
+  await expect(lv2).toHaveAttribute('data-level', '2');
+  const l2 = await lineStyle(lv2);
+  expect(l2.stroke).toBe('rgb(166, 243, 255)');
+  expect(l2.px).toBeLessThan((await lineStyle(page.locator('[data-testid="link"][data-level="1"]').first())).px);
+  await expect(page.locator(`[data-testid="link"][data-a="${k2}"][data-b="${k3}"]`)).toHaveAttribute('data-level', '3');
+  // The bar names the direct connection and counts the rest.
+  await expect(page.getByTestId('selection-beyond')).toHaveText(/2 more beyond/);
+  await shot(page, info, '01f-chain-selected');
+
+  // The box picture (Both) and the full-screen view show the same reach.
+  await page.getByRole('radio', { name: 'Both' }).click();
+  await expect(page.getByTestId(`marker-${k2}`)).toHaveClass(/\blinked2\b/);
+  await expect(page.getByTestId(`marker-${k1}`)).toHaveClass(/\blinked\b/);
+  await page.getByTestId('open-fullscreen-photo').click();
+  const fs = page.getByTestId('fullscreen');
+  await expect(fs.getByTestId(`item-${k3}`)).toHaveAttribute('data-level', '3');
+  await fs.getByTestId('fullscreen-close').click();
+
+  // From the middle: both neighbours at level 1, the far end at level 2.
+  await page.getByTestId(`mention-${k1}`).click();
+  await expect(page.getByTestId(`item-${k1}`)).toHaveClass(/\bselected\b/);
+  expect(await levelOf(k0)).toBe('1');
+  expect(await levelOf(k2)).toBe('1');
+  expect(await levelOf(k3)).toBe('2');
+
+  // Reduced motion: still dotted, nothing moves.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const still = await lineStyle(page.locator('[data-testid="link"][data-level="1"]').first());
+  expect(still.dash).toHaveLength(2);
+  expect(still.flow).toEqual([]);
+});
+
 test('result screen: a one-finger drag on the images scrolls the page until zoomed in', async ({ page, browserName }, info) => {
   test.skip(browserName !== 'chromium' || !info.project.use.hasTouch, 'real touch input via CDP (Chromium with touch)');
   await createPuzzleAndScan(page);
@@ -403,7 +516,7 @@ test('guided placing: assembled grids first, Placed/Skip/Not here, finish card',
   await expect(pickup).toHaveAttribute('aria-pressed', 'false');
   await pickup.click();
   await expect(pickup).toHaveAttribute('aria-pressed', 'true');
-  await expect(pickup).toContainText(/Turned upright|Close-up/);
+  await expect(pickup).toContainText('Close-up');
   await pickup.click();
   await expect(pickup).toHaveAttribute('aria-pressed', 'false');
 
@@ -417,7 +530,8 @@ test('guided placing: assembled grids first, Placed/Skip/Not here, finish card',
   await expect(overview).toBeVisible();
   await expect(page.getByTestId('overview-marker')).toBeVisible();
   expect(await overview.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe('1px');
-  expect((await overview.boundingBox())!.width / view.width).toBeGreaterThan(0.3);
+  // At least 30 % of the view's short side (on a wide screen the view is wide and short).
+  expect((await overview.boundingBox())!.width / Math.min(view.width, view.height)).toBeGreaterThan(0.3);
   // It can be zoomed out to the whole picture and back to the spot.
   await page.getByRole('button', { name: 'Show whole picture' }).click();
   await page.getByTestId('zoom-to-start').click();
@@ -464,4 +578,109 @@ test('guided placing: assembled grids first, Placed/Skip/Not here, finish card',
   await page.getByText('Latest scan').click();
   await expect(page.getByTestId('scan-result')).toBeVisible();
   await expect(page.getByText('All placed')).toBeVisible();
+});
+
+/** A turn in plain words (never bare degrees), then where it goes. */
+const TURN_WORDS = /^(Already the right way up|Turn it (a little|half a quarter|a quarter|nearly halfway round) to the (right|left)|Turn it upside down) · /;
+/** The exact angle, only in the small print. */
+const EXACT = /^(\d{1,3}° (clockwise|counter-clockwise)|180°)$/;
+
+/** Skip through the placing steps until one whose turn guide is in `mode`; false at the end. */
+async function stepToTurn(page: Page, mode: 'animate' | 'frames' | 'upright'): Promise<boolean> {
+  for (let i = 0; i < 60; i++) {
+    if (await page.getByTestId('placing-done').isVisible()) return false;
+    const guide = page.getByTestId('turn-guide');
+    if ((await guide.count()) > 0 && (await guide.getAttribute('data-mode')) === mode) return true;
+    await act(page, 'skip');
+  }
+  return false;
+}
+
+test('guided placing: the piece turns upright on screen, a "top" bar, plain words', async ({ page }, info) => {
+  await createPuzzleAndScan(page);
+  await page.getByTestId('start-placing').click();
+  await expect(page.getByTestId('placing')).toBeVisible();
+  expect(await stepToTurn(page, 'animate'), 'a step with a piece to turn').toBe(true);
+
+  // The pick-up view shows the piece as it lies, with a "top" bar on the edge that goes on top.
+  const pickup = page.getByTestId('pickup');
+  await expect(pickup.getByTestId('top-bar').locator('.top-bar')).toHaveCount(1);
+  await expect(pickup.locator('.top-label')).toHaveText('top');
+  await expect(pickup).toHaveAttribute('aria-label', /"top" goes on top/);
+
+  const line = (await page.getByTestId('instruction').textContent())!;
+  expect(line).toMatch(TURN_WORDS);
+  expect(line).not.toMatch(/°/);
+  const exact = page.getByTestId('instruction-exact');
+  await expect(exact).toHaveText(EXACT);
+  const exactText = (await exact.textContent())!;
+
+  // The cut-out piece (one pre-drawn image, with its "top" bar) turns with a CSS animation – three
+  // loops – the short way, as the words say; the arc arrow grows with it.
+  const guide = page.getByTestId('turn-guide');
+  await expect(guide.locator('img')).toHaveAttribute('src', /^blob:/);
+  await expect(guide.locator('.turn-top .top-bar')).toHaveCount(1);
+  await expect(guide.locator('.turn-arc-grow')).toHaveCount(1);
+  await expect(guide.locator('.turn-arc-head')).toHaveCount(1);
+  expect(await guide.getAttribute('aria-label')).toContain(line.split(' · ')[0]);
+  const turn = await guide.evaluate((el) => parseFloat((el as HTMLElement).style.getPropertyValue('--turn')));
+  expect(Math.round(Math.abs(turn))).toBe(Number(exactText.match(/\d+/)![0]));
+  if (/counter/.test(exactText)) expect(turn).toBeLessThan(0);
+  else expect(turn).toBeGreaterThan(0);
+  if (/to the right/.test(line)) expect(turn).toBeGreaterThan(0);
+  if (/to the left/.test(line)) expect(turn).toBeLessThan(0);
+  const spin = () =>
+    guide.evaluate((el) => {
+      const a = el.querySelector('.turn-spin')!.getAnimations()[0] as CSSAnimation | undefined;
+      return a ? { name: a.animationName, iterations: a.effect?.getTiming().iterations, state: a.playState, t: Number(a.currentTime) } : undefined;
+    });
+  expect(await spin()).toMatchObject({ name: 'piece-turn', iterations: 3, state: 'running' });
+  await shot(page, info, '06-turn-animated');
+
+  // A tap replays it from the start.
+  await page.waitForTimeout(900);
+  const before = (await spin())!.t;
+  await guide.click();
+  const after = await spin();
+  expect(after?.state).toBe('running');
+  expect(after!.t).toBeLessThan(before);
+
+  // Already upright (when the scan has such a piece): no animation, a "right way up" mark.
+  if (await stepToTurn(page, 'upright')) {
+    await expect(page.getByTestId('instruction')).toHaveText(/^Already the right way up · /);
+    await expect(guide.locator('.turn-ok')).toHaveText('✓ right way up');
+    expect(await guide.evaluate((el) => el.getAnimations({ subtree: true }).length)).toBe(0);
+  }
+});
+
+test('guided placing with reduced motion: "now → then" side by side, nothing moves', async ({ page }, info) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await createPuzzleAndScan(page);
+  await page.getByTestId('start-placing').click();
+  await expect(page.getByTestId('placing')).toBeVisible();
+
+  let frames = 0;
+  for (let i = 0; i < 60 && !(await page.getByTestId('placing-done').isVisible()); i++) {
+    const guide = page.getByTestId('turn-guide');
+    const line = (await page.getByTestId('instruction').textContent())!;
+    if ((await guide.count()) > 0) {
+      expect(line).toMatch(TURN_WORDS);
+      const mode = await guide.getAttribute('data-mode');
+      expect(mode).not.toBe('animate');
+      if (mode === 'frames') {
+        await expect(guide.locator('.turn-frame-cap')).toHaveText(['Now', 'Then']);
+        await expect(guide.locator('.turn-frame img')).toHaveCount(2);
+        await expect(guide.locator('.turn-arc-icon')).toBeVisible();
+        expect(await guide.evaluate((el) => el.getAnimations({ subtree: true }).length)).toBe(0);
+        if (frames++ === 0) await shot(page, info, '07-turn-reduced-motion');
+      } else {
+        await expect(guide.locator('.turn-ok')).toBeVisible();
+      }
+    } else {
+      // Unknown turn (a group whose pieces disagree): just where it goes.
+      expect(line).not.toMatch(/^(Turn|Already)/);
+    }
+    await act(page, 'skip');
+  }
+  expect(frames).toBeGreaterThan(0);
 });

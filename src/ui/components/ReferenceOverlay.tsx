@@ -2,6 +2,7 @@
 import type { Rect } from '../../cv/image';
 import type { CellRef, GridSpec } from '../../model/types';
 import type { CellBounds } from '../lib/items';
+import { flowDirections, linkId, linkLevel, SELECTION_REACH, selectionLevels } from '../lib/linkGraph';
 import { cellRect, gridPath, markerRadius, trimmedSegment } from '../lib/overlay';
 import type { ItemTone } from './ScanOverlay';
 
@@ -14,6 +15,8 @@ export interface RefMarker {
   /** Cells of an assembled grid – outlined as one block. */
   bounds?: CellBounds;
   cells?: CellRef[];
+  /** Pieces in the item (an assembled grid > 1): the lines flow toward the biggest. */
+  pieces?: number;
 }
 
 export function ReferenceOverlay({
@@ -24,7 +27,9 @@ export function ReferenceOverlay({
   placed = [],
   markers = [],
   links = [],
+  showConnections = true,
   selectedKey,
+  levels,
   coverage = [],
   highlight,
   scale,
@@ -38,7 +43,11 @@ export function ReferenceOverlay({
   markers?: RefMarker[];
   /** Pairs of marker keys to connect (pieces that go next to each other). */
   links?: { a: string; b: string }[];
+  /** Draw all links (off: only those of the selection). */
+  showConnections?: boolean;
   selectedKey?: string;
+  /** The selection's reach by level (selectionLevels); default: the selection and its links. */
+  levels?: Map<string, number>;
   coverage?: { rect: Rect; ok: boolean; label?: string }[];
   /** Cells to highlight (the selected item's target). */
   highlight?: CellRef[];
@@ -48,9 +57,18 @@ export function ReferenceOverlay({
 }) {
   const r = grid ? Math.max(markerRadius(grid, width, height), 11 / scale) : 12 / scale;
   const byKey = new Map(markers.map((m) => [m.key, m]));
-  // With a selection, its links and the markers it joins stay, everything else fades.
+  // With a selection, its links and the markers it reaches stay, everything else fades.
   const selected = selectedKey && byKey.has(selectedKey) ? selectedKey : undefined;
-  const linked = new Set(selected ? links.flatMap((l) => (l.a === selected ? [l.b] : l.b === selected ? [l.a] : [])) : []);
+  const reach = levels ?? (selected ? selectionLevels(selected, links, markers.length, { ...SELECTION_REACH, maxDepth: 1 }) : new Map<string, number>());
+  const role = (key: string) => {
+    const lv = reach.get(key);
+    return lv === 0 ? ' selected' : lv === 1 ? ' linked' : lv !== undefined ? ' linked2' : selected ? ' faded' : '';
+  };
+  // The lines flow toward the biggest item of their cluster, as on the photo.
+  const flow = flowDirections(
+    markers.map((m) => ({ key: m.key, pieceCount: m.pieces ?? 1 })),
+    links,
+  );
   const block = (b: CellBounds) => {
     const a = cellRect({ row: b.row0, col: b.col0 }, grid!, width, height);
     const z = cellRect({ row: b.row1, col: b.col1 }, grid!, width, height);
@@ -90,9 +108,11 @@ export function ReferenceOverlay({
         const b = byKey.get(l.b);
         const seg = a && b ? trimmedSegment(a, b, r) : null;
         if (!seg) return null;
-        const active = !!selected && (l.a === selected || l.b === selected);
+        const lv = selected ? linkLevel(reach, l) : undefined;
+        if (lv === undefined && !showConnections) return null;
+        const cls = ['link', lv === undefined ? selected && 'faded' : `level-${lv}`, lv === 1 && 'active', flow.get(linkId(l)) === 'a' && 'rev'].filter(Boolean).join(' ');
         return (
-          <g key={`${l.a}-${l.b}`} className={`link${active ? ' active' : selected ? ' faded' : ''}`}>
+          <g key={linkId(l)} className={cls}>
             <line className="link-under" x1={seg.from.x} y1={seg.from.y} x2={seg.to.x} y2={seg.to.y} vectorEffect="non-scaling-stroke" />
             <line className="link-line" x1={seg.from.x} y1={seg.from.y} x2={seg.to.x} y2={seg.to.y} vectorEffect="non-scaling-stroke" />
           </g>
@@ -101,7 +121,7 @@ export function ReferenceOverlay({
       {markers.map((m) => (
         <g
           key={m.key}
-          className={`marker st-${m.tone}${selected === m.key ? ' selected' : linked.has(m.key) ? ' linked' : selected ? ' faded' : ''}`}
+          className={`marker st-${m.tone}${role(m.key)}`}
           onClick={onMarker ? () => onMarker(m.key) : undefined}
           role={onMarker ? 'button' : undefined}
           aria-label={onMarker ? `Where ${m.label} goes` : undefined}

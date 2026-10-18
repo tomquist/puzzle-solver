@@ -88,12 +88,26 @@ export function ZoomPanView({
   const clampRef = useRef(clamp);
   clampRef.current = clamp;
 
+  // While the view moves (and briefly after), `data-moving` is set on the viewport: overlays pause
+  // their animations (the flowing connection lines) so a pan or pinch only moves pixels. Set on
+  // the element directly – no re-render per gesture frame.
+  const movingTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(movingTimer.current), []);
+  const markMoving = useCallback(() => {
+    const el = viewport.current;
+    if (!el) return;
+    el.dataset.moving = '';
+    window.clearTimeout(movingTimer.current);
+    movingTimer.current = window.setTimeout(() => delete el.dataset.moving, 200);
+  }, []);
+
   const apply = useCallback((next: ViewTransform) => {
     interacted.current = true;
+    markMoving();
     const fitScale = lastFit.current?.scale ?? 0;
     // At (or below) the fit scale the content simply stays fitted and centered.
     setT(next.scale <= fitScale * 1.001 && lastFit.current ? lastFit.current : clampRef.current(next));
-  }, []);
+  }, [markMoving]);
 
   // Fit (or show the start rectangle) on first layout; on resize keep the zoom only if the user
   // had zoomed in.

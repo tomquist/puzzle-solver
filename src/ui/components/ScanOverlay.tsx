@@ -1,21 +1,25 @@
 /**
  * SVG overlay on an analysed photo, drawn so the pieces themselves stay visible: thin outlines
  * without fill, a small number label just outside each outline (its tail points at its piece), an
- * optional small tick outside the outline on the side that is "up" in the puzzle, and thin
- * connection lines between pieces that end up next to each other. Only items with a usable match
- * are drawn (no-match regions are hidden entirely).
+ * optional short pink "top" bar on the edge that must end up on top in the puzzle, and thin
+ * dotted connection lines between pieces that end up next to each other, flowing slowly toward
+ * the biggest unit of their cluster (flowDirections). Only items with a usable match are drawn
+ * (no-match regions are hidden entirely).
  *
  * Selecting an item (tap it or its label) emphasises it, draws its connection lines strongly,
- * rings the items it joins and fades everything else; tapping it again or the empty photo clears
- * the selection. `peek` hides everything (to see the clean photo); with labels off only the
+ * rings the items it joins, shows their connections in turn more lightly (levels 2–3, capped –
+ * selectionLevels) and fades everything else; tapping it again or the empty photo clears the
+ * selection. `peek` hides everything (to see the clean photo); with labels off only the
  * selection is drawn.
  */
-import { useEffect, useId, useMemo, useRef, type MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, type MouseEvent } from 'react';
 import type { Point } from '../../cv/geometry';
 import type { Rect } from '../../cv/image';
 import type { DetectedRegion, ScanResult } from '../../model/types';
-import { itemTitle, linkedTo, type ItemLink, type ItemPlacement, type ScanItem } from '../lib/items';
-import { labelCenter, labelTail, labelWidth, outwardTick, placeLabels, supportDistance } from '../lib/labels';
+import { itemTitle, type ItemLink, type ItemPlacement, type ScanItem } from '../lib/items';
+import { topBarFor, type TopBar } from '../lib/framing';
+import { labelCenter, labelTail, labelWidth, placeLabels } from '../lib/labels';
+import { flowDirections, linkId, linkLevel, selectionLevels } from '../lib/linkGraph';
 import { connectionCurve, groupCellCenter, groupCellSize, polygonPath, regionSize, sideVector, type CurveEnd } from '../lib/overlay';
 import { upVector } from '../lib/rotation';
 
@@ -105,8 +109,8 @@ export function ScanOverlay({
     // The items' geometry only changes with the set of items (itemsKey), not with their state.
   }, [itemsKey, byId]);
 
-  // "Up" of each item as it lies (for the turn tick), and the label sides, chosen at the fitted
-  // zoom and away from the tick.
+  // "Up" of each item as it lies (for the "top" bar), and the label sides, chosen at the fitted
+  // zoom and away from that bar.
   const upOf = (o: OverlayItem) => (showTurnHints && o.placement?.rotationDeg !== undefined ? upVector(o.placement.rotationDeg) : undefined);
   const upKey = items
     .map((o) => {
@@ -128,19 +132,50 @@ export function ScanOverlay({
         { width, height },
         LABEL_GAP / placeScale,
       ),
-    // Recomputed when the items, the zoom to place for or the turn ticks change.
+    // Recomputed when the items, the zoom to place for or the top bars change.
     [geo, placeScale, width, height, upKey],
   );
+  // The "top" bar of each item (the edge that must end up on top), as in the pick-up view.
+  const topBars = useMemo(() => {
+    const m = new Map<string, TopBar>();
+    for (const o of items) {
+      const rot = o.placement?.rotationDeg;
+      if (showTurnHints && rot !== undefined) m.set(o.item.key, topBarFor(o.item, result.regions, rot, 0.45));
+    }
+    return m;
+    // Same inputs as the label sides.
+  }, [itemsKey, upKey, result.regions]);
+  // Which way each line flows: toward the biggest unit of its cluster.
+  const linksKey = links.map(linkId).join(',');
+  const flow = useMemo(
+    () => flowDirections(items.map((o) => ({ key: o.item.key, pieceCount: o.item.pieceCount })), links),
+    // The graph only changes with the items and the links.
+    [itemsKey, linksKey],
+  );
 
-  // Selection.
+  // Selection: the selected item (level 0), the items it joins (1) and theirs (2–3, capped).
   const selected = selectedKey && overlayByKey.has(selectedKey) ? selectedKey : undefined;
-  const linked = new Set(selected ? linkedTo(selected, links) : []);
-  const role = (key: string) => (key === selected ? 'selected' : linked.has(key) ? 'linked' : selected ? 'faded' : '');
-  const marked = (key: string) => key === selected || linked.has(key);
-  const isActive = (l: ItemLink) => !!selected && (l.a === selected || l.b === selected);
-  const shownLinks = links.filter((l) => isActive(l) || (showConnections && showLabels));
+  const levels = useMemo(
+    () => (selected ? selectionLevels(selected, links, items.length) : new Map<string, number>()),
+    // The levels only change with the selection and the graph.
+    [selected, linksKey, items.length],
+  );
+  const role = (key: string) => {
+    const lv = levels.get(key);
+    return lv === 0 ? 'selected' : lv === 1 ? 'linked' : lv !== undefined ? 'linked2' : selected ? 'faded' : '';
+  };
+  const marked = (key: string) => levels.has(key);
+  const lineLevel = (l: ItemLink) => (selected ? linkLevel(levels, l) : undefined);
+  const shownLinks = links.filter((l) => lineLevel(l) !== undefined || (showConnections && showLabels));
 
-  const maskId = `sel-mask-${useId().replace(/:/g, '')}`;
+  // The scrim: the whole photo minus the highlighted items' outlines (one even-odd path – much
+  // cheaper to repaint under the flowing lines than a mask).
+  const scrim = useMemo(() => {
+    if (!selected) return '';
+    const holes = [...levels.keys()].flatMap((key) => (overlayByKey.get(key)?.item.regionIds ?? []).flatMap((id) => (byId.get(id) ? [polygonPath(byId.get(id)!.contour)] : [])));
+    return [`M0 0H${width}V${height}H0Z`, ...holes].join(' ');
+    // overlayByKey follows from the items (itemsKey).
+  }, [selected, levels, itemsKey, byId, width, height]);
   const pending = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(pending.current), []);
   const cancelPending = () => window.clearTimeout(pending.current);
@@ -184,29 +219,14 @@ export function ScanOverlay({
         }}
       />
 
-      {/* With a selection, the photo darkens except for the selected item and the items it joins. */}
-      {selected && (
-        <>
-          <mask id={maskId} maskUnits="userSpaceOnUse" x={0} y={0} width={width} height={height}>
-            <rect x={0} y={0} width={width} height={height} fill="#fff" />
-            {[selected, ...linked].flatMap((key) =>
-              (overlayByKey.get(key)?.item.regionIds ?? []).map((id) => {
-                const reg = byId.get(id);
-                return reg ? <path key={`${key}-${id}`} d={polygonPath(reg.contour)} fill="#000" stroke="#000" strokeWidth={8 / scale} strokeLinejoin="round" /> : null;
-              }),
-            )}
-          </mask>
-          <rect className="selection-scrim" x={0} y={0} width={width} height={height} mask={`url(#${maskId})`} data-testid="selection-scrim" />
-        </>
-      )}
+      {/* With a selection, the photo darkens except for the selected item and its connections. */}
+      {selected && <path className="selection-scrim" d={scrim} fillRule="evenodd" data-testid="selection-scrim" />}
 
-      {/* Outlines, turn ticks and touch targets */}
+      {/* Outlines, "top" bars and touch targets */}
       {items.map((o) => {
         const { item, placed } = o;
         const tone = itemTone(item);
-        const up = !placed ? upOf(o) : undefined;
-        const outline = geo.get(item.key)?.outline ?? [];
-        const tick = up ? outwardTick(item.center, supportDistance(item.center, outline, up), up, 2 / scale, 6 / scale, 4.5 / scale) : undefined;
+        const bar = !placed ? topBars.get(item.key) : undefined;
         const lit = item.regionIds.some((id) => highlight.has(id));
         const sel = role(item.key);
         const cls = [
@@ -230,6 +250,7 @@ export function ScanOverlay({
             aria-label={itemTitle(item)}
             aria-pressed={item.key === selected}
             data-testid={`item-${item.key}`}
+            data-level={levels.get(item.key)}
             onClick={(e) => tap(item.key, e)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
@@ -252,7 +273,12 @@ export function ScanOverlay({
                 </g>
               );
             })}
-            {tick && <polygon className="turn-tick" points={tick.map((p) => `${p.x},${p.y}`).join(' ')} />}
+            {bar && (
+              <g className="top-mark" data-testid={`top-${item.key}`}>
+                <line className="top-bar-under" x1={bar.from.x} y1={bar.from.y} x2={bar.to.x} y2={bar.to.y} />
+                <line className="top-bar" x1={bar.from.x} y1={bar.from.y} x2={bar.to.x} y2={bar.to.y} />
+              </g>
+            )}
           </g>
         );
       })}
@@ -269,8 +295,9 @@ export function ScanOverlay({
         />
       )}
 
-      {/* Connections between pieces that end up next to each other: curves from the joining edge
-          of one piece to the matching edge of the other. */}
+      {/* Connections between pieces that end up next to each other: dotted curves from the joining
+          edge of one piece to the matching edge of the other, flowing toward the cluster's biggest
+          unit (drawn from a to b; "rev" flows back). */}
       {shownLinks.map((l) => {
         const end = (key: string, side: ItemLink['sideA'], cell: ItemLink['cellA']): CurveEnd | undefined => {
           const o = overlayByKey.get(key);
@@ -294,27 +321,32 @@ export function ScanOverlay({
         const b = end(l.b, l.sideB, l.cellB);
         const curve = a && b ? connectionCurve(a, b) : null;
         if (!curve) return null;
-        const active = isActive(l);
+        const lv = lineLevel(l);
+        const toward = flow.get(linkId(l));
+        const cls = ['link', lv === undefined ? selected && 'faded' : `level-${lv}`, lv === 1 && 'active', toward === 'a' && 'rev'].filter(Boolean).join(' ');
+        const endR = (lv === 1 ? 3.5 : lv !== undefined ? 3 : 2.5) / scale;
         return (
           <g
-            key={`${l.a}-${l.b}`}
-            className={`link${active ? ' active' : selected ? ' faded' : ''}`}
+            key={linkId(l)}
+            className={cls}
             data-testid="link"
             data-a={l.a}
             data-b={l.b}
-            data-active={active ? 'true' : undefined}
+            data-active={lv === 1 ? 'true' : undefined}
+            data-level={lv}
+            data-flow={toward}
           >
             <path className="link-under" d={curve.d} vectorEffect="non-scaling-stroke" />
             <path className="link-line" d={curve.d} vectorEffect="non-scaling-stroke" />
-            <circle className="link-end" cx={curve.from.x} cy={curve.from.y} r={(active ? 4.5 : 3) / scale} />
-            <circle className="link-end" cx={curve.to.x} cy={curve.to.y} r={(active ? 4.5 : 3) / scale} />
+            <circle className="link-end" cx={curve.from.x} cy={curve.from.y} r={endR} />
+            <circle className="link-end" cx={curve.to.x} cy={curve.to.y} r={endR} />
           </g>
         );
       })}
 
-      {/* Rings around the selected item and the items it joins. */}
+      {/* Rings around the selected item and the items it joins (not around their connections). */}
       {selected &&
-        [selected, ...linked].map((key) => {
+        [...levels].flatMap(([key, lv]) => (lv <= 1 ? [key] : [])).map((key) => {
           const o = overlayByKey.get(key);
           if (!o) return null;
           const r = Math.max((geo.get(key)?.ring ?? 0) + 5 / scale, 14 / scale);

@@ -5,7 +5,7 @@
 export interface ViewOptions {
   /** Numbers and outlines on the photo (off: only the selected piece is marked). */
   labels: boolean;
-  /** Small tick outside each piece on its "up" side. */
+  /** A short "top" bar on the edge of each piece that goes on top. */
   turnHints: boolean;
   /** Thin lines between pieces that end up next to each other. */
   connections: boolean;

@@ -10,7 +10,8 @@ import { cropAround } from '../lib/overlay';
 import { borderText, localToPuzzleTurns, pieceKindLabel, STATUS_LABEL } from '../lib/pieces';
 import { CropCanvas } from './CropCanvas';
 import { IconCheck, IconChevron, IconClose } from './Icons';
-import { ConfidenceBar, PickupView, TargetContext, TurnInstruction, type ReferenceImage } from './ItemVisuals';
+import { ConfidenceBar, PickupView, TargetContext, type ReferenceImage } from './ItemVisuals';
+import { TurnGuide } from './TurnGuide';
 import { PieceIcon } from './PieceIcon';
 import { IssueList } from './Quality';
 import { itemTone } from './ScanOverlay';
@@ -114,10 +115,16 @@ export function ItemDetail(props: ItemDetailProps) {
               → {cellsText(current)}
             </div>
           )}
-          {current && <TurnInstruction rotationDeg={current.rotationDeg} />}
           {border && <div className="small">{border}</div>}
         </div>
       </div>
+
+      {current?.rotationDeg !== undefined && (
+        <section className="pd-section" data-testid="detail-turn">
+          <h3>How to turn it</h3>
+          <TurnGuide key={`${item.key}-${candidateIndex}`} item={item} regions={result.regions} photo={photo} rotationDeg={current.rotationDeg} layout="row" />
+        </section>
+      )}
 
       {connections.length > 0 && (
         <section className="pd-section" data-testid="detail-connections">

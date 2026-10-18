@@ -3,10 +3,13 @@
  * it on the table, an upright close-up of it, the box picture around its target with a few cells
  * of context, the target outline, and the location marker on the overview of the whole picture.
  */
+import type { Point } from '../../cv/geometry';
 import type { Rect } from '../../cv/image';
 import type { CellRef, DetectedRegion, GridSpec } from '../../model/types';
 import type { CellBounds, ScanItem } from './items';
+import { supportDistance } from './labels';
 import { cellSize, groupCellSize, regionSize } from './overlay';
+import { topEdgeBar, upVector } from './rotation';
 
 /** Start of a span of `size` within [0, total] centred on `center` (centred on the whole when it doesn't fit). */
 function spanStart(center: number, size: number, total: number): number {
@@ -37,6 +40,47 @@ export function pickupRect(bbox: Rect, pieceSize: number, photoWidth: number, ph
   // Prefer no letterbox: at most the photo's short side, but never cut the item.
   side = Math.max(extent * 1.05, Math.min(side, Math.min(photoWidth, photoHeight)));
   return shiftInside({ x: bbox.x + bbox.width / 2 - side / 2, y: bbox.y + bbox.height / 2 - side / 2, width: side, height: side }, photoWidth, photoHeight);
+}
+
+/**
+ * The "top" bar of an item as it lies in the photo: across the edge that must end up on top
+ * (upVector), on a piece's body edge (knobs left out) or at a group's outline; `edge` is where the
+ * outline ends in that direction (for the word "top" just outside) and `up` the direction.
+ * `length` is the bar's length relative to the piece size.
+ */
+export interface TopBar {
+  from: Point;
+  to: Point;
+  edge: Point;
+  up: Point;
+}
+
+export function topBarFor(item: ScanItem, regions: DetectedRegion[], rotationDeg: number, length = 0.6): TopBar {
+  const members = regions.filter((r) => item.regionIds.includes(r.id));
+  const outline = members.flatMap((m) => m.contour);
+  const up = upVector(rotationDeg);
+  const single = item.kind === 'piece' && members.length === 1 ? members[0] : undefined;
+  const c = single?.shape?.center ?? item.center;
+  const size = itemPieceSize(item, regions);
+  const extent = outline.length ? supportDistance(c, outline, up) : Math.max(item.bbox.width, item.bbox.height) / 2;
+  const reach = single?.shape ? Math.min(single.shape.bodySize / 2, extent) : extent * 0.92;
+  const bar = topEdgeBar(c, rotationDeg, reach, (size * length) / 2);
+  return { from: bar.from, to: bar.to, edge: { x: c.x + up.x * extent, y: c.y + up.y * extent }, up };
+}
+
+/**
+ * Where the word "top" goes in a view of `rect` (% of the view) and the direction the CSS moves it
+ * by its own size (.top-label): just outside the outline in the "up" direction – or, when the view
+ * has no room there (it would reach the border; the pill needs about 24 % across and 14 % up/down
+ * in a 175 px view), just inside the bar, over the piece.
+ */
+export function topLabelSpot(bar: TopBar, rect: Rect): { x: number; y: number; dir: Point } {
+  const pct = (p: Point) => ({ x: ((p.x - rect.x) / rect.width) * 100, y: ((p.y - rect.y) / rect.height) * 100 });
+  const out = pct(bar.edge);
+  const far = { x: out.x + bar.up.x * 24, y: out.y + bar.up.y * 14 };
+  if (far.x >= 2 && far.x <= 98 && far.y >= 2 && far.y <= 98) return { ...out, dir: bar.up };
+  const mid = pct({ x: (bar.from.x + bar.to.x) / 2, y: (bar.from.y + bar.to.y) / 2 });
+  return { ...mid, dir: { x: -bar.up.x || 0, y: -bar.up.y || 0 } };
 }
 
 /** Square around an item that holds it at any rotation (for the upright close-up). */

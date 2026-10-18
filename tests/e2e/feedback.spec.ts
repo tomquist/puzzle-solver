@@ -138,6 +138,19 @@ test('scan feedback: marks of every kind, comment, file with photos and marks', 
   expect(new Set(regions.map((r) => r.tone))).toEqual(new Set(['confident', 'ambiguous', 'patch', 'hidden']));
   const fillOf = (sel: string) => page.locator(sel).first().evaluate((el) => getComputedStyle(el).fill);
   expect(await fillOf('.fb-region.st-confident .fb-fill')).toBe('rgb(34, 197, 94)');
+  // Outlines are drawn in screen px at any zoom (not hairlines on a large photo shown small).
+  const drawnWidth = (sel: string) =>
+    page
+      .locator(sel)
+      .first()
+      .evaluate((el) => {
+        const svg = (el as SVGGraphicsElement).ownerSVGElement!;
+        return parseFloat(getComputedStyle(el).strokeWidth) * (svg.getBoundingClientRect().width / svg.viewBox.baseVal.width);
+      });
+  const outline = await drawnWidth('.fb-region .fb-line');
+  expect(outline).toBeGreaterThan(2);
+  expect(outline).toBeLessThan(2.6);
+  expect(await drawnWidth('.fb-under')).toBeGreaterThan(3.6);
   expect(await fillOf('.fb-region.st-ambiguous .fb-fill')).toBe('rgb(245, 158, 11)');
   expect(await fillOf('.fb-region.is-hidden .fb-fill')).toMatch(/^url\(/);
 
