@@ -261,6 +261,9 @@ export function replayFeedback(bundle: FeedbackBundle, name: string, opts: Repla
     return parts.join(', ');
   };
 
+  // Old regions the user marked as not a whole piece (wrong outline, no piece): a current region that
+  // takes them in has not merged two pieces.
+  const notWhole = new Set(bundle.marks.flatMap((m) => (m.kind === 'bad_outline' || m.kind === 'not_a_piece' ? [m.regionId] : [])));
   bundle.marks.forEach((given, k) => {
     const index = k + 1;
     // A reviewed kind correction (the user picked the wrong kind for a real problem).
@@ -278,12 +281,15 @@ export function replayFeedback(bundle: FeedbackBundle, name: string, opts: Repla
       const hit = tap?.r;
       if (hit && isPiece(hit)) {
         // Inside a region, but is it a region of its own? Not when it also swallowed a piece the
-        // app had found separately.
-        const swallowed = overlaps(hit, origR).filter((o) => o.ofB > 0.5 && !containsPoint(o.r, at) && isPiece(o.r));
+        // app had found separately (old regions the user marked as fragments or as no piece don't
+        // count), or another piece the user marked as missed.
+        const swallowed = overlaps(hit, origR).filter((o) => o.ofB > 0.5 && !containsPoint(o.r, at) && isPiece(o.r) && !notWhole.has(o.r.id));
+        const otherTaps = bundle.marks.filter((m, j) => j !== k && m.kind === 'missed' && containsPoint(hit, { x: m.x * s, y: m.y * s })).length;
         const nowText = describeRegion(hit.region, curMatch.get(hit.id)) + tapText(tap);
         const ratio = regionDiag.get(hit.id)?.areaRatio ?? 1;
-        if (swallowed.length > 0) {
-          out.marks.push({ index, mark, at, original, now: `${nowText}, merged with old #${swallowed.map((o) => o.r.id).join(',#')}`, fixed: false, verdict: 'MERGED', why: diagText(hit.id), currentIds: [hit.id] });
+        if (swallowed.length > 0 || otherTaps > 0) {
+          const withText = [...swallowed.map((o) => `old #${o.r.id}`), ...(otherTaps ? [`${otherTaps} more missed piece${otherTaps > 1 ? 's' : ''}`] : [])].join(', ');
+          out.marks.push({ index, mark, at, original, now: `${nowText}, merged with ${withText}`, fixed: false, verdict: 'MERGED', why: diagText(hit.id), currentIds: [hit.id] });
         } else if (hit.region.kind !== 'piece' || ratio > 1.6) {
           // A piece the user had to mark is not found when it only sits inside a larger region.
           out.marks.push({ index, mark, at, original, now: `inside ${nowText}`, fixed: false, verdict: 'IN LARGER REGION', why: diagText(hit.id), currentIds: [hit.id] });

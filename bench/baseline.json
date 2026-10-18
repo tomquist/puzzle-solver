@@ -593,6 +593,11 @@
         "mergedSplit": 0.7,
         "mergedExact": 0.5
       },
+      "2026-10-18-floor-tiles-48-correct-1500pc.json": {
+        "objectRecall": 1,
+        "objectClean": 1,
+        "objectPrecision": 1
+      },
       "2026-10-18-glare-wood-five-pieces-1500pc.json": {
         "falseRemoved": 1,
         "objectRecall": 1,
@@ -600,7 +605,7 @@
         "objectPrecision": 1
       },
       "2026-10-18-pale-pieces-light-table-1500pc.json": {
-        "missedFound": 0.3,
+        "missedFound": 0.8,
         "objectRecall": 0.917,
         "objectClean": 0.917,
         "objectPrecision": 0.923
