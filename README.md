@@ -21,10 +21,12 @@ puzzles are stored in the browser (IndexedDB).
    and take one photo from directly above. Already assembled patches can be in the photo too.
 5. **Read the result.** Every piece gets a thin outline and a small number next to it (so the piece
    itself stays visible): green = confident, amber = unsure, blue = assembled grid; a short pink
-   bar marks the edge that goes on top, and lines connect pieces that go together. Tap a piece to select
-   it: its connection lines turn thick and bright, the pieces it joins are outlined, the rest of the
-   photo darkens, and a bar at the bottom says where it goes and what it joins ("Joins #9 on its
-   right side, #14 below" – tap a number to jump there); *Details* compares it with the box picture
+   bar marks the edge that goes on top, and dotted lines connect pieces that go together – they
+   flow for a while toward the biggest piece group of each cluster. Tap a piece to select it: its
+   connection lines turn bright cyan, the pieces it joins are outlined, the pieces those join (two
+   more steps, a few at most) more lightly, the rest of the photo darkens, and a bar at the bottom
+   says where it goes and what it joins ("Joins #9 on its right side, #14 below · 3 more beyond" –
+   tap a number to jump there); *Details* compares it with the box picture
    and marks it as placed. Press and hold the photo to see it without any labels. The corner button
    opens the photo (or the box picture) in full screen; pinch to zoom, one finger pans. On the page,
    a one-finger drag on a picture scrolls the page until you zoom in.

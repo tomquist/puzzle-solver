@@ -44,6 +44,7 @@ import {
   type ItemPlacement,
   type ScanItem,
 } from '../../lib/items';
+import { selectionLevels } from '../../lib/linkGraph';
 import { paddedBox, unionRect } from '../../lib/overlay';
 import { confidencePercent } from '../../lib/pieces';
 import { placeCells, unplaceCells } from '../../lib/progress';
@@ -126,13 +127,16 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
       visible.flatMap((item) => {
         const p = placementOf(item);
         if (!p) return [];
-        return [{ key: item.key, label: item.label, x: p.x, y: p.y, tone: itemTone(item), bounds: item.kind === 'assembled' ? p.bounds : undefined }];
+        return [{ key: item.key, label: item.label, x: p.x, y: p.y, tone: itemTone(item), bounds: item.kind === 'assembled' ? p.bounds : undefined, pieces: item.pieceCount }];
       }),
     [visible, placementOf],
   );
 
   // A selection that is no longer shown (view options changed) is dropped.
   const selected = selectedKey && visible.some((i) => i.key === selectedKey) ? byKey.get(selectedKey) : undefined;
+  // How far its highlight reaches (the same levels as on the photo: ScanOverlay).
+  const levels = useMemo(() => (selected ? selectionLevels(selected.key, links, visible.length) : undefined), [selected, links, visible.length]);
+  const beyond = levels ? [...levels.values()].filter((lv) => lv >= 2).length : 0;
   const clearSelection = useCallback(() => setSelectedKey(undefined), []);
 
   /**
@@ -230,8 +234,10 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
           grid={puzzle.grid}
           showGrid={false}
           markers={markers}
-          links={prefs.view.connections ? links : links.filter((l) => l.a === selected?.key || l.b === selected?.key)}
+          links={links}
+          showConnections={prefs.view.connections}
           selectedKey={selected?.key}
+          levels={levels}
           highlight={selectedPlacement?.cells}
           scale={scale}
           onMarker={(key) => select(key)}
@@ -246,6 +252,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
         placement={selectedPlacement}
         placed={isPlacedItem(selected)}
         connections={connectionTokens(connectionsOf(selected.key, links), labelOf)}
+        beyond={beyond}
         onSelectKey={(key) => select(key, { reveal: true })}
         onDetails={() => {
           // The details are a sheet of the page: leave the full-screen view for them.
@@ -537,6 +544,7 @@ function SelectionBar({
   placement,
   placed,
   connections,
+  beyond,
   onSelectKey,
   onDetails,
   onClear,
@@ -546,6 +554,8 @@ function SelectionBar({
   placement: ItemPlacement | undefined;
   placed: boolean;
   connections: ConnectionToken[];
+  /** Items highlighted beyond the direct connections (their connections in turn). */
+  beyond: number;
   onSelectKey: (key: string) => void;
   onDetails: () => void;
   onClear: () => void;
@@ -583,6 +593,12 @@ function SelectionBar({
                       #{t.label}
                     </button>
                   ),
+                )}
+                {beyond > 0 && (
+                  <span className="muted" data-testid="selection-beyond">
+                    {' '}
+                    · {beyond} more beyond
+                  </span>
                 )}
               </span>
             )}

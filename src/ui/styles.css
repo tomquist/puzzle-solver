@@ -30,6 +30,8 @@
   --st-patch: #3b82f6;
   /* the selected piece's connections (always with a dark halo, so it reads on any photo) */
   --sel: #2ee6ff;
+  /* … and the connections of those (levels 2–3): lighter */
+  --sel-2: #a6f3ff;
   /* the edge of a piece that must end up on top */
   --top: #ff4fc8;
   --placed: rgba(47, 107, 102, 0.55);
@@ -2373,7 +2375,7 @@ canvas.crop {
 .item-line {
   fill: none;
   stroke: var(--st);
-  stroke-width: calc(var(--u, 1px) * 1.5);
+  stroke-width: calc(var(--u, 1px) * 1.25);
   stroke-opacity: 0.9;
   stroke-linejoin: round;
 }
@@ -2383,7 +2385,7 @@ canvas.crop {
   stroke-linejoin: round;
 }
 .item.assembled .item-line {
-  stroke-width: calc(var(--u, 1px) * 2);
+  stroke-width: calc(var(--u, 1px) * 1.5);
   stroke-opacity: 1;
 }
 .item:focus-visible .item-fill,
@@ -2402,11 +2404,11 @@ canvas.crop {
 /* Selected: a white outline with a dark halo and a tint in the selection colour. */
 .item.selected .item-halo {
   stroke: rgba(0, 0, 0, 0.6);
-  stroke-width: calc(var(--u, 1px) * 7);
+  stroke-width: calc(var(--u, 1px) * 4.5);
 }
 .item.selected .item-line {
   stroke: #fff;
-  stroke-width: calc(var(--u, 1px) * 3);
+  stroke-width: calc(var(--u, 1px) * 2);
   stroke-opacity: 1;
 }
 .item.selected .item-fill {
@@ -2416,16 +2418,30 @@ canvas.crop {
 /* The items the selection joins: outline and tint in the selection colour. */
 .item.linked .item-halo {
   stroke: rgba(0, 0, 0, 0.6);
-  stroke-width: calc(var(--u, 1px) * 6.5);
+  stroke-width: calc(var(--u, 1px) * 4);
 }
 .item.linked .item-line {
   stroke: var(--sel);
-  stroke-width: calc(var(--u, 1px) * 3);
+  stroke-width: calc(var(--u, 1px) * 1.5);
   stroke-opacity: 1;
 }
 .item.linked .item-fill {
   fill: var(--sel);
   fill-opacity: 0.18;
+}
+/* Their connections in turn (levels 2–3): lighter and thinner, a faint tint, no ring. */
+.item.linked2 .item-halo {
+  stroke: rgba(0, 0, 0, 0.5);
+  stroke-width: calc(var(--u, 1px) * 3.25);
+}
+.item.linked2 .item-line {
+  stroke: var(--sel-2);
+  stroke-width: calc(var(--u, 1px) * 1.25);
+  stroke-opacity: 1;
+}
+.item.linked2 .item-fill {
+  fill: var(--sel-2);
+  fill-opacity: 0.1;
 }
 .item.faded {
   opacity: 0.2;
@@ -2485,7 +2501,11 @@ canvas.crop {
 }
 .label.linked rect {
   stroke: var(--sel);
-  stroke-width: calc(var(--u, 1px) * 2.5);
+  stroke-width: calc(var(--u, 1px) * 2);
+}
+.label.linked2 rect {
+  stroke: var(--sel-2);
+  stroke-width: calc(var(--u, 1px) * 1.5);
 }
 .label.faded {
   opacity: 0.2;
@@ -2546,52 +2566,141 @@ canvas.crop {
 }
 
 /*
- * Connections: solid light lines with a dark halo – readable on grey, light, dark and busy
- * photos, but calmer than a selected piece's lines (solid, thicker, selection colour).
- * (Dash patterns would be in photo units and shrink to dots when zoomed out.)
+ * Connections: dotted light lines, each dot with a thin dark rim (the halo is dotted too, so the
+ * photo shows between the dots) – readable on grey, light, dark and busy photos. They flow slowly
+ * toward the biggest unit of their cluster (flowDirections; "rev" when that is the line's start).
+ * A selection's own lines (level 1) are thicker, in the selection colour and livelier; the lines of
+ * its connections (levels 2–3) lighter cyan and thinner. Dashes are in screen px (--u), so they
+ * keep their size at any zoom.
+ * Cost: every change of a dash offset repaints the photo's overlay, so the dots move in steps of
+ * about one screen px on a shared beat (every 0.2 s, a selection's own lines every 0.1 s – smooth
+ * at this speed, a fraction of the work of a per-frame animation), pause while the view is panned
+ * or pinched (ZoomPanView's data-moving) and behind the full-screen view, and rest after a while:
+ * ~13 s after the lines appear, ~18 s after a selection (it restarts the flow). With reduced
+ * motion the dots stay put (the global rule).
  */
 .link {
+  /* Dash and gap (screen px, before the round caps), steps of ~1 px per period, the time per
+     period (steps × beat) and how many periods before the dots rest. */
+  --dash: 3;
+  --gap: 4.5;
+  --steps: 8;
+  --flow: 1.6s;
+  --loops: 8;
   pointer-events: none;
-  opacity: 0.8;
+  opacity: 0.9;
   transition: opacity 0.15s ease;
 }
-.link path {
+.link path,
+.link line {
   fill: none;
+}
+.link-under,
+.link-line {
+  stroke-linecap: round;
+  stroke-dasharray: calc(var(--u, 1px) * var(--dash)) calc(var(--u, 1px) * var(--gap));
+  animation: link-flow var(--flow) steps(var(--steps)) var(--loops);
+}
+/* A selection's lines start a flow of their own (a new animation name). */
+.link.active :is(.link-under, .link-line),
+.link.level-2 :is(.link-under, .link-line),
+.link.level-3 :is(.link-under, .link-line) {
+  animation-name: link-flow-sel;
+}
+.link.rev .link-under,
+.link.rev .link-line {
+  animation-direction: reverse;
+}
+@keyframes link-flow {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: calc(var(--u, 1px) * (var(--dash) + var(--gap)) * -1);
+  }
+}
+@keyframes link-flow-sel {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: calc(var(--u, 1px) * (var(--dash) + var(--gap)) * -1);
+  }
+}
+.zoompan-viewport[data-moving] .link-under,
+.zoompan-viewport[data-moving] .link-line,
+body:has(.fs-view) :is(.result-photo, .result-ref) :is(.link-under, .link-line) {
+  /* Also behind the full-screen view: the page's own pictures hold still. */
+  animation-play-state: paused;
+}
+.link-under {
+  stroke: rgba(0, 0, 0, 0.55);
+  stroke-width: calc(var(--u, 1px) * 3);
+}
+.link-line {
+  stroke: #fff;
+  stroke-width: calc(var(--u, 1px) * 1.5);
 }
 .link-end {
   fill: #fff;
   stroke: rgba(0, 0, 0, 0.6);
-  stroke-width: calc(var(--u, 1px) * 1.25);
+  stroke-width: calc(var(--u, 1px) * 1);
   vector-effect: non-scaling-stroke;
-}
-.link-under {
-  stroke: rgba(0, 0, 0, 0.5);
-  stroke-width: calc(var(--u, 1px) * 3.5);
-  stroke-linecap: round;
-}
-.link-line {
-  stroke: #fff;
-  stroke-width: calc(var(--u, 1px) * 2);
-  stroke-linecap: round;
 }
 .link.faded {
   opacity: 0.1;
 }
+.link.faded .link-under,
+.link.faded .link-line {
+  animation: none;
+}
 .link.active {
+  --dash: 5;
+  --gap: 6;
+  --steps: 11;
+  --flow: 1.1s;
+  --loops: 16;
   opacity: 1;
 }
 .link.active .link-under {
   stroke: rgba(0, 0, 0, 0.7);
-  stroke-width: calc(var(--u, 1px) * 8);
+  stroke-width: calc(var(--u, 1px) * 5.5);
 }
 .link.active .link-line {
   stroke: var(--sel);
-  stroke-width: calc(var(--u, 1px) * 4);
+  stroke-width: calc(var(--u, 1px) * 3);
 }
 .link.active .link-end {
   fill: var(--sel);
   stroke: rgba(0, 0, 0, 0.7);
-  stroke-width: calc(var(--u, 1px) * 1.5);
+  stroke-width: calc(var(--u, 1px) * 1.25);
+}
+/* The selection's connections in turn: lighter, thinner, calmer – but clearly not faded. */
+.link.level-2,
+.link.level-3 {
+  --dash: 3.5;
+  --gap: 5;
+  --steps: 9;
+  --flow: 1.8s;
+  --loops: 10;
+  opacity: 1;
+}
+.link.level-2 .link-under,
+.link.level-3 .link-under {
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: calc(var(--u, 1px) * 4);
+}
+.link.level-2 .link-line,
+.link.level-3 .link-line {
+  stroke: var(--sel-2);
+  stroke-width: calc(var(--u, 1px) * 2);
+}
+.link.level-3 .link-line {
+  stroke-width: calc(var(--u, 1px) * 1.75);
+}
+.link.level-2 .link-end,
+.link.level-3 .link-end {
+  fill: var(--sel-2);
 }
 /* Rings around the selected item (white) and the items it joins (selection colour). */
 .ring {
@@ -2602,11 +2711,11 @@ canvas.crop {
 }
 .ring-under {
   stroke: rgba(0, 0, 0, 0.55);
-  stroke-width: calc(var(--u, 1px) * 5.5);
+  stroke-width: calc(var(--u, 1px) * 3.75);
 }
 .ring-line {
   stroke: #fff;
-  stroke-width: calc(var(--u, 1px) * 2.5);
+  stroke-width: calc(var(--u, 1px) * 1.5);
 }
 .ring.linked .ring-line {
   stroke: var(--sel);
@@ -2623,6 +2732,10 @@ canvas.crop {
 .marker.linked circle {
   stroke: var(--sel);
   stroke-width: calc(var(--u, 1px) * 3);
+}
+.marker.linked2 circle {
+  stroke: var(--sel-2);
+  stroke-width: calc(var(--u, 1px) * 2);
 }
 
 /* The photo: long press must not select text or open a menu; scrolled to below the top bar. */

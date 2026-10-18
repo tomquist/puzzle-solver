@@ -33,16 +33,26 @@ to be analysed. Everything runs locally in the browser – no server, no upload.
 3. **Results** – the photo with every piece thinly outlined (no fill) and a small number label
    placed just outside the outline (`ui/lib/labels.ts`), colour-coded by confidence; a short pink
    bar on the edge that must end up on top (`topBarFor`, from `upVector`); connection lines are
-   solid light lines with a dark halo. Press-and-hold shows the clean photo. Tapping a piece selects it: its connection
-   lines turn thick and cyan, the pieces it joins get cyan outlines and rings, everything else
-   fades and the photo around them darkens, and a bar replaces the action bar with where it goes
-   and its connections in words (each mention selects that piece); the details sheet adds the box
+   dotted light lines with dark-rimmed dots that flow toward the biggest unit of their cluster
+   (`flowDirections` in `ui/lib/linkGraph.ts`: the item with the most pieces, then the most links;
+   each line toward its end nearer to it). Press-and-hold shows the clean photo. Tapping a piece
+   selects it: its connection lines turn thicker and cyan, the pieces it joins get cyan outlines
+   and rings, their connections in turn (levels 2–3, `selectionLevels`: whole levels only, at most
+   12 more items and about a quarter of all items) lighter cyan outlines and lines without rings,
+   everything else fades and the photo around them darkens (one even-odd path), and a bar replaces
+   the action bar with where it goes and its connections in words (each mention selects that
+   piece, "· N more beyond" counts the rest); the box picture's markers and the full-screen view
+   show the same levels; the details sheet adds the box
    picture around the target, the piece type (corner/edge/interior), the rotation needed and the
    other candidates. The reference shows numbered markers at the matched locations. Photo and
    picture open in a full-screen view (Fullscreen API where available, else a fixed layer; closes
    with ×, Esc or back) that shares the selection.
    Overlay strokes inside the zoom view are sized with `--u` (one screen px in content units, set
-   by `ZoomPanView`): `vector-effect: non-scaling-stroke` does not undo its CSS scale. At the fit
+   by `ZoomPanView`): `vector-effect: non-scaling-stroke` does not undo its CSS scale. Every change
+   of a line's dash offset repaints the overlay, so the flow moves in steps of about one screen px
+   on a shared beat (5 or 10 a second), pauses while the view moves (`data-moving`) and behind the
+   full-screen view, and rests after ~13 s (~18 s after a selection); on a 4× throttled CPU with
+   87 items and 52 lines this keeps 60 fps (a per-frame flow dropped to 15–30 fps). At the fit
    zoom a one-finger drag on a picture scrolls the page (`touch-action: pan-y`); zoomed in, it pans.
    The guided placing mode shows one item at a time: the photo around it as it lies (3–4 piece
    sizes, corner marks, the pink "top" bar labelled "top"; tap for a close-up), the turn, and the
