@@ -909,14 +909,15 @@ function bodyAspect(s: PieceShape): number {
   return Math.max(a, b) / Math.max(1e-6, Math.min(a, b));
 }
 
-/** Largest hole that is filled, in typical object areas (see typicalObjectArea). */
-const HOLE_MAX_OBJECTS = 3;
+/** Largest hole that is filled, in piece areas (see objectUnitArea). */
+const HOLE_MAX_PIECES = 1.5;
 
 /**
- * Median area of the components of at least `minArea` px that do not touch the photo border
- * (loose pieces and patches, not networks of tile gaps reaching the border); Infinity without any.
+ * Area of one piece estimated from the components of at least `minArea` px that do not touch the
+ * photo border (loose pieces, pairs, clusters; not networks of tile gaps reaching the border), as
+ * the unit their areas are multiples of; Infinity without any.
  */
-function typicalObjectArea(m: Mask, minArea: number): number {
+function objectUnitArea(m: Mask, minArea: number): number {
   const { width: w, height: h } = m;
   const { count, y: ry, x0: rx0, x1: rx1, root } = labelRuns(m, 1, 8);
   const area = new Float64Array(count);
@@ -928,7 +929,7 @@ function typicalObjectArea(m: Mask, minArea: number): number {
   }
   const areas: number[] = [];
   for (let i = 0; i < count; i++) if (root[i] === i && area[i] >= minArea) areas.push(area[i]);
-  return areas.length > 0 ? median(areas) : Infinity;
+  return areas.length > 0 ? unitArea(areas, areas.map(() => 1)) : Infinity;
 }
 
 /**
@@ -1022,9 +1023,9 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     // Pieces lying 1–3 px apart are still separate here (closing bridges them): kept for splitting.
     const preClose = cloneMask(fg);
     fg = close(fg, 2);
-    // Holes in pieces (print like the table) are filled; table enclosed by a grid of tile gaps or by
-    // an assembled frame is not (far larger than any piece).
-    fg = fillHoles(fg, HOLE_MAX_OBJECTS * typicalObjectArea(fg, minArea));
+    // Holes in pieces (print like the table) are filled; table enclosed by a grid of tile gaps, by an
+    // assembled frame or by a ring of touching pieces is not (larger than a piece).
+    fg = fillHoles(fg, HOLE_MAX_PIECES * objectUnitArea(fg, Math.max(minArea, MIN_REFERENCE_SHARE * W * H)));
     const unfiltered = diag ? cloneMask(fg) : null;
     fg = removeSmallComponents(fg, minArea);
     if (diag && unfiltered) {
@@ -1080,7 +1081,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   let p = pass(fit);
   // Shadow zones and local lighting the smooth surface cannot follow: learn them from the table
   // around the pieces found so far (coarse grid, cells of at least two pieces) and segment again.
-  if (p.ref.refBody > 0) {
+  if (p.ref.refBody > 0 && fit.palette.length === 0) {
     // Excluded (on a 4× coarser grid): anything piece-shaped and every blob with a fair share of
     // strong pixels (pieces, and patches of weak pieces whose print is speckled with them). Smooth
     // weak blobs, which may be the shadow zone itself, stay in the estimate (a cell spans several
