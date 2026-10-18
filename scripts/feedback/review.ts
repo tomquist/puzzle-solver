@@ -14,7 +14,8 @@
  * `objects` (optional) is a complete answer key for the photo: one point (photo pixels, well inside)
  * for every loose piece and every assembled group, found by checking the photo by eye, not taken
  * from any result. It scores the whole result, including mistakes nobody marked. `unsure` objects
- * count neither way.
+ * count neither way. With `area` the key covers only that rectangle (photo pixels; for photos where
+ * only part can be told apart reliably): only regions centred inside it are scored.
  */
 import { existsSync, readFileSync } from 'node:fs';
 
@@ -37,8 +38,9 @@ export interface FeedbackReview {
   /** Date of the review (YYYY-MM-DD). */
   reviewed: string;
   marks: Record<string, MarkReview>;
-  /** Every piece and assembled group in the photo, when the reviewer listed them all. */
+  /** Every piece and assembled group in the photo (or in `area`), when the reviewer listed them all. */
   objects?: ReviewObject[];
+  area?: { x: number; y: number; width: number; height: number };
 }
 
 export const isReviewFile = (path: string): boolean => /\.review\.json$/i.test(path);

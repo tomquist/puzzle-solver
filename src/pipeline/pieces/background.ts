@@ -576,6 +576,20 @@ function findPalette(s: Samples, fit: BackgroundFit): void {
       const core = Array.from(vals).filter((v) => v <= 2.5 * mad);
       sigma[ch] = Math.max(SIGMA_FLOOR[ch], 1.2 * 1.4826 * (core.length >= 10 ? median(core) : mad));
     }
+    // Local spread: differences between neighbouring member samples (a lighting gradient over the
+    // surface adds nothing; pieces' print does).
+    const isMember = new Uint8Array(s.n);
+    for (const i of members) isMember[i] = 1;
+    const ld: number[][] = [[], [], []];
+    for (const i of members) {
+      const gx = i % s.gw;
+      for (const j of [gx + 1 < s.gw ? i + 1 : -1, i + s.gw < s.n ? i + s.gw : -1]) {
+        if (j < 0 || !isMember[j]) continue;
+        for (let ch = 0; ch < 3; ch++) ld[ch].push(Math.abs(s.lab[i * 3 + ch] - s.lab[j * 3 + ch]));
+      }
+    }
+    const localSigma = ld.map((v) => (v.length >= 20 ? (1.4826 * median(v)) / Math.SQRT2 : Infinity));
+    if (globalThis.process?.env?.PALDBG) globalThis.console.log('PALDBG local', localSigma.map((v) => v.toFixed(2)).join(','), 'pairs', ld[0].length);
     // Plain paint is about as uniform as a plain table.
     if (globalThis.process?.env?.PALDBG) globalThis.console.log('PALDBG sigma', sigma.map((v) => v.toFixed(2)).join(','), 'main', mainSigma.map((v) => v.toFixed(2)).join(','), 'color', color.map((v) => v.toFixed(1)).join(','));
     if (sigma[1] > 3 * mainSigma[1] + 2 || sigma[2] > 3 * mainSigma[2] + 2 || sigma[0] > 2 * mainSigma[0] + 2.5) break;

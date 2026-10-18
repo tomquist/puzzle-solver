@@ -589,6 +589,8 @@ const LOOSE_SECOND_PEAK = 0.15;
 const OUTER_GRID_DEG = 12;
 /** Offset tolerance (body sizes) of neighbours on one assembled grid. */
 const GRID_TOLERANCE = 0.3;
+/** Share of a part's outline along its neighbour from which the neighbour wraps around it. */
+const HALO_WRAP = 0.75;
 /** Parts of an edge split below this (piece areas) on both sides of a cut may be halves of one piece. */
 const HALF_PART = 0.65;
 /** Most pieces a cluster is split into along edges. */
@@ -681,7 +683,7 @@ function watershed(mask: Mask, grad: Uint8Array, labels: Int32Array): void {
  * assembled grid (same angle, one body apart); everything else is joined again. Parts below a
  * third of a piece go to the neighbour they share most outline with. Null when one region remains.
  */
-function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, img: RGBAImage, W: number, H: number): Candidate[] | null {
+function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, img: RGBAImage, score: GrayImage, high: number, W: number, H: number): Candidate[] | null {
   const k = Math.round(c.area / ra);
   if (k < 2 || k > MAX_EDGE_SPLIT) return null;
   const { width: w, height: h } = c.mask;
@@ -817,6 +819,25 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
   const outer = live.map((l) => { const pc = parts.get(l); return pc ? outerAngle(pc, c) : null; }).filter((a): a is number => a !== null);
   const aligned = outer.filter((a) => quarterDiff(a, c.orientation) <= OUTER_GRID_DEG).length;
   const mixed = c.secondPeak >= LOOSE_SECOND_PEAK && outer.length >= 2 && aligned < 0.75 * outer.length;
+  // Median colour score along each part's stretch of the cluster outline (3 px in).
+  const edgeScore = new Float64Array(n + 1);
+  {
+    const inner = erode(c.mask, 3);
+    const vals: number[][] = Array.from({ length: n + 1 }, () => []);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x, l = labels[i];
+        if (l <= 0 || !inner.data[i]) continue;
+        let edge = false;
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const xx = x + dx, yy = y + dy;
+          if (xx < 0 || yy < 0 || xx >= w || yy >= h || !inner.data[yy * w + xx]) edge = true;
+        }
+        if (edge) vals[l].push(score.data[(y + by) * W + x + bx]);
+      }
+    }
+    for (const l of live) edgeScore[l] = vals[l].length ? median(vals[l]) : Infinity;
+  }
   let creases = 0, cuts = 0;
   for (const [key, v] of stats) {
     const a = Math.floor(key / 64), b = key % 64;
@@ -828,9 +849,12 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
     cuts++;
     if (crease >= CREASE_MIN) creases++;
     const evidence = (crease >= CREASE_MIN && mixed) || viaGap || (Math.max(ca, cb) >= 0.7 && (Math.min(ca, cb) >= UNCERTAIN_CONFIDENCE || c.secondPeak > TOUCHING_SECOND_PEAK));
+    // A part with a faint outline wrapped around its neighbour is that piece's glare halo or shadow.
+    const wrap = v.length / Math.max(1, Math.min(polygonPerimeter(pa.contour), polygonPerimeter(pb.contour)));
+    const halo = wrap >= HALO_WRAP && Math.min(edgeScore[a], edgeScore[b]) < high;
     // Two neighbours both well below a piece that make one together: one piece given two markers.
     const halves = !viaGap && area[a] < HALF_PART * ra && area[b] < HALF_PART * ra && area[a] + area[b] <= 1.35 * ra;
-    if (!evidence || halves || onOneGrid(pa, pb, c, body)) root[find(a)] = find(b);
+    if (!evidence || halves || halo || onOneGrid(pa, pb, c, body)) root[find(a)] = find(b);
   }
   if (globalThis.process?.env?.SPLITDBG) { const iv: number[] = []; for (let i = 0; i < w * h; i++) if (c.mask.data[i]) iv.push(th[i]); iv.sort((a, b) => a - b); globalThis.console.log('THQ', [0.5, 0.75, 0.9, 0.95].map((q) => iv[Math.floor(q * (iv.length - 1))].toFixed(1)).join(',')); }
   if (globalThis.process?.env?.SPLITDBG) globalThis.console.log('EDGEDBG', JSON.stringify(c.bbox), 'k', k, 'viaGap', viaGap, 'parts', live.map((l) => (area[l] / ra).toFixed(2)).join(','), 'creased', creases, '/', cuts, 'second', c.secondPeak.toFixed(2), 'mixed', mixed, aligned, '/', outer.length);
@@ -1500,13 +1524,13 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
         // pieces give as many parts with a convincing outline, those are taken.
         const convincing = (ps: Candidate[]) => ps.some((p) => (p.shape?.confidence ?? 0) >= REFERENCE_CONFIDENCE);
         if (c.area <= EDGE_RECUT_MAX_PIECES * ra && !convincing(out)) {
-          const edges = splitAtEdges(c, ra, bodyAt, preClose, scored, W, H);
+          const edges = splitAtEdges(c, ra, bodyAt, preClose, scored, score, th.high, W, H);
           if (edges && edges.length === out.length && convincing(edges)) return edges;
         }
         return out;
       }
       // Pieces touching along a whole side or slightly overlapping: cut along the edges between them.
-      const cut = splitAtEdges(c, ra, bodyAt, preClose, scored, W, H);
+      const cut = splitAtEdges(c, ra, bodyAt, preClose, scored, score, th.high, W, H);
       // Parts still clearly larger than a piece (a blob of pieces lying close together, a part whose
       // overlapping pieces the area under-counted) are split in turn.
       return cut?.flatMap((p) => (p.area > 1.4 * ra ? splitTouching(p, 0) : null) ?? [p]) ?? null;

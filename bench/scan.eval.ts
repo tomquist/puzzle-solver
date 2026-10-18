@@ -211,6 +211,17 @@ const SCENARIOS: Scenario[] = [
       shadowZone: { strength: 0.45 }, jpegQuality: 80, illumination: 0.15,
     }),
   },
+  // From real feedback (a dense table with a half-built frame): about 50 pieces packed closely on a
+  // light grey-green mat, a fifth of them in touching or overlapping pairs and more nearly touching,
+  // an assembled strip of six, and a second, lighter surface with its own lighting under part of them.
+  {
+    name: 'starry-dense-touching',
+    painting: 'starry-night', grid: { rows: 16, cols: 20 }, items: { singles: 44, patches: [[1, 6]] }, seeds: [34],
+    render: (rng) => ({
+      ...standard(rng), background: [158, 160, 138], illumination: 0.15, margin: 5, packing: 1.5,
+      pairs: { count: 10, gap: [-3, 2] }, secondSurface: {}, jpegQuality: 85,
+    }),
+  },
 ];
 
 const COLUMNS = [

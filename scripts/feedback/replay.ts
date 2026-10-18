@@ -80,9 +80,14 @@ export interface ObjectScore {
   real: number;
 }
 
-/** Score piece / patch regions against an answer key of object points. */
-export function scoreObjects(objects: ReviewObject[], regions: RasterRegion[]): ObjectScore {
-  const shown = regions.filter((r) => r.region.kind !== 'unknown');
+/** Score piece / patch regions (centred inside `area`, when given) against an answer key of object points. */
+export function scoreObjects(objects: ReviewObject[], regions: RasterRegion[], area?: Rect): ObjectScore {
+  const inArea = (r: RasterRegion) => {
+    if (!area) return true;
+    const cx = r.rect.x + r.rect.width / 2, cy = r.rect.y + r.rect.height / 2;
+    return cx >= area.x && cx < area.x + area.width && cy >= area.y && cy < area.y + area.height;
+  };
+  const shown = regions.filter((r) => r.region.kind !== 'unknown' && inArea(r));
   const hits = objects.map((o) => shown.find((r) => containsPoint(r, o)));
   const perRegion = new Map<RasterRegion, number>();
   for (const h of hits) if (h) perRegion.set(h, (perRegion.get(h) ?? 0) + 1);
@@ -371,7 +376,8 @@ export function replayFeedback(bundle: FeedbackBundle, name: string, opts: Repla
     });
   }
   if (opts.review) for (const j of out.marks) j.review = opts.review.marks[String(j.index)];
-  if (opts.review?.objects?.length) out.objects = { original: scoreObjects(opts.review.objects, origR), current: scoreObjects(opts.review.objects, curR) };
+  const key = opts.review?.objects;
+  if (key?.length) out.objects = { original: scoreObjects(key, origR, opts.review!.area), current: scoreObjects(key, curR, opts.review!.area) };
   out.reviewed = !!opts.review;
   return out;
 }

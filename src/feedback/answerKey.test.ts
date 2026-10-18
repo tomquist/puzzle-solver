@@ -36,6 +36,12 @@ describe('scoreObjects', () => {
     expect(scoreObjects(key, regions)).toEqual({ objects: 5, found: 3, clean: 1, regions: 3, real: 2 });
   });
 
+  it('scores only regions centred inside the key\'s area', () => {
+    const regions = rasterizeRegions([square(1, 0, 0, 40), square(2, 100, 0, 40), square(3, 300, 0, 40)]);
+    // The key covers x < 200: region 3 lies outside, so it is not a false region.
+    expect(scoreObjects([{ x: 20, y: 20 }], regions, { x: 0, y: 0, width: 200, height: 100 })).toEqual({ objects: 1, found: 1, clean: 1, regions: 2, real: 1 });
+  });
+
   it('leaves unsure objects out of the counts but lets them justify a region', () => {
     const regions = rasterizeRegions([square(1, 0, 0, 40), square(2, 100, 0, 40)]);
     const key = [{ x: 20, y: 20 }, { x: 120, y: 20, unsure: true }];

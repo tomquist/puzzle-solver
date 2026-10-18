@@ -1,0 +1,197 @@
+{
+  "reviewed": "2026-10-18",
+  "marks": {
+    "1": {
+      "verdict": "ok",
+      "note": "grey-brown piece (with a blue piece below, possibly assembled)"
+    },
+    "2": {
+      "verdict": "ok",
+      "note": "teal ornament piece"
+    },
+    "3": {
+      "verdict": "ok",
+      "note": "tap between two touching pieces (blue/white and pink/grey), both undetected"
+    },
+    "4": {
+      "verdict": "ok",
+      "note": "teal ornament piece; tap at its left edge"
+    },
+    "5": {
+      "verdict": "ok",
+      "note": "dark grey piece"
+    },
+    "6": {
+      "verdict": "ok",
+      "note": "dark grey piece"
+    },
+    "7": {
+      "verdict": "ok",
+      "note": "dark piece"
+    },
+    "8": {
+      "verdict": "ok",
+      "note": "dark piece"
+    },
+    "9": {
+      "verdict": "ok",
+      "note": "dark slate piece"
+    },
+    "10": {
+      "verdict": "ok",
+      "note": "dark mauve piece"
+    },
+    "11": {
+      "verdict": "ok",
+      "note": "dark purple-blue piece"
+    },
+    "12": {
+      "verdict": "ok",
+      "note": "dark/yellow piece with a white ornament band"
+    },
+    "13": {
+      "verdict": "ok",
+      "note": "dark brown piece with a white ornament band"
+    },
+    "14": {
+      "verdict": "ok",
+      "note": "dark brown piece; tap on its white ornament band"
+    },
+    "15": {
+      "verdict": "ok",
+      "note": "outline covers only the pink part; the black parts of the piece are left out"
+    },
+    "16": {
+      "verdict": "ok",
+      "note": "outline covers the magenta upper part; the beige lower part is left out"
+    },
+    "17": {
+      "verdict": "ok",
+      "note": "outline covers the pink band; the black body below is left out"
+    },
+    "18": {
+      "verdict": "ok",
+      "note": "fragmented outline around the pink parts; dark parts left out"
+    },
+    "19": {
+      "verdict": "ok",
+      "note": "jagged outline leaving out the darker parts of the light piece"
+    },
+    "20": {
+      "verdict": "ok",
+      "note": "outline covers the pink part; the olive left part is left out"
+    }
+  },
+  "area": {
+    "x": 1000,
+    "y": 1200,
+    "width": 800,
+    "height": 1200
+  },
+  "objects": [
+    {
+      "x": 1375,
+      "y": 1240,
+      "unsure": true,
+      "note": "grey-brown piece (M1); with the blue piece below possibly an assembled pair (stripe continues)"
+    },
+    {
+      "x": 1380,
+      "y": 1340,
+      "unsure": true,
+      "note": "blue ornament piece below M1's piece"
+    },
+    {
+      "x": 1600,
+      "y": 1320,
+      "note": "M13, dark brown with white ornament band"
+    },
+    {
+      "x": 1730,
+      "y": 1400,
+      "note": "M14, dark brown with white ornament band"
+    },
+    {
+      "x": 1325,
+      "y": 1540,
+      "note": "M12, dark/yellow with white ornament band"
+    },
+    {
+      "x": 1460,
+      "y": 1490,
+      "note": "M2, teal ornament"
+    },
+    {
+      "x": 1510,
+      "y": 1710,
+      "note": "M4, teal ornament"
+    },
+    {
+      "x": 1645,
+      "y": 1665,
+      "note": "blue/white piece touching the next one (M3 between them)"
+    },
+    {
+      "x": 1740,
+      "y": 1630,
+      "note": "pink/grey piece (M3 neighbour)"
+    },
+    {
+      "x": 1740,
+      "y": 1800,
+      "note": "grey/pink/green piece at the right edge"
+    },
+    {
+      "x": 1180,
+      "y": 1925,
+      "note": "M5, dark grey"
+    },
+    {
+      "x": 1515,
+      "y": 1940,
+      "note": "M8, dark"
+    },
+    {
+      "x": 1380,
+      "y": 2060,
+      "note": "M7, dark"
+    },
+    {
+      "x": 1190,
+      "y": 2180,
+      "note": "M6, dark grey"
+    },
+    {
+      "x": 1615,
+      "y": 2225,
+      "note": "M9, dark slate"
+    },
+    {
+      "x": 1440,
+      "y": 2320,
+      "note": "M10, dark mauve, cut off by the bottom edge"
+    },
+    {
+      "x": 1710,
+      "y": 2340,
+      "note": "mauve piece, cut off by the bottom and right edges"
+    },
+    {
+      "x": 1135,
+      "y": 1370,
+      "note": "pink piece"
+    },
+    {
+      "x": 1290,
+      "y": 2385,
+      "unsure": true,
+      "note": "blue piece mostly outside the photo (knob only)"
+    },
+    {
+      "x": 1785,
+      "y": 1545,
+      "unsure": true,
+      "note": "piece mostly outside the photo at the right edge"
+    }
+  ]
+}
