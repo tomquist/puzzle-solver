@@ -1,5 +1,6 @@
 /** Modal bottom sheet (phone) / centered panel (desktop). */
 import { useEffect, useRef, type ReactNode } from 'react';
+import { lockPageScroll } from '../lib/scrollLock';
 import { IconClose } from './Icons';
 
 export function Sheet({ title, onClose, children, footer, labelledBy }: { title: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; labelledBy?: string }) {
@@ -9,12 +10,11 @@ export function Sheet({ title, onClose, children, footer, labelledBy }: { title:
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const unlock = lockPageScroll();
     panel.current?.focus();
     return () => {
       window.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prev;
+      unlock();
     };
   }, [onClose]);
   const headingId = labelledBy ?? 'sheet-title';

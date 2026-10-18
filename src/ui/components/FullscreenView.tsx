@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { useElementSize } from '../hooks/useElementSize';
 import type { Insets } from '../lib/overlay';
+import { lockPageScroll } from '../lib/scrollLock';
 import { IconClose } from './Icons';
 
 const STATE_KEY = 'fullscreenView';
@@ -60,8 +61,7 @@ export function FullscreenView({
 
   useEffect(() => {
     const el = root.current;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const unlock = lockPageScroll();
     closing.current = false;
 
     // A history entry so the back gesture closes the view (once, also under StrictMode).
@@ -99,7 +99,7 @@ export function FullscreenView({
       window.removeEventListener('popstate', onPop);
       document.removeEventListener('fullscreenchange', onFullscreenChange);
       document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prevOverflow;
+      unlock();
       if (document.fullscreenElement && document.fullscreenElement === el) void document.exitFullscreen().catch(() => undefined);
     };
   }, [requestClose]);
