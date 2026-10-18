@@ -173,6 +173,28 @@ export async function blobToRGBA(blob: Blob, maxSide = 4096, maxArea = MAX_CANVA
 }
 
 /**
+ * Decode an image the app encoded itself (no EXIF rotation, already at its final size) without any
+ * resampling: createImageBitmap and one 1:1 drawImage. The feedback tools decode stored scan photos
+ * the same way in Chromium (scripts/feedback/chromium.ts), so they see exactly the analysed pixels.
+ */
+export async function decodeExact(blob: Blob): Promise<RGBAImage> {
+  if (typeof createImageBitmap !== 'function') return blobToRGBA(blob, Infinity, Infinity);
+  const bmp = await createImageBitmap(blob);
+  try {
+    const canvas = createCanvas(bmp.width, bmp.height);
+    try {
+      const ctx = context2d(canvas, { willReadFrequently: true });
+      ctx.drawImage(bmp, 0, 0);
+      return imageDataToRGBA(ctx.getImageData(0, 0, bmp.width, bmp.height));
+    } finally {
+      releaseCanvas(canvas);
+    }
+  } finally {
+    bmp.close();
+  }
+}
+
+/**
  * Encode an RGBAImage (JPEG by default). Images above the canvas area limit are first reduced in
  * pure TS so encoding also works on iOS.
  */

@@ -175,6 +175,8 @@ export interface ReplayOptions {
   skipBox?: boolean;
   /** Visual review of the marks; without one every mark counts. */
   review?: FeedbackReview;
+  /** The scan photo already decoded (e.g. by Chromium, see chromium.ts); default jpeg-js. */
+  scanPhoto?: RGBAImage;
 }
 
 /** Re-run the current pipeline on a feedback file and judge every mark, placement and the box. */
@@ -204,7 +206,7 @@ export function replayFeedback(bundle: FeedbackBundle, name: string, opts: Repla
     if (bundle.marks.length > 0) notes.push('marks present but the file has no scan');
     return out;
   }
-  const photo = decodeFeedbackImage(bundle.scan.photo);
+  const photo = opts.scanPhoto ?? decodeFeedbackImage(bundle.scan.photo);
   out.photo = photo;
   const original = bundle.scan.result;
   out.original = original;

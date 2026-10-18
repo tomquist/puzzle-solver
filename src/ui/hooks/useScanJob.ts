@@ -6,13 +6,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { APP_VERSION } from '../../appVersion';
 import type { ProgressRecord, PuzzleRecord, ScanRecord } from '../../model/types';
-import { blobToRGBA, isQuotaError, rgbaToBlob } from '../../platform/imageio';
+import { blobToRGBA, decodeExact, isQuotaError, rgbaToBlob } from '../../platform/imageio';
 import { newId, type PuzzleRepository } from '../../storage/types';
 import type { PipelineApi } from '../../worker/api';
 import { errorText } from '../components/Feedback';
 import { navigate } from './useHashRoute';
 import { placedCells } from '../lib/progress';
 import { href } from '../lib/routes';
+
+/** Longest side scan photos are analysed and stored at (the pipeline's default analysis size). */
+const SCAN_MAX_SIDE = 2400;
 
 export type ScanJob =
   | { kind: 'running'; progress: number; message: string }
@@ -65,7 +68,11 @@ export function useScanJob(deps: ScanJobDeps): { job: ScanJob | undefined; start
       working(0.01, 'Reading photo…');
       let stage: 'read' | 'prepare' | 'analyse' | 'save' = 'read';
       try {
-        const rgba = await blobToRGBA(photo, 4096);
+        // The photo is analysed at the size the pipeline works at, as the JPEG that is stored: encode
+        // once and analyse the decoded JPEG, so the stored photo (and a feedback file made from it)
+        // holds exactly the pixels the analysis saw.
+        const jpeg = await rgbaToBlob(await blobToRGBA(photo, SCAN_MAX_SIDE), 'image/jpeg', 0.95);
+        const rgba = await decodeExact(jpeg);
         stage = 'prepare';
         working(0.02, 'Preparing the puzzle picture…');
         await ensureMatcher();
@@ -76,8 +83,6 @@ export function useScanJob(deps: ScanJobDeps): { job: ScanJob | undefined; start
         if (run.current !== myRun) return; // cancelled
         stage = 'save';
         working(0.95, 'Saving scan…');
-        // High quality: feedback files replay this exact image, so keep compression artefacts small.
-        const jpeg = await rgbaToBlob(resp.analysedImage, 'image/jpeg', 0.95);
         const photoBlobId = await repo.putBlob(jpeg);
         const scan: ScanRecord = {
           id: newId(),

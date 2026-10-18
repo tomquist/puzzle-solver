@@ -6,7 +6,10 @@ detections, merged pieces, wrong outlines, wrong places), confirmed placements a
 puzzle picture and box photo.
 
 - `npm run feedback:inspect -- test-corpus/feedback/<file>.json` re-runs the current pipeline on the
-  file and writes annotated images to `.debug/feedback/` plus a summary.
+  file and writes annotated images to `.debug/feedback/` plus a summary. Files from Chromium
+  browsers are decoded with Playwright's Chromium (`--decoder auto`, the default): JPEG decoders
+  differ by a level or two, which can change segmentation, and since the app analyses the stored
+  JPEG this reproduces exactly what the phone saw. The benchmark uses jpeg-js.
 - `npm run bench` replays every file here and checks the corrections stay fixed
   (bench/feedback.eval.ts, gated by bench/baseline.json).
 
