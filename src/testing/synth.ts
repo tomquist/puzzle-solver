@@ -335,6 +335,16 @@ export interface RenderOptions {
   /** Simulate phone JPEG compression (4:2:0 chroma, this quality 1..100) as the last step. */
   jpegQuality?: number;
   /**
+   * A second, lighter table surface (a board, a box lid, another table) covering a strip from one
+   * photo side, lit with a gradient of its own; pieces lie on it like on the main table.
+   */
+  secondSurface?: SecondSurfaceStyle;
+  /**
+   * Free area per item for the automatic photo size (photo area ≈ packing × summed item boxes;
+   * default 2.4). Lower values give dense layouts with many near neighbours.
+   */
+  packing?: number;
+  /**
    * Put some items in close pairs: the first 2·count items form pairs whose outlines are `gap` px
    * apart (random in [min, max]; negative = the second piece overlaps the first by that much).
    */
@@ -400,6 +410,16 @@ export interface ShadowZoneStyle {
   radius?: number;
   /** Width of the soft edge as a fraction of the radius (default 0.3). */
   softness?: number;
+}
+
+/** A second table surface (see {@link RenderOptions.secondSurface}). */
+export interface SecondSurfaceStyle {
+  /** Surface colour (default: the background lightened by a quarter, slightly greyer). */
+  color?: RGB;
+  /** Depth of the strip as a fraction of the photo across its side (default random in [0.3, 0.45]). */
+  depth?: number;
+  /** Brightness change of its own lighting along the strip, e.g. 0.25 = ±25 % (default 0.25). */
+  gradient?: number;
 }
 
 /** Pieces in dark table-coloured tones (see {@link RenderOptions.darkPieces}). */
@@ -690,6 +710,37 @@ function applyShadowZone(scene: FloatImage, z: ShadowZoneStyle, rng: Rng): void 
   }
 }
 
+/**
+ * Paint a second table surface: a strip from a random photo side (straight, slightly tilted edge,
+ * anti-aliased, with a faint shadow line along it), its own colour and lighting gradient.
+ */
+function paintSecondSurface(scene: FloatImage, z: SecondSurfaceStyle, bg: RGB, rng: Rng): void {
+  const { width: W, height: H, data } = scene;
+  const side = rng.int(4);
+  const depth = z.depth ?? rng.uniform(0.3, 0.45);
+  const tilt = rng.uniform(-0.06, 0.06);
+  const grad = z.gradient ?? 0.25;
+  const dir = rng.uniform(0, 2 * Math.PI);
+  const col: RGB = z.color ?? [0, 1, 2].map((c) => Math.min(250, 1.25 * (0.85 * bg[c] + 0.15 * ((bg[0] + bg[1] + bg[2]) / 3)))) as RGB;
+  const across = side % 2 === 0 ? H : W, along = side % 2 === 0 ? W : H;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      // (t, d): position along the side and depth inwards from it.
+      const t = side === 0 ? x : side === 1 ? y : side === 2 ? W - x : H - y;
+      const d = side === 0 ? y : side === 1 ? W - x : side === 2 ? H - y : x;
+      const edge = depth * across + tilt * (t - along / 2);
+      const a = Math.max(0, Math.min(1, edge - d + 0.5));
+      const line = 0.12 * Math.exp(-((d - edge) ** 2) / (2 * 1.5 * 1.5));
+      const o = (y * W + x) * 3;
+      if (a > 0) {
+        const light = 1 + grad * ((Math.cos(dir) * (x / W - 0.5) + Math.sin(dir) * (y / H - 0.5)) * 2);
+        for (let c = 0; c < 3; c++) data[o + c] = data[o + c] * (1 - a) + a * col[c] * light;
+      }
+      for (let c = 0; c < 3; c++) data[o + c] *= 1 - line;
+    }
+  }
+}
+
 /** Anti-aliased coverage of a polygon over the whole photo (supersampled). */
 function polygonCoverage(poly: Point[], W: number, H: number, ss: number): { rect: Rect; cov: Float32Array } | null {
   const b = boundsOf(poly);
@@ -802,7 +853,7 @@ function clutterZones(objs: ClutterObject[], W: number, H: number, margin: numbe
 }
 
 /** Phone-style JPEG round trip: 4:2:0 chroma subsampling, then jpeg-js at `quality`. */
-function jpegRoundTrip(img: RGBAImage, quality: number): RGBAImage {
+export function jpegRoundTrip(img: RGBAImage, quality: number): RGBAImage {
   const { width: w, height: h } = img;
   const src = img.data;
   const sub = new Uint8ClampedArray(src);
@@ -1030,7 +1081,7 @@ export function renderPiecesPhoto(
     for (const it of items) if (!it.attach) area += (it.ext!.x1 - it.ext!.x0 + margin) * (it.ext!.y1 - it.ext!.y0 + margin);
     // Clutter takes a border strip of the photo.
     if (clutterFor) area *= 1 + 0.25 * opts.clutter!.length;
-    let side = Math.sqrt(area * 2.4);
+    let side = Math.sqrt(area * (opts.packing ?? 2.4));
     for (let tries = 0; ; tries++) {
       W = opts.width ?? Math.ceil(side * 1.15);
       H = opts.height ?? Math.ceil(side / 1.15);
@@ -1061,6 +1112,7 @@ export function renderPiecesPhoto(
       scene.data[i * 3 + 2] = bg[2] + t;
     }
   }
+  if (opts.secondSurface) paintSecondSurface(scene, opts.secondSurface, bg, streamRng(opts.seed, 7));
   if (clutterFor) {
     for (const obj of clutterFor(PW, PH)) {
       const c = polygonCoverage(obj.poly, PW, PH, ss);

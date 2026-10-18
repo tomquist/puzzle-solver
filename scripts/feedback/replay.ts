@@ -19,6 +19,7 @@ import { buildReferenceIndex } from '../../src/pipeline/match';
 import { segmentPieces, type BackgroundModel, type SegmentDiagnostics } from '../../src/pipeline/pieces';
 import { basename } from 'node:path';
 import { decodeFeedbackImage, readFeedbackFile } from './io';
+import { readReview, type FeedbackReview, type MarkReview, type ReviewObject } from './review';
 import { cellJaccard, cellKey, centroidOf, containsPoint, correspondent, distanceToRect, formatCells, overlaps, rasterizeRegions, regionAtTap, type RasterRegion } from './regions';
 
 /** Outcome of one user mark under the current pipeline. */
@@ -40,6 +41,8 @@ export interface MarkJudgement {
   why?: string;
   /** Current regions involved (to highlight them). */
   currentIds: number[];
+  /** Verdict of the visual review of this mark (see review.ts), when the file has one. */
+  review?: MarkReview;
 }
 
 export interface PlacementJudgement {
@@ -64,6 +67,40 @@ export interface BoxJudgement {
   ms: number;
 }
 
+/** A result scored against the review's answer key (counts; unsure objects excluded). */
+export interface ObjectScore {
+  /** Objects in the key. */
+  objects: number;
+  /** Objects inside a piece / patch region. */
+  found: number;
+  /** Objects alone in their region (found and not merged with another object). */
+  clean: number;
+  /** Piece / patch regions, and those holding at least one object (the rest are false). */
+  regions: number;
+  real: number;
+}
+
+/** Score piece / patch regions (centred inside `area`, when given) against an answer key of object points. */
+export function scoreObjects(objects: ReviewObject[], regions: RasterRegion[], area?: Rect): ObjectScore {
+  const inArea = (r: RasterRegion) => {
+    if (!area) return true;
+    const cx = r.rect.x + r.rect.width / 2, cy = r.rect.y + r.rect.height / 2;
+    return cx >= area.x && cx < area.x + area.width && cy >= area.y && cy < area.y + area.height;
+  };
+  const shown = regions.filter((r) => r.region.kind !== 'unknown' && inArea(r));
+  const hits = objects.map((o) => shown.find((r) => containsPoint(r, o)));
+  const perRegion = new Map<RasterRegion, number>();
+  for (const h of hits) if (h) perRegion.set(h, (perRegion.get(h) ?? 0) + 1);
+  const counted = objects.map((o, i) => ({ o, h: hits[i] })).filter(({ o }) => !o.unsure);
+  return {
+    objects: counted.length,
+    found: counted.filter(({ h }) => h).length,
+    clean: counted.filter(({ h }) => h && perRegion.get(h) === 1).length,
+    regions: shown.length,
+    real: shown.filter((r) => perRegion.has(r)).length,
+  };
+}
+
 export interface FeedbackReplay {
   name: string;
   bundle: FeedbackBundle;
@@ -77,6 +114,10 @@ export interface FeedbackReplay {
   diagnostics: SegmentDiagnostics | null;
   background: BackgroundModel | null;
   marks: MarkJudgement[];
+  /** True when the marks were reviewed: then only marks reviewed 'ok' count in the metrics. */
+  reviewed?: boolean;
+  /** Stored and current result scored against the review's answer key, when it has one. */
+  objects?: { original: ObjectScore; current: ObjectScore };
   placements: PlacementJudgement[];
   boxPhoto: RGBAImage | null;
   box: BoxJudgement | null;
@@ -132,6 +173,8 @@ const cellsOk = (found: CellRef[], truth: CellRef[]): boolean =>
 export interface ReplayOptions {
   /** Skip the box re-detection. */
   skipBox?: boolean;
+  /** Visual review of the marks; without one every mark counts. */
+  review?: FeedbackReview;
 }
 
 /** Re-run the current pipeline on a feedback file and judge every mark, placement and the box. */
@@ -332,6 +375,10 @@ export function replayFeedback(bundle: FeedbackBundle, name: string, opts: Repla
       originalOk: cellsOk(originalCells, p.cells), ok: out.matched && curIds.length > 0 && cellsOk(currentCells, p.cells),
     });
   }
+  if (opts.review) for (const j of out.marks) j.review = opts.review.marks[String(j.index)];
+  const key = opts.review?.objects;
+  if (key?.length) out.objects = { original: scoreObjects(key, origR, opts.review!.area), current: scoreObjects(key, curR, opts.review!.area) };
+  out.reviewed = !!opts.review;
   return out;
 }
 
@@ -376,17 +423,30 @@ export type FeedbackMetrics = Record<string, number>;
 /**
  * Per-file metrics (rates 0..1; keys without any applicable mark are left out so they are neither
  * gated nor averaged): missedFound, falseRemoved, mergedSplit, wrongFixed, placementsTop1, boxError.
+ * With a review only marks reviewed 'ok' count; mergedExact is the share of merged marks with a
+ * reviewed part count that now come out as exactly that many regions. With an answer key:
+ * objectRecall (objects found), objectClean (found alone in their region) and objectPrecision
+ * (regions holding an object).
  */
 export function feedbackMetrics(r: FeedbackReplay): FeedbackMetrics {
   const m: FeedbackMetrics = {};
+  const counts = (j: MarkJudgement) => !r.reviewed || j.review?.verdict === 'ok';
   const rate = (key: string, kind: FeedbackMark['kind'], filter: (j: MarkJudgement) => boolean = () => true) => {
-    const js = r.marks.filter((j) => j.mark.kind === kind && j.fixed !== null && filter(j));
+    const js = r.marks.filter((j) => j.mark.kind === kind && j.fixed !== null && counts(j) && filter(j));
     if (js.length > 0) m[key] = js.filter((j) => j.fixed).length / js.length;
   };
   rate('missedFound', 'missed');
   rate('falseRemoved', 'not_a_piece');
   rate('mergedSplit', 'merged');
+  const exact = r.marks.filter((j) => j.mark.kind === 'merged' && counts(j) && j.review?.parts);
+  if (exact.length > 0) m.mergedExact = exact.filter((j) => j.currentIds.length === j.review!.parts).length / exact.length;
   rate('wrongFixed', 'wrong_place');
+  if (r.objects && r.objects.current.objects > 0) {
+    const o = r.objects.current;
+    m.objectRecall = o.found / o.objects;
+    m.objectClean = o.clean / o.objects;
+    m.objectPrecision = o.regions > 0 ? o.real / o.regions : 1;
+  }
   if (r.placements.length > 0 && r.matched) m.placementsTop1 = r.placements.filter((p) => p.ok).length / r.placements.length;
   if (r.box) m.boxError = r.box.error;
   m.items = r.marks.length + r.placements.length;
@@ -400,6 +460,6 @@ export { regionCenter };
 /** Replay one feedback file from disk and compute its metrics (bench/feedback.eval.ts, tests). */
 export function evaluateFeedbackFile(path: string, opts: ReplayOptions = {}): { replay: FeedbackReplay; metrics: FeedbackMetrics } {
   const name = basename(path).replace(/\.json$/i, '');
-  const replay = replayFeedback(readFeedbackFile(path), name, opts);
+  const replay = replayFeedback(readFeedbackFile(path), name, { ...opts, review: opts.review ?? readReview(path) });
   return { replay, metrics: feedbackMetrics(replay) };
 }

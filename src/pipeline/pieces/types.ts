@@ -30,13 +30,14 @@ export interface BackgroundModel {
    */
   bandFit: number;
   /**
-   * Further table colours (a patterned cloth, the floor beyond the table edge), each with its spread
-   * and the main surface's lightness `refL` where it was measured: under other lighting it scales
-   * with the main surface. Blends of two table colours count as table too. `interior` is the share
-   * of the middle of the photo showing the colour (a pattern spreads over the whole table).
-   * Empty for a plain table.
+   * Further table colours (a patterned cloth, the floor beyond the table edge, a second table), each
+   * with its spread and the main surface's lightness `refL` where it was measured: under other
+   * lighting it scales with the main surface, times its own lighting `light` (a second surface lit
+   * differently: L* + 16 scales by exp(light[0] + light[1]·u + light[2]·v), u, v = −1..1 across the
+   * photo). Blends of two table colours count as table too. `interior` is the share of the middle
+   * of the photo showing the colour (a pattern spreads over the whole table). Empty for a plain table.
    */
-  palette: { color: [number, number, number]; sigma: [number, number, number]; refL: number; interior: number }[];
+  palette: { color: [number, number, number]; sigma: [number, number, number]; refL: number; light: [number, number, number]; interior: number }[];
   /**
    * Local corrections of the table colour (Lab residuals on a coarse grid of cell centres,
    * interpolated bilinearly) where the smooth surface misses local shadows or lighting; absent

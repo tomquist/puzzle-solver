@@ -15,6 +15,7 @@ so changes can be made and judged without manual photo-taking feedback loops.
 | Mobile audit | Playwright device matrix | No horizontal overflow, ≥ 44 px touch targets, ≥ 16 px inputs (no iOS zoom), readable text, reachable primary actions, safe areas — iPhone SE/13, iPad, small Android, Pixel 7, landscape | `npm run test:e2e`, CI |
 | PWA / offline, slow phone | Playwright | Manifest, icons, service worker, offline reload of the production build; 4× CPU throttling keeps progress and taps responsive | `npm run test:e2e`, CI |
 | Real-photo corpus | `npm run bench -- --corpus` | Real photos confirmed by the user still match | locally / CI when present |
+| Feedback replay | `npm run bench` (`bench/feedback.eval.ts`) | Users' feedback files (`test-corpus/feedback/`): reviewed marks stay fixed; answer keys score found / separate / false regions | CI (gate) |
 
 ## Synthetic ground truth
 
@@ -77,3 +78,13 @@ when the user marks a piece as "Placed ✓", that confirmation is a labelled exa
 into `test-corpus/` makes the benchmark re-analyse every stored scan photo and check that each
 confirmed piece is still matched to its confirmed cell (top-1/top-3), so real-world regressions are
 caught automatically.
+
+### Feedback files
+
+"Send feedback" in the app packages a scan photo with what the app found and the user's
+corrections. Committed in scan-only form (`npm run feedback:strip`, no publisher artwork), they are
+replayed by `npm run feedback:inspect` and the benchmark. The user's marks are input, not ground
+truth: every mark is checked by eye first and the verdicts go into `<file>.review.json`
+(test-corpus/feedback/README.md). Where the pieces can be told apart, the review also holds an
+answer key: one by-eye point per piece or assembled group (optionally for part of the photo). It
+catches mistakes nobody marked, such as a regression that drops pieces on an easy photo.

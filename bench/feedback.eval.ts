@@ -5,9 +5,15 @@
  *   missedFound     'missed' points now inside a detected piece / patch
  *   falseRemoved    'not_a_piece' regions no longer detected as piece / patch
  *   mergedSplit     'merged' regions now split into several regions
+ *   mergedExact     'merged' regions now split into exactly the reviewed number of parts
+ *   objectRecall    answer-key objects (review.objects) inside a piece / patch region
+ *   objectClean     answer-key objects alone in their region (not merged with another)
+ *   objectPrecision piece / patch regions holding an answer-key object (the rest are false)
  *   wrongFixed      'wrong_place' marks with a known cell now placed there (top-1)
  *   placementsTop1  confirmed placements still top-1
  *   boxError        largest corner error of detectBox vs. the user's quad (fraction of the diagonal)
+ * Marks are user input: a `<file>.review.json` next to a file records the visual check of each mark
+ * (scripts/feedback/review.ts); with one, only marks reviewed 'ok' count.
  * Gated by bench/baseline.json (suite 'feedback'); `UPDATE_BASELINE=1` records the numbers,
  * `DEBUG_IMAGES=1` also writes the inspection images to .debug/bench/feedback/<file>/.
  */
@@ -16,12 +22,13 @@ import { resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { writeInspection } from '../scripts/feedback/inspect';
 import { evaluateFeedbackFile } from '../scripts/feedback/replay';
+import { isReviewFile } from '../scripts/feedback/review';
 import { DEBUG_IMAGES, REPO_ROOT } from '../src/testing/nodeImageIO';
 import { compareToBaseline, report, saveBaselineSuite, UPDATE_BASELINE, yieldToEventLoop, type MetricRecord } from './lib';
 
 const DIR = resolve(REPO_ROOT, 'test-corpus/feedback');
-const files = existsSync(DIR) ? readdirSync(DIR).filter((f) => f.toLowerCase().endsWith('.json')).sort() : [];
-const COLUMNS = ['items', 'regions', 'missedFound', 'falseRemoved', 'mergedSplit', 'wrongFixed', 'placementsTop1', 'boxError', 'ms'];
+const files = existsSync(DIR) ? readdirSync(DIR).filter((f) => f.toLowerCase().endsWith('.json') && !isReviewFile(f)).sort() : [];
+const COLUMNS = ['items', 'regions', 'missedFound', 'falseRemoved', 'mergedSplit', 'mergedExact', 'objectRecall', 'objectClean', 'objectPrecision', 'wrongFixed', 'placementsTop1', 'boxError', 'ms'];
 const results: Record<string, MetricRecord> = {};
 
 describe('feedback replay', () => {

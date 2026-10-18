@@ -26,6 +26,64 @@ export function offsetPoints(pts: readonly Point[], dx: number, dy: number): Poi
 }
 
 /**
+ * Colour of a (2r+1)² box neighbourhood with each pixel's own brightness, split like a JPEG: luma
+ * (Y = 0.299 R + 0.587 G + 0.114 B) per pixel, the colour differences B − Y and R − Y box-averaged
+ * (separable running sums, replicated borders), then back to RGB. Colour noise and a decoder's
+ * chroma upsampling (phone JPEGs store colour at half resolution anyway) are averaged away while
+ * brightness edges stay sharp.
+ */
+export function smoothChroma(img: RGBAImage, r: number): RGBAImage {
+  if (r < 1) return img;
+  const { width: w, height: h, data: src } = img;
+  if (w < 3 || h < 3) return img;
+  const n = w * h;
+  // Luma / colour-difference split like a JPEG (gamma-encoded values): luma per pixel, the two
+  // colour differences box-averaged (separable running sums, replicated borders).
+  const Y = new Float32Array(n), cb = new Float32Array(n), cr = new Float32Array(n);
+  for (let i = 0, p = 0; i < n; i++, p += 4) {
+    const y = 0.299 * src[p] + 0.587 * src[p + 1] + 0.114 * src[p + 2];
+    Y[i] = y;
+    cb[i] = src[p + 2] - y;
+    cr[i] = src[p] - y;
+  }
+  const tmp = new Float32Array(n);
+  const norm = 1 / ((2 * r + 1) * (2 * r + 1));
+  for (const a of [cb, cr]) {
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      let acc = 0;
+      for (let k = -r; k <= r; k++) acc += a[row + Math.min(w - 1, Math.max(0, k))];
+      for (let x = 0; x < w; x++) {
+        tmp[row + x] = acc;
+        acc += a[row + (x + r + 1 < w ? x + r + 1 : w - 1)] - a[row + (x - r > 0 ? x - r : 0)];
+      }
+    }
+    // Vertical running sums row by row (cache friendly).
+    const col = new Float32Array(w);
+    for (let k = -r; k <= r; k++) {
+      const row = Math.min(h - 1, Math.max(0, k)) * w;
+      for (let x = 0; x < w; x++) col[x] += tmp[row + x];
+    }
+    for (let y = 0; y < h; y++) {
+      const row = y * w, add = (y + r + 1 < h ? y + r + 1 : h - 1) * w, rem = (y - r > 0 ? y - r : 0) * w;
+      for (let x = 0; x < w; x++) {
+        a[row + x] = col[x] * norm;
+        col[x] += tmp[add + x] - tmp[rem + x];
+      }
+    }
+  }
+  const out = new Uint8ClampedArray(n * 4);
+  for (let i = 0, p = 0; i < n; i++, p += 4) {
+    const y = Y[i], R = y + cr[i], B = y + cb[i];
+    out[p] = R;
+    out[p + 1] = (y - 0.299 * R - 0.114 * B) / 0.587;
+    out[p + 2] = B;
+    out[p + 3] = src[p + 3];
+  }
+  return { width: w, height: h, data: out };
+}
+
+/**
  * Separable (2r+1)² box filter of the RGB channels (alpha copied), with replicated borders.
  * Running sums, O(1) per pixel independent of r.
  */
