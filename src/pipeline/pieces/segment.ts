@@ -929,7 +929,7 @@ function maskCentroid(c: Candidate): Point {
  * through smooth pixels (local high-pass energy of the luminance at table level) are given back to
  * the table. Kept only when it leaves piece-sized parts with clearly better outlines.
  */
-function peelSoft(c: Candidate, img: RGBAImage, score: GrayImage, high: number, ra: number, W: number, H: number): Candidate[] | null {
+function peelSoft(c: Candidate, img: RGBAImage, ra: number, W: number, H: number): Candidate[] | null {
   const pad = 6;
   const x0 = Math.max(0, c.bbox.x - pad), y0 = Math.max(0, c.bbox.y - pad);
   const x1 = Math.min(W, c.bbox.x + c.bbox.width + pad), y1 = Math.min(H, c.bbox.y + c.bbox.height + pad);
@@ -972,14 +972,11 @@ function peelSoft(c: Candidate, img: RGBAImage, score: GrayImage, high: number, 
     }
   }
   const rest = createMask(w, h);
-  let removed = 0, removedWeak = 0;
+  let removed = 0;
   for (let i = 0; i < w * h; i++) {
     if (!m.data[i]) continue;
-    if (flooded[i]) {
-      removed++;
-      const x = i % w, y = (i - x) / w;
-      if (score.data[(y + y0) * W + x + x0] < high) removedWeak++;
-    } else rest.data[i] = 1;
+    if (flooded[i]) removed++;
+    else rest.data[i] = 1;
   }
   if (globalThis.process?.env?.PEELDBG) globalThis.console.log('PEEL', JSON.stringify(c.bbox), (c.area / ra).toFixed(2), 'removed', (removed / c.area).toFixed(2));
   if (removed < 0.08 * c.area) return null;
@@ -988,15 +985,9 @@ function peelSoft(c: Candidate, img: RGBAImage, score: GrayImage, high: number, 
   const parts = stats
     .filter((st) => st.area >= 0.5 * ra)
     .map((st) => makeCandidate(componentMask(labels, w, st.label, st.bbox), { x: st.bbox.x + x0, y: st.bbox.y + y0, width: st.bbox.width, height: st.bbox.height }, W, H, st.area, SHAPE_MAX_PIECES * ra));
-  // Larger than a piece, nearly all of it soft and nothing piece-sized left: a glare halo or a
-  // shadow (with at most a piece as featureless as the light on it), not a region. (A single
-  // piece on a busy table may look soft all over.)
-  if (parts.length === 0) return removed >= SOFT_ONLY * c.area && c.area >= SOFT_MIN_PIECES * ra ? [] : null;
+  if (parts.length === 0) return null;
   const before = c.shape?.confidence ?? 0;
-  // Kept when it gives a clearly better piece outline, or when what it takes away is weak table-like
-  // colour as well as soft (a lit or shaded patch of table hanging on to pieces).
-  const ok = Math.max(...parts.map((p) => p.shape?.confidence ?? 0)) >= Math.max(0.6, before + 0.2) || removedWeak >= PEEL_WEAK_SHARE * removed;
-  if (globalThis.process?.env?.PEELDBG) globalThis.console.log('  PEEL parts', parts.map((p) => (p.area / ra).toFixed(2) + '/' + (p.shape?.confidence ?? 0).toFixed(2)).join(','), 'before', before.toFixed(2), ok, 'weak', (removedWeak / Math.max(1, removed)).toFixed(2));
+  const ok = Math.max(...parts.map((p) => p.shape?.confidence ?? 0)) >= Math.max(0.6, before + 0.2);
   return ok ? parts : null;
 }
 
@@ -1244,12 +1235,6 @@ function bodyAspect(s: PieceShape): number {
 /** Largest cluster (piece areas) whose neck split may be replaced by a cut along the edges. */
 const EDGE_RECUT_MAX_PIECES = 4;
 
-/** Share of a region peeled off as soft from which, with no piece-sized rest, it is dropped. */
-const SOFT_ONLY = 0.75;
-/** Share of weak pixels (below the high threshold) in a peeled-off area from which the peel is kept as table. */
-const PEEL_WEAK_SHARE = Number(globalThis.process?.env?.PWS ?? 0.8);
-/** Smallest region (piece areas) dropped as all soft. */
-const SOFT_MIN_PIECES = 1.5;
 /** Largest region (piece areas) whose soft halo or shadow is peeled off. */
 const PEEL_MAX_PIECES = 8;
 /** Largest part (piece areas) of a split that is split again at wider necks. */
@@ -1486,14 +1471,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
       const ra = refAreaAt(c);
       // (Not clusters of many pieces: peeling them is slow and changes little.)
       const doubtful = !c.touchesBorder && c.area >= 0.6 * ra && c.area <= PEEL_MAX_PIECES * ra && (c.area > 1.3 * ra || !c.shape || c.shape.confidence < 0.7);
-      const peeled = doubtful ? peelSoft(c, scored, score, th.high, ra, W, H) : null;
-      if (peeled && peeled.length === 0 && globalThis.process?.env?.PEELDBG) {
-        let strong = 0;
-        const { x: bx, y: by, width: bw, height: bh } = c.bbox;
-        for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) if (c.mask.data[y * bw + x] && score.data[(y + by) * W + x + bx] >= th.high) strong++;
-        globalThis.console.log('SOFTDROP', JSON.stringify(c.bbox), (c.area / ra).toFixed(2), 'strong', (strong / c.area).toFixed(2));
-      }
-      out.push(...(peeled ?? [c]));
+      out.push(...((doubtful ? peelSoft(c, scored, ra, W, H) : null) ?? [c]));
     }
     cands = out;
   }

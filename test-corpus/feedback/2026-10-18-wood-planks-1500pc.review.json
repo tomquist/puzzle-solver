@@ -1,11 +1,115 @@
 {
   "reviewed": "2026-10-18",
   "marks": {
-    "1": { "verdict": "ok", "note": "dark piece lying across a plank gap" },
-    "2": { "verdict": "ok", "note": "pink and dark piece; tap near its right edge" },
-    "3": { "verdict": "ok", "note": "dark grey piece lying across a plank gap" },
-    "4": { "verdict": "ok", "note": "dark green piece; tap a few px outside its left edge" },
-    "5": { "verdict": "ok", "note": "grey piece; tap in the notch at its top edge" },
-    "6": { "verdict": "ok", "note": "small pink and dark piece" }
-  }
+    "1": {
+      "verdict": "ok",
+      "note": "dark piece lying across a plank gap"
+    },
+    "2": {
+      "verdict": "ok",
+      "note": "pink and dark piece; tap near its right edge"
+    },
+    "3": {
+      "verdict": "ok",
+      "note": "dark grey piece lying across a plank gap"
+    },
+    "4": {
+      "verdict": "ok",
+      "note": "dark green piece; tap a few px outside its left edge"
+    },
+    "5": {
+      "verdict": "ok",
+      "note": "grey piece; tap in the notch at its top edge"
+    },
+    "6": {
+      "verdict": "ok",
+      "note": "small pink and dark piece"
+    }
+  },
+  "objects": [
+    {
+      "x": 1153,
+      "y": 218
+    },
+    {
+      "x": 674,
+      "y": 158,
+      "note": "M1"
+    },
+    {
+      "x": 483,
+      "y": 334
+    },
+    {
+      "x": 932,
+      "y": 330
+    },
+    {
+      "x": 1370,
+      "y": 453
+    },
+    {
+      "x": 649,
+      "y": 709,
+      "note": "purple piece lying across a plank gap"
+    },
+    {
+      "x": 325,
+      "y": 786,
+      "note": "assembled pair (purple and dark)"
+    },
+    {
+      "x": 897,
+      "y": 837
+    },
+    {
+      "x": 1175,
+      "y": 921,
+      "note": "assembled 2x2 group (grey above, dark grey below)"
+    },
+    {
+      "x": 390,
+      "y": 1256,
+      "note": "assembled pink pair"
+    },
+    {
+      "x": 905,
+      "y": 1251,
+      "note": "assembled group, pink with a dark piece below"
+    },
+    {
+      "x": 1318,
+      "y": 1518,
+      "note": "assembled column of 3 (pink-and-dark top piece, two dark pieces)"
+    },
+    {
+      "x": 306,
+      "y": 1707
+    },
+    {
+      "x": 717,
+      "y": 1778,
+      "note": "piece across a plank gap"
+    },
+    {
+      "x": 1128,
+      "y": 1855,
+      "note": "M3"
+    },
+    {
+      "x": 1563,
+      "y": 2096,
+      "note": "M6"
+    },
+    {
+      "x": 1179,
+      "y": 2203,
+      "note": "M5"
+    },
+    {
+      "x": 916,
+      "y": 2336,
+      "note": "M4"
+    }
+  ]
 }
