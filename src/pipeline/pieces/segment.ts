@@ -595,11 +595,12 @@ const HALO_WRAP = 0.75;
 /** Parts of an edge split below this (piece areas) on both sides of a cut may be halves of one piece. */
 const HALF_PART = 0.65;
 /**
- * Colour score (multiple of the high threshold, and share of the cluster's median score) from which
- * pixels belong to a piece's core: cast shadows and colour bled into the table between pieces lying
- * close together score far lower than the pieces themselves.
+ * Colour score (multiple of the high threshold) from which pixels belong to a piece's core: cast
+ * shadows and colour bled into the table between pieces lying close together score far lower than
+ * the pieces themselves.
  */
 const VALLEY_CORE = 2;
+/** Share of the cluster's median colour score that a piece's core reaches as well. */
 const VALLEY_SHARE = 0.4;
 /** Most pieces a cluster is split into along edges. */
 const MAX_EDGE_SPLIT = 12;
@@ -732,52 +733,20 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
       viaValley = true;
     }
   }
+  // Marker labels 1..n and the blob each came from (0: k-means markers).
+  const blobOf: number[] = [0];
+  // (A part of several pieces is split in turn by the caller.)
   if (big.length >= 2 && big.length <= MAX_EDGE_SPLIT) {
     viaGap = !viaValley;
-    big.forEach((st, n) => {
-      for (let i = 0; i < labels.length; i++) if (comps.labels[i] === st.label) labels[i] = n + 1;
+    big.forEach((st, b) => {
+      blobOf.push(b + 1);
+      for (let i = 0; i < labels.length; i++) if (comps.labels[i] === st.label) labels[i] = b + 1;
     });
   } else {
-    // Markers 2: k-means of interior pixel positions (farthest-point start).
-    const dt = distanceTransform(c.mask).data;
-    const pts: number[] = [];
-    const stride = Math.max(1, Math.round(Math.sqrt(c.area / 40000)));
-    for (let y = 0; y < h; y += stride) for (let x = 0; x < w; x += stride) if (dt[y * w + x] >= 0.12 * body) pts.push(y * w + x);
-    if (pts.length < 10 * k) return null;
-    const cx: number[] = [], cy: number[] = [];
-    let far = pts[0], farD = -1;
-    for (const i of pts) if (dt[i] > farD) { farD = dt[i]; far = i; }
-    cx.push(far % w); cy.push(Math.floor(far / w));
-    while (cx.length < k) {
-      let bi = pts[0], bd = -1;
-      for (const i of pts) {
-        const x = i % w, y = (i - x) / w;
-        let d = Infinity;
-        for (let m = 0; m < cx.length; m++) d = Math.min(d, (x - cx[m]) ** 2 + (y - cy[m]) ** 2);
-        if (d > bd) { bd = d; bi = i; }
-      }
-      cx.push(bi % w); cy.push(Math.floor(bi / w));
-    }
-    for (let iter = 0; iter < 10; iter++) {
-      const sx = new Float64Array(k), sy = new Float64Array(k), n = new Float64Array(k);
-      for (const i of pts) {
-        const x = i % w, y = (i - x) / w;
-        let best = 0, bd = Infinity;
-        for (let m = 0; m < k; m++) {
-          const d = (x - cx[m]) ** 2 + (y - cy[m]) ** 2;
-          if (d < bd) { bd = d; best = m; }
-        }
-        sx[best] += x; sy[best] += y; n[best]++;
-      }
-      for (let m = 0; m < k; m++) if (n[m] > 0) { cx[m] = sx[m] / n[m]; cy[m] = sy[m] / n[m]; }
-    }
-    const r2 = (0.15 * body) ** 2;
-    pts.forEach((i) => {
-      const x = i % w, y = (i - x) / w;
-      for (let m = 0; m < k; m++) if ((x - cx[m]) ** 2 + (y - cy[m]) ** 2 <= r2) { labels[i] = m + 1; break; }
-    });
+    if (!kMeansMarkers(c.mask, k, body, labels, 1)) return null;
+    for (let m = 0; m < k; m++) blobOf.push(0);
   }
-  const nLabels = viaGap || viaValley ? big.length : k;
+  const nLabels = blobOf.length - 1;
   watershed(c.mask, colourGradient(img, c.bbox), labels);
   const n = nLabels;
   // Shared boundary per pair of labels, with the crease strength along it.
@@ -872,12 +841,15 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
     if (!pa || !pb) continue;
     const ca = pa.shape?.confidence ?? 0, cb = pb.shape?.confidence ?? 0;
     const crease = median(v);
-    const evidence = ((crease >= CREASE_MIN || viaValley) && mixed) || viaGap || (Math.max(ca, cb) >= 0.7 && (Math.min(ca, cb) >= UNCERTAIN_CONFIDENCE || c.secondPeak > TOUCHING_SECOND_PEAK));
+    // Parts from separate blobs: apart before closing, or (pieces at their own angles) apart in their cores.
+    const sepBlob = blobOf[a] !== blobOf[b];
+    const apart = sepBlob && (viaGap || (viaValley && (mixed || c.secondPeak > TOUCHING_SECOND_PEAK)));
+    const evidence = (crease >= CREASE_MIN && mixed) || apart || (Math.max(ca, cb) >= 0.7 && (Math.min(ca, cb) >= UNCERTAIN_CONFIDENCE || c.secondPeak > TOUCHING_SECOND_PEAK));
     // A part with a faint outline wrapped around its neighbour is that piece's glare halo or shadow.
     const wrap = v.length / Math.max(1, Math.min(polygonPerimeter(pa.contour), polygonPerimeter(pb.contour)));
     const halo = wrap >= HALO_WRAP && Math.min(edgeScore[a], edgeScore[b]) < high;
     // Two neighbours both well below a piece that make one together: one piece given two markers.
-    const halves = !viaGap && area[a] < HALF_PART * ra && area[b] < HALF_PART * ra && area[a] + area[b] <= 1.35 * ra;
+    const halves = !(viaGap && sepBlob) && area[a] < HALF_PART * ra && area[b] < HALF_PART * ra && area[a] + area[b] <= 1.35 * ra;
     if (!evidence || halves || halo || onOneGrid(pa, pb, c, body)) root[find(a)] = find(b);
   }
   const groups = new Map<number, number[]>();
@@ -887,19 +859,71 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
   }
   if (groups.size < 2) return null;
   const out: Candidate[] = [];
+  // Parts below half a piece are kept only when a gap sets them apart (a whole blob of their own).
+  let tooSmall = false;
   for (const members of groups.values()) {
-    if (members.length === 1) {
-      const pc = parts.get(members[0]);
-      if (pc) out.push(pc);
-      continue;
+    const blob = blobOf[members[0]];
+    const ownBlob = viaGap && blob > 0 && live.every((l) => (blobOf[l] === blob) === members.includes(l));
+    let pc: Candidate | null;
+    if (members.length === 1) pc = parts.get(members[0]) ?? null;
+    else {
+      const r = members[0];
+      for (const l of members) for (let i = 0; i < labels.length; i++) if (labels[i] === l) labels[i] = r;
+      pc = partOf(r);
     }
-    const r = members[0];
-    for (const l of members) for (let i = 0; i < labels.length; i++) if (labels[i] === l) labels[i] = r;
-    const pc = partOf(r);
-    if (pc) out.push(pc);
+    if (!pc) continue;
+    if (pc.area < 0.5 * ra && !ownBlob) tooSmall = true;
+    out.push(pc);
   }
-  if (out.length < 2 || out.some((p) => p.area < 0.5 * ra)) return null;
+  if (out.length < 2 || tooSmall) return null;
   return out;
+}
+
+/**
+ * Markers for `k` pieces in `region` (a mask in the cluster's frame): k-means of its interior pixel
+ * positions (farthest-point start at the deepest point), a disc of 0.15 body sizes around each
+ * centre, labelled `first`, `first + 1`, …. False when the region has too few interior points.
+ */
+function kMeansMarkers(region: Mask, k: number, body: number, labels: Int32Array, first: number): boolean {
+  const { width: w, height: h } = region;
+  const dt = distanceTransform(region).data;
+  const pts: number[] = [];
+  const stride = Math.max(1, Math.round(Math.sqrt(maskArea(region) / 40000)));
+  for (let y = 0; y < h; y += stride) for (let x = 0; x < w; x += stride) if (dt[y * w + x] >= 0.12 * body) pts.push(y * w + x);
+  if (pts.length < 10 * k) return false;
+  const cx: number[] = [], cy: number[] = [];
+  let far = pts[0], farD = -1;
+  for (const i of pts) if (dt[i] > farD) { farD = dt[i]; far = i; }
+  cx.push(far % w); cy.push(Math.floor(far / w));
+  while (cx.length < k) {
+    let bi = pts[0], bd = -1;
+    for (const i of pts) {
+      const x = i % w, y = (i - x) / w;
+      let d = Infinity;
+      for (let m = 0; m < cx.length; m++) d = Math.min(d, (x - cx[m]) ** 2 + (y - cy[m]) ** 2);
+      if (d > bd) { bd = d; bi = i; }
+    }
+    cx.push(bi % w); cy.push(Math.floor(bi / w));
+  }
+  for (let iter = 0; iter < 10; iter++) {
+    const sx = new Float64Array(k), sy = new Float64Array(k), n = new Float64Array(k);
+    for (const i of pts) {
+      const x = i % w, y = (i - x) / w;
+      let best = 0, bd = Infinity;
+      for (let m = 0; m < k; m++) {
+        const d = (x - cx[m]) ** 2 + (y - cy[m]) ** 2;
+        if (d < bd) { bd = d; best = m; }
+      }
+      sx[best] += x; sy[best] += y; n[best]++;
+    }
+    for (let m = 0; m < k; m++) if (n[m] > 0) { cx[m] = sx[m] / n[m]; cy[m] = sy[m] / n[m]; }
+  }
+  const r2 = (0.15 * body) ** 2;
+  for (const i of pts) {
+    const x = i % w, y = (i - x) / w;
+    for (let m = 0; m < k; m++) if ((x - cx[m]) ** 2 + (y - cy[m]) ** 2 <= r2) { labels[i] = first + m; break; }
+  }
+  return true;
 }
 
 /**
@@ -1162,6 +1186,69 @@ function snapOutline(c: Candidate, img: RGBAImage, score: GrayImage, high: numbe
   const main = stats.reduce((a, b) => (b.area > a.area ? b : a));
   if (main.area < 0.85 * c.area) return null;
   return { ...makeCandidate(componentMask(labels, w, main.label, main.bbox), { x: main.bbox.x + x0, y: main.bbox.y + y0, width: main.bbox.width, height: main.bbox.height }, W, H, main.area), group: c.group, merged: c.merged };
+}
+
+/** Lightness above the table (its sigmas) from which a pixel in the table's hue may be glare. */
+const GLARE_MIN_L = 2.5;
+/** Share of glare pixels (see glareShare) from which glare is peeled off a region that may hold a piece. */
+const GLARE_PEEL_SHARE = 0.25;
+
+/**
+ * Glare test for photo pixels: lighter than the table there (GLARE_MIN_L sigmas) and in the table's
+ * hue or paler (table colours cached per 8×8 block).
+ */
+function glareTest(img: RGBAImage, fit: BackgroundFit, W: number): (X: number, Y: number) => boolean {
+  const cache = new Map<number, { L: number; colours: ReturnType<typeof tableChromasAt> }>();
+  return (X, Y) => {
+    const key = (Y >> 3) * 8192 + (X >> 3);
+    let t = cache.get(key);
+    if (!t) cache.set(key, (t = { L: backgroundAt(fit, X, Y)[0], colours: tableChromasAt(fit, X, Y) }));
+    const o = (Y * W + X) * 4;
+    const lab = rgbToLab(img.data[o], img.data[o + 1], img.data[o + 2]);
+    return lab[0] - t.L > GLARE_MIN_L * fit.sigma[0] && tableChromaDistance(t.colours, lab[1], lab[2]) <= PEEL_CHROMA;
+  };
+}
+
+/** Share of a region's pixels that look like glare (see glareTest); every second pixel and row. */
+function glareShare(c: Candidate, img: RGBAImage, fit: BackgroundFit, W: number): number {
+  const { width: w, height: h } = c.mask;
+  const isGlare = glareTest(img, fit, W);
+  let n = 0, glare = 0;
+  for (let y = 0; y < h; y += 2) {
+    for (let x = 0; x < w; x += 2) {
+      if (!c.mask.data[y * w + x]) continue;
+      n++;
+      if (isGlare(x + c.bbox.x, y + c.bbox.y)) glare++;
+    }
+  }
+  return n > 0 ? glare / n : 0;
+}
+
+/**
+ * Peel glare off a region that holds a piece next to a glare patch: the glare pixels go back to the
+ * table, specks left between them are opened away, and what remains in piece-sized parts is kept
+ * when one of them shows a piece outline. Null when there is too little glare or no outline appears.
+ */
+function peelGlare(c: Candidate, img: RGBAImage, fit: BackgroundFit, ra: number, W: number, H: number): Candidate[] | null {
+  const { width: w, height: h } = c.mask;
+  const isGlare = glareTest(img, fit, W);
+  const rest = cloneMask(c.mask);
+  let removed = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!c.mask.data[y * w + x] || !isGlare(x + c.bbox.x, y + c.bbox.y)) continue;
+      rest.data[y * w + x] = 0;
+      removed++;
+    }
+  }
+  if (removed < 0.2 * c.area) return null;
+  const cleaned = fillHoles(open(rest, 2));
+  const { labels, stats } = labelComponents(cleaned, 8);
+  const parts = stats
+    .filter((st) => st.area >= 0.5 * ra)
+    .map((st) => makeCandidate(componentMask(labels, w, st.label, st.bbox), { x: st.bbox.x + c.bbox.x, y: st.bbox.y + c.bbox.y, width: st.bbox.width, height: st.bbox.height }, W, H, st.area, SHAPE_MAX_PIECES * ra));
+  if (!parts.some((p) => (p.shape?.confidence ?? 0) >= REFERENCE_CONFIDENCE)) return null;
+  return parts;
 }
 
 /** Width (body sizes) of the outer band searched for a soft cast shadow around a dark piece. */
@@ -1646,7 +1733,13 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
       const ra = refAreaAt(c);
       // (Not clusters of many pieces: peeling them is slow and changes little.)
       const doubtful = !c.touchesBorder && c.area >= 0.6 * ra && c.area <= PEEL_MAX_PIECES * ra && (c.area > 1.3 * ra || !c.shape || c.shape.confidence < 0.7);
-      out.push(...((doubtful ? peelSoft(c, scored, fit, ra, W, H) : null) ?? [c]));
+      if (!doubtful) {
+        out.push(c);
+        continue;
+      }
+      // (Glare is only looked for where a fair share of the region looks like it.)
+      const glare = () => (glareShare(c, scored, fit, W) >= GLARE_PEEL_SHARE ? peelGlare(c, scored, fit, ra, W, H) : null);
+      out.push(...(peelSoft(c, scored, fit, ra, W, H) ?? glare() ?? [c]));
     }
     cands = out;
   }

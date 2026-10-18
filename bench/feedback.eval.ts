@@ -14,15 +14,19 @@
  *   boxError        largest corner error of detectBox vs. the user's quad (fraction of the diagonal)
  * Marks are user input: a `<file>.review.json` next to a file records the visual check of each mark
  * (scripts/feedback/review.ts); with one, only marks reviewed 'ok' count.
+ * Scan photos from Chromium browsers are decoded with Playwright's Chromium, as on the phone (JPEG
+ * decoders differ by a level or two, enough to flip borderline decisions); others with jpeg-js.
  * Gated by bench/baseline.json (suite 'feedback'); `UPDATE_BASELINE=1` records the numbers,
  * `DEBUG_IMAGES=1` also writes the inspection images to .debug/bench/feedback/<file>/.
  */
 import { existsSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { chromiumDecoder, fromChromium, type ChromiumDecoder } from '../scripts/feedback/chromium';
 import { writeInspection } from '../scripts/feedback/inspect';
-import { evaluateFeedbackFile } from '../scripts/feedback/replay';
-import { isReviewFile } from '../scripts/feedback/review';
+import { readFeedbackFile } from '../scripts/feedback/io';
+import { feedbackMetrics, replayFeedback } from '../scripts/feedback/replay';
+import { isReviewFile, readReview } from '../scripts/feedback/review';
 import { DEBUG_IMAGES, REPO_ROOT } from '../src/testing/nodeImageIO';
 import { compareToBaseline, report, saveBaselineSuite, UPDATE_BASELINE, yieldToEventLoop, type MetricRecord } from './lib';
 
@@ -36,10 +40,20 @@ describe('feedback replay', () => {
     it.skip('no feedback files in test-corpus/feedback/', () => {});
     return;
   }
+  let chrome: ChromiumDecoder | null = null;
+  beforeAll(async () => {
+    chrome = await chromiumDecoder();
+  }, 60_000);
   for (const file of files) {
     it(file, async () => {
       await yieldToEventLoop();
-      const { replay, metrics } = evaluateFeedbackFile(resolve(DIR, file));
+      const path = resolve(DIR, file);
+      const bundle = readFeedbackFile(path);
+      const chromiumFile = !!bundle.scan && fromChromium(bundle.app.userAgent);
+      if (chromiumFile && !chrome) throw new Error('Chromium is needed to decode this file as on the phone: npx playwright install chromium');
+      const scanPhoto = chromiumFile ? await chrome!.decode(bundle.scan!.photo) : undefined;
+      const replay = replayFeedback(bundle, file.replace(/\.json$/i, ''), { review: readReview(path), scanPhoto });
+      const metrics = feedbackMetrics(replay);
       results[file] = metrics;
       if (DEBUG_IMAGES) writeInspection(replay, resolve(REPO_ROOT, '.debug/bench/feedback', replay.name));
       if (UPDATE_BASELINE) return;
@@ -47,7 +61,8 @@ describe('feedback replay', () => {
       expect(problems, problems.join('\n')).toEqual([]);
     });
   }
-  afterAll(() => {
+  afterAll(async () => {
+    await chrome?.close();
     console.log('\n' + report('feedback', results, COLUMNS) + '\n');
     if (UPDATE_BASELINE) saveBaselineSuite('feedback', results);
   });

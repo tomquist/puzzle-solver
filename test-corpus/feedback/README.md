@@ -9,7 +9,8 @@ puzzle picture and box photo.
   file and writes annotated images to `.debug/feedback/` plus a summary. Files from Chromium
   browsers are decoded with Playwright's Chromium (`--decoder auto`, the default): JPEG decoders
   differ by a level or two, which can change segmentation, and since the app analyses the stored
-  JPEG this reproduces exactly what the phone saw. The benchmark uses jpeg-js.
+  JPEG this reproduces exactly what the phone saw. The benchmark decodes the same way (it needs
+  Playwright's Chromium: `npx playwright install chromium`).
 - `npm run bench` replays every file here and checks the corrections stay fixed
   (bench/feedback.eval.ts, gated by bench/baseline.json).
 
