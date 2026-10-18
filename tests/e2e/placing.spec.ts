@@ -348,6 +348,37 @@ test('result screen: full-screen photo – select inside, close, the selection s
   await expect(fs).toHaveCount(0);
 });
 
+test('result screen: Details from the full-screen view, then the other pages still scroll', async ({ page, browserName }) => {
+  await createPuzzleWithLinks(page);
+  const key = (await page.getByTestId('link').first().getAttribute('data-a'))!;
+  const fs = page.getByTestId('fullscreen');
+  await page.getByTestId('open-fullscreen-photo').click();
+  await fs.getByTestId(`item-${key}`).click();
+  // Details leave the full-screen view for a sheet of the page (both lock the page's scrolling).
+  await fs.getByTestId('selection-details').click();
+  const sheet = page.getByRole('dialog');
+  await expect(sheet.getByTestId('detail-connections')).toBeVisible();
+  await expect(fs).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(sheet).toBeHidden();
+  expect(await page.evaluate(() => document.body.style.overflow)).toBe('');
+
+  // The tabs are the same page (no reload): they scroll.
+  const puzzleHash = new URL(page.url()).hash.replace(/\/scan\/.*$/, '');
+  for (const tab of ['settings', 'history'] as const) {
+    await page.evaluate((h) => (location.hash = h), `${puzzleHash}/${tab}`);
+    await expect(page.getByTestId(`tab-${tab}`)).toBeVisible();
+    expect(await page.evaluate(() => getComputedStyle(document.body).overflowY)).not.toBe('hidden');
+    if (browserName === 'webkit') continue; // no wheel on mobile WebKit
+    await page.evaluate(() => document.body.appendChild(Object.assign(document.createElement('div'), { id: 'tall', style: 'height:3000px' })));
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.mouse.move(100, 300);
+    await page.mouse.wheel(0, 400);
+    await expect.poll(() => page.evaluate(() => window.scrollY), { message: `${tab} scrolls` }).toBeGreaterThan(100);
+    await page.evaluate(() => document.getElementById('tall')?.remove());
+  }
+});
+
 /**
  * Chain four loose pieces of the stored mock scan (a "neighbors" group of them whose cells don't
  * touch links them one after the other) and reload. Returns the chain's item keys in order.
