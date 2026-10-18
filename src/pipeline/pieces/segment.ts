@@ -592,6 +592,13 @@ const GRID_TOLERANCE = 0.3;
 const HALO_WRAP = 0.75;
 /** Parts of an edge split below this (piece areas) on both sides of a cut may be halves of one piece. */
 const HALF_PART = 0.65;
+/**
+ * Colour score (multiple of the high threshold, and share of the cluster's median score) from which
+ * pixels belong to a piece's core: cast shadows and colour bled into the table between pieces lying
+ * close together score far lower than the pieces themselves.
+ */
+const VALLEY_CORE = 2;
+const VALLEY_SHARE = 0.4;
 /** Most pieces a cluster is split into along edges. */
 const MAX_EDGE_SPLIT = 12;
 
@@ -697,11 +704,34 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
     }
   }
   // Holes inside a piece (dark print) are filled; gaps between pieces open to the outside and stay.
-  const comps = labelComponents(open(fillHoles(sub), 1), 4);
-  const big = comps.stats.filter((st) => st.area >= 0.3 * ra);
-  let viaGap = false;
+  let comps = labelComponents(open(fillHoles(sub), 1), 4);
+  let big = comps.stats.filter((st) => st.area >= 0.3 * ra);
+  let viaGap = false, viaValley = false;
+  if (big.length < 2) {
+    // Markers 1b: the strongly coloured cores of the pieces, apart where a band of weaker colour
+    // (a cast shadow, colour bled into the table) fills the gap between them.
+    const vals: number[] = [];
+    for (let y = 0; y < h; y += 2) {
+      for (let x = 0; x < w; x += 2) if (c.mask.data[y * w + x]) vals.push(score.data[(y + by) * W + x + bx]);
+    }
+    const level = Math.max(VALLEY_CORE * high, VALLEY_SHARE * median(vals));
+    const core = createMask(w, h);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        core.data[i] = c.mask.data[i] && score.data[(y + by) * W + x + bx] >= level ? 1 : 0;
+      }
+    }
+    const cc = labelComponents(open(fillHoles(core), 2), 4);
+    const cores = cc.stats.filter((st) => st.area >= 0.3 * ra);
+    if (cores.length >= 2) {
+      comps = cc;
+      big = cores;
+      viaValley = true;
+    }
+  }
   if (big.length >= 2 && big.length <= MAX_EDGE_SPLIT) {
-    viaGap = true;
+    viaGap = !viaValley;
     big.forEach((st, n) => {
       for (let i = 0; i < labels.length; i++) if (comps.labels[i] === st.label) labels[i] = n + 1;
     });
@@ -745,7 +775,7 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
       for (let m = 0; m < k; m++) if ((x - cx[m]) ** 2 + (y - cy[m]) ** 2 <= r2) { labels[i] = m + 1; break; }
     });
   }
-  const nLabels = viaGap ? big.length : k;
+  const nLabels = viaGap || viaValley ? big.length : k;
   watershed(c.mask, colourGradient(img, c.bbox), labels);
   const n = nLabels;
   // Shared boundary per pair of labels, with the crease strength along it.
@@ -839,7 +869,7 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
     if (!pa || !pb) continue;
     const ca = pa.shape?.confidence ?? 0, cb = pb.shape?.confidence ?? 0;
     const crease = median(v);
-    const evidence = (crease >= CREASE_MIN && mixed) || viaGap || (Math.max(ca, cb) >= 0.7 && (Math.min(ca, cb) >= UNCERTAIN_CONFIDENCE || c.secondPeak > TOUCHING_SECOND_PEAK));
+    const evidence = (crease >= CREASE_MIN && mixed) || viaGap || viaValley || (Math.max(ca, cb) >= 0.7 && (Math.min(ca, cb) >= UNCERTAIN_CONFIDENCE || c.secondPeak > TOUCHING_SECOND_PEAK));
     // A part with a faint outline wrapped around its neighbour is that piece's glare halo or shadow.
     const wrap = v.length / Math.max(1, Math.min(polygonPerimeter(pa.contour), polygonPerimeter(pb.contour)));
     const halo = wrap >= HALO_WRAP && Math.min(edgeScore[a], edgeScore[b]) < high;
