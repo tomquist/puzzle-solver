@@ -1,13 +1,14 @@
 /**
- * Stability of the segmentation on dense layouts: the same photo with a little extra sensor noise or
- * re-encoded as JPEG must give (nearly) the same regions. Every decision that depends on the data
- * (threshold, table colours, reference size, splits) flips on such scenes if it is not robust.
+ * Stability of the segmentation on dense layouts: the same photo with a little extra sensor noise,
+ * re-encoded as JPEG, or decoded by another JPEG decoder (a browser's smooth chroma upsampling instead
+ * of jpeg-js's replication) must give (nearly) the same regions. Every decision that depends on the
+ * data (threshold, table colours, reference size, splits) flips on such scenes if it is not robust.
  */
 import { describe, expect, it } from 'vitest';
 import type { RGBAImage } from '../../cv/image';
 import { resizeRGBA } from '../../cv/resize';
 import { loadTestAsset } from '../../testing/nodeImageIO';
-import { generateJigsaw, jpegRoundTrip, renderPiecesPhoto, Rng } from '../../testing/synth';
+import { chromaResample, generateJigsaw, jpegRoundTrip, renderPiecesPhoto, Rng } from '../../testing/synth';
 import { segmentPieces } from './segment';
 import type { Segmentation } from './types';
 
@@ -73,7 +74,7 @@ function agreement(a: Int32Array, b: Int32Array): number {
 }
 
 describe('segmentPieces stability', () => {
-  it('gives the same regions on a dense scene with extra noise or JPEG re-encoding', () => {
+  it('gives the same regions on a dense scene with extra noise, JPEG re-encoding or another decoder', () => {
     const lines: string[] = [];
     for (const seed of [1, 2, 4]) {
       const { photo, truth } = denseScene(seed);
@@ -82,7 +83,13 @@ describe('segmentPieces stability', () => {
       const baseL = labelMap(base, W, H);
       // About one region per loose piece or assembled group.
       expect(Math.abs(base.regions.length - truth.length)).toBeLessThanOrEqual(0.15 * truth.length);
-      for (const [name, img] of [['noise ±2', withNoise(photo, 2, 1000 + seed)], ['jpeg q90', jpegRoundTrip(photo, 90)]] as const) {
+      const variants = [
+        ['noise ±2', withNoise(photo, 2, 1000 + seed)],
+        ['jpeg q90', jpegRoundTrip(photo, 90)],
+        // The photo is a jpeg-js decode (chroma replicated); a browser interpolates it instead.
+        ['fancy chroma', chromaResample(photo, 'fancy')],
+      ] as const;
+      for (const [name, img] of variants) {
         const seg = segmentPieces(img);
         const agree = agreement(baseL, labelMap(seg, W, H));
         lines.push(`seed ${seed} ${name}: regions ${base.regions.length} -> ${seg.regions.length}, agreement ${agree.toFixed(2)}`);
@@ -91,5 +98,5 @@ describe('segmentPieces stability', () => {
       }
     }
     console.log(`stability on dense scenes (truth ≈ 29 items):\n${lines.join('\n')}`);
-  }, 60_000);
+  }, 90_000);
 });

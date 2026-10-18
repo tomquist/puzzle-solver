@@ -553,6 +553,8 @@ function fitOwnLight(s: Samples, fit: BackgroundFit, idx: readonly number[], p: 
   return [g[0], g[1], g[2]];
 }
 
+/** Allowance (Lab units: L, a, b) on top of twice the main surface's local spread for a further plain paint. */
+const PLAIN_FLOOR = [0.6, 0.4, 0.4];
 /** Share of a candidate table colour in piece-sized areas from which, unless surfaces hold more, it is no table colour. */
 const PIECE_BLOB_SHARE = 0.2;
 /** Smallest share of the photo of a component that shows a surface (larger than any piece lying there). */
@@ -677,6 +679,12 @@ function findPalette(s: Samples, fit: BackgroundFit): void {
     return [(s.lab[i * 3] + 16) / f - 16, s.lab[i * 3 + 1] / f, s.lab[i * 3 + 2] / f];
   };
   const mainSigma: [number, number, number] = [fit.sigma[0], fit.sigma[1], fit.sigma[2]];
+  // Noise and texture of the main surface itself (neighbouring band samples it explains): what a
+  // further plain paint should show too. (Its sigma also holds what the smooth model misses.)
+  const km = fit.coefficients;
+  const mainMembers = band.filter((i) => distance(s.lab[i * 3], s.lab[i * 3 + 1], s.lab[i * 3 + 2], evalPoly(km[0], s.u[i], s.v[i]), evalPoly(km[1], s.u[i], s.v[i]), evalPoly(km[2], s.u[i], s.v[i]), 1 / fit.sigma[0], 1 / fit.sigma[1], 1 / fit.sigma[2]) < 2.5);
+  const mainLocal = localSpread(s, mainMembers);
+  const plainLimit = [0, 1, 2].map((ch) => (Number.isFinite(mainLocal[ch]) ? 2 * mainLocal[ch] + PLAIN_FLOOR[ch] : 2 * mainSigma[ch] + PLAIN_FLOOR[ch]));
   const ignored = new Uint8Array(s.n);
   for (let round = 0; round < 3 && fit.palette.length < 2; round++) {
     const out = band.filter((i) => !ignored[i] && sampleDistance(s, i, fit) >= 3.5);
@@ -738,10 +746,10 @@ function findPalette(s: Samples, fit: BackgroundFit): void {
     colour.light = fitOwnLight(s, fit, out, colour);
     const litMembers = out.filter((i) => within(colour.color, lit(i, colour), 8));
     if (litMembers.length >= members.length) estimate(litMembers);
-    // Plain paint is about as uniform as a plain table: judged by the differences between
+    // Plain paint is about as uniform as the main table: judged by the differences between
     // neighbouring samples showing it (a lighting gradient adds nothing to them, print does).
     const localSigma = localSpread(s, litMembers.length >= members.length ? litMembers : members);
-    if (localSigma[1] > 2 * mainSigma[1] + 1 || localSigma[2] > 2 * mainSigma[2] + 1 || localSigma[0] > 2 * mainSigma[0] + 1.5) break;
+    if (localSigma.some((v, ch) => v > plainLimit[ch])) break;
     // A table colour forms a surface (or a fine pattern); a colour that shows mainly as piece-sized
     // blobs is the print of pieces lying on the border (dark pieces scattered over a light table),
     // not table. Its samples are left out of the further search.
