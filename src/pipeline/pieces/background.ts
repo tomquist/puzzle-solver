@@ -76,17 +76,18 @@ export function backgroundAt(model: Pick<BackgroundModel, 'coefficients' | 'widt
 
 /** Bilinear interpolation of the local residual grid at photo pixel (x, y). */
 export function localAt(g: LocalTableGrid, x: number, y: number): [number, number, number] {
+  const res = g.residual;
   const fx = Math.max(0, Math.min(g.cols - 1, (x + 0.5) / g.cellW)), fy = Math.max(0, Math.min(g.rows - 1, (y + 0.5) / g.cellH));
   const j0 = Math.min(g.cols - 2, Math.floor(fx)), i0 = Math.min(g.rows - 2, Math.floor(fy));
   if (g.cols < 2 || g.rows < 2) {
     const j = Math.round(fx), i = Math.round(fy), o = (i * g.cols + j) * 3;
-    return [g.residual[o], g.residual[o + 1], g.residual[o + 2]];
+    return [res[o], res[o + 1], res[o + 2]];
   }
   const tx = fx - j0, ty = fy - i0;
   const out: [number, number, number] = [0, 0, 0];
   for (let c = 0; c < 3; c++) {
-    const a = g.residual[(i0 * g.cols + j0) * 3 + c], b = g.residual[(i0 * g.cols + j0 + 1) * 3 + c];
-    const d = g.residual[((i0 + 1) * g.cols + j0) * 3 + c], e = g.residual[((i0 + 1) * g.cols + j0 + 1) * 3 + c];
+    const a = res[(i0 * g.cols + j0) * 3 + c], b = res[(i0 * g.cols + j0 + 1) * 3 + c];
+    const d = res[((i0 + 1) * g.cols + j0) * 3 + c], e = res[((i0 + 1) * g.cols + j0 + 1) * 3 + c];
     out[c] = (a * (1 - tx) + b * tx) * (1 - ty) + (d * (1 - tx) + e * tx) * ty;
   }
   return out;
@@ -134,19 +135,9 @@ export function fitLocalTable(photo: RGBAImage, fit: BackgroundFit, exclude: Mas
       const p = (y * w + x) * 4;
       const lab = rgbToLab(data[p], data[p + 1], data[p + 2]);
       const u = norm(x, w), o = (j * sw + i) * 3;
-      // Residual against the nearest table colour (a second surface is followed like a shadow).
-      let ref: readonly number[] = [evalPoly(k[0], u, v), evalPoly(k[1], u, v), evalPoly(k[2], u, v)];
-      if (fit.palette.length > 0) {
-        let best = distance(lab[0], lab[1], lab[2], ref[0], ref[1], ref[2], 1 / fit.sigma[0], 1 / fit.sigma[1], 1 / fit.sigma[2]);
-        for (let q = 0; q < fit.palette.length; q++) {
-          const c = paletteAt(fit, q, u, v), sg = fit.palette[q].sigma;
-          const d = distance(lab[0], lab[1], lab[2], c[0], c[1], c[2], 1 / sg[0], 1 / sg[1], 1 / sg[2]);
-          if (d < best) { best = d; ref = c; }
-        }
-      }
-      samp[o] = lab[0] - ref[0];
-      samp[o + 1] = lab[1] - ref[1];
-      samp[o + 2] = lab[2] - ref[2];
+      samp[o] = lab[0] - evalPoly(k[0], u, v);
+      samp[o + 1] = lab[1] - evalPoly(k[1], u, v);
+      samp[o + 2] = lab[2] - evalPoly(k[2], u, v);
     }
   }
   const vals: number[][] = [[], [], []];
@@ -172,7 +163,16 @@ export function fitLocalTable(photo: RGBAImage, fit: BackgroundFit, exclude: Mas
       for (let ch = 0; ch < 3; ch++) res[(r * cols + c) * 3 + ch] = median(vals[ch]);
     }
   }
-  // Fill cells without enough table from their neighbours (repeated averaging).
+  fillFromNeighbours(res, valid, cols, rows);
+  let big = 0;
+  for (let i = 0; i < cols * rows; i++) {
+    for (let c = 0; c < 3; c++) big = Math.max(big, Math.abs(res[i * 3 + c]) / fit.sigma[c]);
+  }
+  return big >= LOCAL_MIN_RESIDUAL ? { cols, rows, cellW, cellH, residual: res } : null;
+}
+
+/** Give grid nodes without enough table the mean of their valid neighbours (repeated). */
+function fillFromNeighbours(res: Float32Array, valid: Uint8Array, cols: number, rows: number): void {
   for (let guard = 0; guard < cols + rows; guard++) {
     let missing = 0;
     const next = Uint8Array.from(valid);
@@ -195,11 +195,6 @@ export function fitLocalTable(photo: RGBAImage, fit: BackgroundFit, exclude: Mas
     valid.set(next);
     if (missing === 0) break;
   }
-  let big = 0;
-  for (let i = 0; i < cols * rows; i++) {
-    for (let c = 0; c < 3; c++) big = Math.max(big, Math.abs(res[i * 3 + c]) / fit.sigma[c]);
-  }
-  return big >= LOCAL_MIN_RESIDUAL ? { cols, rows, cellW, cellH, residual: res } : null;
 }
 
 /**
@@ -648,11 +643,6 @@ function paletteScore(photo: RGBAImage, model: BackgroundFit, out: GrayImage): G
       for (let j = 1; j < nc; j++) {
         const c = paletteAt(model, j - 1, u, v);
         cols[j][0] = c[0]; cols[j][1] = c[1]; cols[j][2] = c[2];
-      }
-      if (model.local) {
-        // Local shading and colour corrections apply to every table colour alike.
-        const r = localAt(model.local, Math.min(w - 1, x0 + 4), y);
-        for (let j = 0; j < nc; j++) for (let ch = 0; ch < 3; ch++) cols[j][ch] += r[ch];
       }
       for (let x = x0; x < Math.min(w, x0 + 8); x++) {
         const p = (y * w + x) << 2;

@@ -19,14 +19,14 @@ import { cloneMask, createGray, createMask, cropMask, cropRGBA, maskArea, maskBo
 import { close, dilate, erode, fillHoles, open } from '../../cv/morphology';
 import { resizeMask } from '../../cv/resize';
 import { boxBlurGray } from '../../cv/filter';
-import { simplifyPolygon, smoothContour } from '../../cv/polygon';
+import { polygonPerimeter, resampleContour, simplifyPolygon, smoothContour } from '../../cv/polygon';
 import { otsuThreshold, threshold } from '../../cv/threshold';
 import type { DetectedRegion, PieceShape, QualityIssue, RegionKind } from '../../model/types';
 import { backgroundAt, fitBackground, fitLocalTable, foregroundScore, type BackgroundFit } from './background';
 import { assessPhoto, assessRegions } from './quality';
 import { analyzePieceShape, bodyOrientation, orientationHistogram } from './shape';
 import type { BackgroundModel, RegionDiagnostics, SegmentOptions, Segmentation, SegmentedRegion } from './types';
-import { boxBlurRGB, doubleMask, halveGray, median, offsetPoints } from './util';
+import { boxBlurRGB, doubleMask, halveGray, median, offsetPoints, smoothChroma } from './util';
 import { noiseSigma } from '../quality/metrics';
 import { rgbaToGray, rgbToLab } from '../../cv/color';
 
@@ -41,7 +41,8 @@ const UNCERTAIN_CONFIDENCE = 0.5;
  * than ~0.4 body sizes break, while pieces of an assembled patch share whole sides and stay joined.
  * Only regions clearly larger than one piece are split, so narrow-waisted single pieces are safe.
  */
-const NECK_RADIUS = 0.2;
+/** Neck radii (body sizes) tried in turn: narrow contacts first, then wider ones for what is still too large. */
+const NECK_RADII = [0.2, 0.25, 0.3];
 /**
  * Relative height of a second outline-orientation peak above which a patch looks like loose pieces
  * at different rotations (assembled patches share one grid: measured ≤ 0.31 vs. up to 0.95).
@@ -288,6 +289,80 @@ const THIN_REMOVED = 0.75;
 /** Length² / area from which a small region counts as elongated (a disc: 1.27; a 3:1 bar: 3). */
 const THIN_ELONGATION = 2.5;
 
+/** How far (body sizes) weak foreground may reach from the nearest strong pixel. */
+const WEAK_REACH = 0.2;
+/** Smallest strong area (piece areas) that anchors weak foreground around it. */
+const ANCHOR_MIN = 0.02;
+
+/**
+ * Keep a region's weak pixels (score below `high`, not added by the texture cue) only within
+ * `reach` px of a strong area of at least `minAnchor` px; holes enclosed by what remains stay
+ * filled. Returns the remaining
+ * parts as candidates, or null when nothing changed.
+ */
+function dropFarWeak(c: Candidate, score: GrayImage, high: number, texOnly: Mask, reach: number, minAnchor: number, refArea: number, minArea: number, W: number, H: number): Candidate[] | null {
+  const r = Math.ceil(reach), pad = r + 1;
+  const { width: w, height: h } = c.mask;
+  const pw = w + 2 * pad, ph = h + 2 * pad;
+  const m = createMask(pw, ph), anchor = createMask(pw, ph);
+  let weak = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!c.mask.data[y * w + x]) continue;
+      const i = (y + pad) * pw + x + pad, g = (y + c.bbox.y) * W + x + c.bbox.x;
+      m.data[i] = 1;
+      if (score.data[g] >= high || texOnly.data[g]) anchor.data[i] = 1;
+      else weak++;
+    }
+  }
+  if (weak === 0) return null;
+  // Only solid strong areas anchor (not stray strong pixels inside a weak band).
+  const ac = labelComponents(anchor, 8);
+  for (const st of ac.stats) {
+    if (st.area >= minAnchor) continue;
+    const { x: ax, y: ay, width: aw, height: ah } = st.bbox;
+    for (let y = ay; y < ay + ah; y++) for (let x = ax; x < ax + aw; x++) if (ac.labels[y * pw + x] === st.label) anchor.data[y * pw + x] = 0;
+  }
+  const near = dilate(anchor, reach, 'disk');
+  const keep = createMask(pw, ph);
+  let dropped = 0;
+  for (let i = 0; i < m.data.length; i++) {
+    if (!m.data[i]) continue;
+    if (near.data[i]) keep.data[i] = 1;
+    else dropped++;
+  }
+  if (dropped === 0) return null;
+  const filled = fillHoles(keep);
+  const gone = createMask(pw, ph);
+  for (let i = 0; i < m.data.length; i++) {
+    filled.data[i] &= m.data[i];
+    if (m.data[i] && !filled.data[i]) gone.data[i] = 1;
+  }
+  // Only weak areas that are no part of a piece go: a band (much longer than wide), a large
+  // surface, or anything reaching the photo border (the floor beyond the table edge). A weak piece
+  // interior far from strong pixels stays.
+  const body = Math.sqrt(refArea);
+  const gc = labelComponents(gone, 8);
+  dropped = 0;
+  for (const st of gc.stats) {
+    const len = Math.max(st.bbox.width, st.bbox.height);
+    const X0 = st.bbox.x + c.bbox.x - pad, Y0 = st.bbox.y + c.bbox.y - pad;
+    const atBorder = X0 <= 0 || Y0 <= 0 || X0 + st.bbox.width >= W || Y0 + st.bbox.height >= H;
+    const band = len >= 1.5 * body && st.area / len < 0.5 * body;
+    if (atBorder || band || st.area >= 2 * refArea) {
+      dropped += st.area;
+      continue;
+    }
+    const { x: gx, y: gy, width: gw, height: gh } = st.bbox;
+    for (let y = gy; y < gy + gh; y++) for (let x = gx; x < gx + gw; x++) if (gc.labels[y * pw + x] === st.label) filled.data[y * pw + x] = 1;
+  }
+  if (dropped < 0.02 * c.area) return null;
+  const parts = labelComponents(filled, 8);
+  return parts.stats
+    .filter((st) => st.area >= minArea)
+    .map((st) => makeCandidate(componentMask(parts.labels, pw, st.label, st.bbox), { x: st.bbox.x + c.bbox.x - pad, y: st.bbox.y + c.bbox.y - pad, width: st.bbox.width, height: st.bbox.height }, W, H, st.area, SHAPE_MAX_PIECES * refArea));
+}
+
 /**
  * Remove thin elongated structures from a region: plank gaps and tile seams, cracks, cables and
  * cloth folds score like a dark object and grow into every piece they touch. An opening with a disk
@@ -332,14 +407,15 @@ function removeThin(c: Candidate, body: number, refArea: number, minArea: number
   const parts = labelComponents(out, 8);
   return parts.stats
     .filter((st) => st.area >= minArea)
-    .map((st) => makeCandidate(componentMask(parts.labels, pw, st.label, st.bbox), { x: st.bbox.x + c.bbox.x - pad, y: st.bbox.y + c.bbox.y - pad, width: st.bbox.width, height: st.bbox.height }, W, H, st.area));
+    .map((st) => makeCandidate(componentMask(parts.labels, pw, st.label, st.bbox), { x: st.bbox.x + c.bbox.x - pad, y: st.bbox.y + c.bbox.y - pad, width: st.bbox.width, height: st.bbox.height }, W, H, st.area, SHAPE_MAX_PIECES * refArea));
 }
 
-function makeCandidate(mask: Mask, bbox: Rect, photoW: number, photoH: number, area?: number): Candidate {
+function makeCandidate(mask: Mask, bbox: Rect, photoW: number, photoH: number, area?: number, shapeUpTo = Infinity): Candidate {
   const contour = offsetPoints(traceOuterContour(mask), bbox.x, bbox.y);
   const outline = simplifyPolygon(smoothContour(contour, 0.7), 0.5);
   const touchesBorder = bbox.x <= 0 || bbox.y <= 0 || bbox.x + bbox.width >= photoW || bbox.y + bbox.height >= photoH;
-  const shape = touchesBorder ? null : analyzePieceShape(contour);
+  // Shapes only for what may be a single piece (the analysis of a large cluster's outline is slow).
+  const shape = touchesBorder || (area ?? maskArea(mask)) > shapeUpTo ? null : analyzePieceShape(contour);
   const o = orientationHistogram(outline);
   return { mask, bbox, area: area ?? maskArea(mask), touchesBorder, contour, outline, shape, orientation: o.angle, secondPeak: o.secondPeak };
 }
@@ -376,6 +452,7 @@ function chooseThreshold(score: GrayImage): { high: number; low: number; separab
   g.data.set(vals);
   const o = otsuThreshold(g);
   const t = Math.expm1(o.threshold);
+  if (globalThis.process?.env?.THDBG) globalThis.console.log('THDBG otsu', t.toFixed(2), 'sep', o.separability.toFixed(3));
   const high = Math.max(4.5, Math.min(14, t));
   return { high, low: Math.max(3.2, 0.55 * high), separability: o.separability };
 }
@@ -383,9 +460,11 @@ function chooseThreshold(score: GrayImage): { high: number; low: number; separab
 /**
  * Split a cluster at narrow necks: open with a disk of radius `r` (removes tabs and thin contacts),
  * keep cores of at least `minCore` pixels and give every cluster pixel to the core it reaches
- * first (8-connected BFS inside the cluster). Returns null when there are fewer than two cores.
+ * first (8-connected BFS inside the cluster). Cores whose share ends up below `minPart` pixels (a
+ * knob, a corner) are dropped and their pixels go to the others. Returns null when fewer than two
+ * parts remain.
  */
-function splitAtNecks(c: Candidate, r: number, minCore: number): { mask: Mask; bbox: Rect }[] | null {
+function splitAtNecks(c: Candidate, r: number, minCore: number, minPart: number): { mask: Mask; bbox: Rect }[] | null {
   const p = Math.ceil(r) + 1;
   const { width: w, height: h } = c.mask;
   const W = w + 2 * p, H = h + 2 * p;
@@ -393,45 +472,125 @@ function splitAtNecks(c: Candidate, r: number, minCore: number): { mask: Mask; b
   for (let y = 0; y < h; y++) padded.data.set(c.mask.data.subarray(y * w, (y + 1) * w), (y + p) * W + p);
   const core = open(padded, r, 'disk');
   const { labels, stats } = labelComponents(core, 8);
-  const seeds = stats.filter((s) => s.area >= minCore);
+  let seeds = stats.filter((s) => s.area >= minCore);
   if (seeds.length < 2) return null;
   const owner = new Int32Array(W * H);
   const queue = new Int32Array(W * H);
-  let head = 0, tail = 0;
-  const seedIndex = new Int32Array(stats.length + 1);
-  seeds.forEach((s, i) => { seedIndex[s.label] = i + 1; });
-  for (let i = 0; i < W * H; i++) {
-    const sIdx = seedIndex[labels[i]];
-    if (labels[i] > 0 && sIdx > 0) { owner[i] = sIdx; queue[tail++] = i; }
-  }
   const md = padded.data;
-  while (head < tail) {
-    const i = queue[head++];
-    const x = i % W, y = (i - x) / W;
-    for (let dy = -1; dy <= 1; dy++) {
-      const yy = y + dy;
-      if (yy < 0 || yy >= H) continue;
-      for (let dx = -1; dx <= 1; dx++) {
-        const xx = x + dx;
-        if (xx < 0 || xx >= W || (dx === 0 && dy === 0)) continue;
-        const j = yy * W + xx;
-        if (md[j] && owner[j] === 0) { owner[j] = owner[i]; queue[tail++] = j; }
+  let share = new Float64Array(0);
+  for (;;) {
+    owner.fill(0);
+    let head = 0, tail = 0;
+    const seedIndex = new Int32Array(stats.length + 1);
+    seeds.forEach((s, i) => { seedIndex[s.label] = i + 1; });
+    for (let i = 0; i < W * H; i++) {
+      const sIdx = seedIndex[labels[i]];
+      if (labels[i] > 0 && sIdx > 0) { owner[i] = sIdx; queue[tail++] = i; }
+    }
+    while (head < tail) {
+      const i = queue[head++];
+      const x = i % W, y = (i - x) / W;
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= H) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= W || (dx === 0 && dy === 0)) continue;
+          const j = yy * W + xx;
+          if (md[j] && owner[j] === 0) { owner[j] = owner[i]; queue[tail++] = j; }
+        }
       }
+    }
+    share = new Float64Array(seeds.length + 1);
+    for (let i = 0; i < W * H; i++) share[owner[i]]++;
+    // Drop every core whose share is too small (the largest of them stays when all are).
+    const small = seeds.map((_, i) => share[i + 1] < minPart);
+    if (!small.some((v) => v)) break;
+    const keep = seeds.filter((_, i) => !small[i]);
+    if (keep.length < 2) return null;
+    seeds = keep;
+  }
+  // Part bounds in one sweep, then crop.
+  const n = seeds.length;
+  const x0 = new Int32Array(n + 1).fill(W), y0 = new Int32Array(n + 1).fill(H), x1 = new Int32Array(n + 1).fill(-1), y1 = new Int32Array(n + 1).fill(-1);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const k = owner[y * W + x];
+      if (k === 0) continue;
+      if (x < x0[k]) x0[k] = x;
+      if (x > x1[k]) x1[k] = x;
+      if (y < y0[k]) y0[k] = y;
+      if (y > y1[k]) y1[k] = y;
     }
   }
   const parts: { mask: Mask; bbox: Rect }[] = [];
-  for (let k = 1; k <= seeds.length; k++) {
-    const pm = createMask(W, H);
-    for (let i = 0; i < W * H; i++) if (owner[i] === k) pm.data[i] = 1;
-    const b = maskBounds(pm);
-    if (!b) continue;
-    parts.push({ mask: cropMask(pm, b), bbox: { x: b.x + c.bbox.x - p, y: b.y + c.bbox.y - p, width: b.width, height: b.height } });
+  for (let k = 1; k <= n; k++) {
+    if (x1[k] < 0) continue;
+    const bw = x1[k] - x0[k] + 1, bh = y1[k] - y0[k] + 1;
+    const pm = createMask(bw, bh);
+    for (let y = 0; y < bh; y++) {
+      for (let x = 0; x < bw; x++) if (owner[(y + y0[k]) * W + x + x0[k]] === k) pm.data[y * bw + x] = 1;
+    }
+    parts.push({ mask: pm, bbox: { x: x0[k] + c.bbox.x - p, y: y0[k] + c.bbox.y - p, width: bw, height: bh } });
   }
   return parts.length >= 2 ? parts : null;
 }
 
-/** Outline orientations (degrees mod 90) closer than this look like one assembled grid. */
-const SAME_GRID_DEG = 5;
+/**
+ * Black top-hat of the luminance over `rect` (7×7 closing minus luminance, gray levels): high on
+ * thin dark valleys such as the crease between two touching pieces (cardboard edge, shadow), low on
+ * the step edges of a piece's print.
+ */
+function blackTopHat(img: RGBAImage, rect: Rect): Float32Array {
+  const { width: W, height: H, data } = img;
+  const { x: x0, y: y0, width: w, height: h } = rect;
+  const pad = 4, pw = w + 2 * pad, ph = h + 2 * pad;
+  const Y = new Float32Array(pw * ph);
+  for (let y = 0; y < ph; y++) {
+    const yy = Math.min(H - 1, Math.max(0, y + y0 - pad));
+    for (let x = 0; x < pw; x++) {
+      const o = (yy * W + Math.min(W - 1, Math.max(0, x + x0 - pad))) * 4;
+      Y[y * pw + x] = 0.299 * data[o] + 0.587 * data[o + 1] + 0.114 * data[o + 2];
+    }
+  }
+  // Closing = min filter of the max filter (3-px radius squares, separable).
+  const filt = (src: Float32Array, isMax: boolean): Float32Array => {
+    const tmp = new Float32Array(pw * ph), out = new Float32Array(pw * ph);
+    for (let y = 0; y < ph; y++) {
+      for (let x = 0; x < pw; x++) {
+        let v = src[y * pw + x];
+        for (let k = Math.max(0, x - 3); k <= Math.min(pw - 1, x + 3); k++) v = isMax ? Math.max(v, src[y * pw + k]) : Math.min(v, src[y * pw + k]);
+        tmp[y * pw + x] = v;
+      }
+    }
+    for (let y = 0; y < ph; y++) {
+      for (let x = 0; x < pw; x++) {
+        let v = tmp[y * pw + x];
+        for (let k = Math.max(0, y - 3); k <= Math.min(ph - 1, y + 3); k++) v = isMax ? Math.max(v, tmp[k * pw + x]) : Math.min(v, tmp[k * pw + x]);
+        out[y * pw + x] = v;
+      }
+    }
+    return out;
+  };
+  const closed = filt(filt(Y, true), false);
+  const out = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) out[y * w + x] = closed[(y + pad) * pw + x + pad] - Y[(y + pad) * pw + x + pad];
+  return out;
+}
+
+/** Median crease strength (top-hat gray levels, see blackTopHat) from which a cut needs no further evidence. */
+const CREASE_MIN = 10;
+/**
+ * Second orientation peak of a cluster outline from which creases count as cuts: an assembled patch
+ * shows one grid direction, touching loose pieces at their own angles add more.
+ */
+const LOOSE_SECOND_PEAK = 0.15;
+/** Angle tolerance (degrees) of outer edges on one assembled grid (parts need not be whole pieces). */
+const OUTER_GRID_DEG = 12;
+/** Offset tolerance (body sizes) of neighbours on one assembled grid. */
+const GRID_TOLERANCE = 0.3;
+/** Most pieces a cluster is split into along edges. */
+const MAX_EDGE_SPLIT = 12;
 
 /** Difference of two orientations modulo 90° (0..45). */
 function quarterDiff(a: number, b: number): number {
@@ -448,14 +607,19 @@ function colourGradient(img: RGBAImage, rect: Rect): Uint8Array {
   const { x: x0, y: y0, width: w, height: h } = rect;
   const mag = new Float32Array(w * h);
   let max = 1e-6;
-  const at = (x: number, y: number, c: number) => data[((Math.min(H - 1, Math.max(0, y)) * W) + Math.min(W - 1, Math.max(0, x))) * 4 + c];
   for (let y = 0; y < h; y++) {
+    const Y = y + y0;
+    const r0 = Math.min(H - 1, Math.max(0, Y - 1)) * W, r1 = Math.min(H - 1, Math.max(0, Y)) * W, r2 = Math.min(H - 1, Math.max(0, Y + 1)) * W;
     for (let x = 0; x < w; x++) {
-      const X = x + x0, Y = y + y0;
+      const X = x + x0;
+      const cl = Math.min(W - 1, Math.max(0, X - 1)), cm = Math.min(W - 1, Math.max(0, X)), cr = Math.min(W - 1, Math.max(0, X + 1));
+      const a0 = (r0 + cl) * 4, a1 = (r0 + cm) * 4, a2 = (r0 + cr) * 4;
+      const b0 = (r1 + cl) * 4, b2 = (r1 + cr) * 4;
+      const c0 = (r2 + cl) * 4, c1 = (r2 + cm) * 4, c2 = (r2 + cr) * 4;
       let m2 = 0;
       for (let c = 0; c < 3; c++) {
-        const gx = at(X + 1, Y - 1, c) + 2 * at(X + 1, Y, c) + at(X + 1, Y + 1, c) - at(X - 1, Y - 1, c) - 2 * at(X - 1, Y, c) - at(X - 1, Y + 1, c);
-        const gy = at(X - 1, Y + 1, c) + 2 * at(X, Y + 1, c) + at(X + 1, Y + 1, c) - at(X - 1, Y - 1, c) - 2 * at(X, Y - 1, c) - at(X + 1, Y - 1, c);
+        const gx = data[a2 + c] + 2 * data[b2 + c] + data[c2 + c] - data[a0 + c] - 2 * data[b0 + c] - data[c0 + c];
+        const gy = data[c0 + c] + 2 * data[c1 + c] + data[c2 + c] - data[a0 + c] - 2 * data[a1 + c] - data[a2 + c];
         m2 += gx * gx + gy * gy;
       }
       const m = Math.sqrt(m2);
@@ -464,7 +628,11 @@ function colourGradient(img: RGBAImage, rect: Rect): Uint8Array {
     }
   }
   const out = new Uint8Array(w * h);
-  for (let i = 0; i < out.length; i++) out[i] = Math.min(255, Math.round((255 * mag[i]) / max));
+  const k = 255 / max;
+  for (let i = 0; i < out.length; i++) {
+    const v = (mag[i] * k + 0.5) | 0;
+    out[i] = v > 255 ? 255 : v;
+  }
   return out;
 }
 
@@ -475,19 +643,28 @@ function colourGradient(img: RGBAImage, rect: Rect): Uint8Array {
  */
 function watershed(mask: Mask, grad: Uint8Array, labels: Int32Array): void {
   const { width: w, height: h } = mask;
-  const buckets: number[][] = Array.from({ length: 256 }, () => []);
-  for (let i = 0; i < labels.length; i++) if (labels[i] > 0) buckets[grad[i]].push(i);
+  const md = mask.data;
+  // Bucket queue: one growable stack per gradient level.
+  const stacks: Int32Array[] = Array.from({ length: 256 }, () => new Int32Array(64));
+  const size = new Int32Array(256);
+  const push = (level: number, i: number) => {
+    let st = stacks[level];
+    if (size[level] === st.length) {
+      const grown = new Int32Array(st.length * 2);
+      grown.set(st);
+      stacks[level] = st = grown;
+    }
+    st[size[level]++] = i;
+  };
+  for (let i = 0; i < labels.length; i++) if (labels[i] > 0) push(grad[i], i);
   for (let level = 0; level < 256; level++) {
-    const b = buckets[level];
-    while (b.length > 0) {
-      const i = b.pop()!;
-      const x = i % w, y = (i - x) / w;
-      const nb = [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1];
-      for (const j of nb) {
-        if (j < 0 || !mask.data[j] || labels[j] !== 0) continue;
-        labels[j] = labels[i];
-        buckets[Math.max(level, grad[j])].push(j);
-      }
+    while (size[level] > 0) {
+      const i = stacks[level][--size[level]];
+      const x = i % w, y = (i - x) / w, l = labels[i];
+      if (x > 0 && md[i - 1] && labels[i - 1] === 0) { labels[i - 1] = l; push(Math.max(level, grad[i - 1]), i - 1); }
+      if (x < w - 1 && md[i + 1] && labels[i + 1] === 0) { labels[i + 1] = l; push(Math.max(level, grad[i + 1]), i + 1); }
+      if (y > 0 && md[i - w] && labels[i - w] === 0) { labels[i - w] = l; push(Math.max(level, grad[i - w]), i - w); }
+      if (y < h - 1 && md[i + w] && labels[i + w] === 0) { labels[i + w] = l; push(Math.max(level, grad[i + w]), i + w); }
     }
   }
 }
@@ -496,13 +673,15 @@ function watershed(mask: Mask, grad: Uint8Array, labels: Int32Array): void {
  * Split a cluster of touching or slightly overlapping loose pieces along the edges between them.
  * Markers come from the foreground before closing (pieces 1–3 px apart are separate there) or,
  * failing that, from k-means of the interior (k = area / piece area). A watershed on the colour
- * gradient puts the cut on the gap or on the outline of the upper piece. The split is kept only when
- * every part is piece-sized with a plausible piece outline and the parts lie at clearly different
- * angles (pieces of an assembled grid share one angle and stay together).
+ * gradient puts the cuts on the gaps or on the outlines of the upper pieces. Neighbouring parts stay
+ * apart only with evidence for the cut between them (a dark crease along it, separate blobs before
+ * closing, or convincing piece outlines on both sides) and when they are not neighbours on one
+ * assembled grid (same angle, one body apart); everything else is joined again. Parts below a
+ * third of a piece go to the neighbour they share most outline with. Null when one region remains.
  */
 function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, img: RGBAImage, W: number, H: number): Candidate[] | null {
   const k = Math.round(c.area / ra);
-  if (k < 2 || k > 4) return null;
+  if (k < 2 || k > MAX_EDGE_SPLIT) return null;
   const { width: w, height: h } = c.mask;
   const { x: bx, y: by } = c.bbox;
   const labels = new Int32Array(w * h);
@@ -518,7 +697,7 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
   const comps = labelComponents(open(fillHoles(sub), 1), 4);
   const big = comps.stats.filter((st) => st.area >= 0.3 * ra);
   let viaGap = false;
-  if (big.length >= 2 && big.length <= 4) {
+  if (big.length >= 2 && big.length <= MAX_EDGE_SPLIT) {
     viaGap = true;
     big.forEach((st, n) => {
       for (let i = 0; i < labels.length; i++) if (comps.labels[i] === st.label) labels[i] = n + 1;
@@ -527,7 +706,8 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
     // Markers 2: k-means of interior pixel positions (farthest-point start).
     const dt = distanceTransform(c.mask).data;
     const pts: number[] = [];
-    for (let i = 0; i < w * h; i++) if (dt[i] >= 0.12 * body) pts.push(i);
+    const stride = Math.max(1, Math.round(Math.sqrt(c.area / 40000)));
+    for (let y = 0; y < h; y += stride) for (let x = 0; x < w; x += stride) if (dt[y * w + x] >= 0.12 * body) pts.push(y * w + x);
     if (pts.length < 10 * k) return null;
     const cx: number[] = [], cy: number[] = [];
     let far = pts[0], farD = -1;
@@ -564,41 +744,178 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
   }
   const nLabels = viaGap ? big.length : k;
   watershed(c.mask, colourGradient(img, c.bbox), labels);
-  const parts: Candidate[] = [];
-  for (let m = 1; m <= nLabels; m++) {
+  const n = nLabels;
+  // Shared boundary per pair of labels, with the crease strength along it.
+  const th = blackTopHat(img, c.bbox);
+  const pairStats = () => {
+    const shared = new Map<number, number[]>();
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const l = labels[y * w + x];
+        if (l <= 0) continue;
+        for (const [xx, yy] of [[x + 1, y], [x, y + 1]]) {
+          if (xx >= w || yy >= h) continue;
+          const m = labels[yy * w + xx];
+          if (m <= 0 || m === l) continue;
+          const key = Math.min(l, m) * 64 + Math.max(l, m);
+          let best = 0;
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            const xq = x + dx, yq = y + dy;
+            if (xq >= 0 && yq >= 0 && xq < w && yq < h) best = Math.max(best, th[yq * w + xq]);
+          }
+          const list = shared.get(key);
+          if (list) list.push(best);
+          else shared.set(key, [best]);
+        }
+      }
+    }
+    return shared;
+  };
+  const area = new Float64Array(n + 1);
+  for (let i = 0; i < labels.length; i++) if (labels[i] > 0) area[labels[i]]++;
+  // Parts below a third of a piece go to the neighbour they share most boundary with.
+  for (;;) {
+    let small = -1;
+    for (let l = 1; l <= n; l++) if (area[l] > 0 && area[l] < 0.3 * ra && (small < 0 || area[l] < area[small])) small = l;
+    if (small < 0) break;
+    let to = -1, most = 0;
+    for (const [key, v] of pairStats()) {
+      const a = Math.floor(key / 64), b = key % 64;
+      const other = a === small ? b : b === small ? a : -1;
+      if (other > 0 && v.length > most) { most = v.length; to = other; }
+    }
+    if (to < 0) break;
+    for (let i = 0; i < labels.length; i++) if (labels[i] === small) labels[i] = to;
+    area[to] += area[small];
+    area[small] = 0;
+  }
+  const live = [...Array(n + 1).keys()].filter((l) => l > 0 && area[l] > 0);
+  if (live.length < 2) return null;
+  const partOf = (l: number): Candidate | null => {
     const pm = createMask(w, h);
-    for (let i = 0; i < labels.length; i++) if (labels[i] === m) pm.data[i] = 1;
-    // Keep the main blob of the part (stray pixels go nowhere).
+    for (let i = 0; i < labels.length; i++) if (labels[i] === l) pm.data[i] = 1;
     const lc = labelComponents(pm, 4);
     if (lc.stats.length === 0) return null;
     const main = lc.stats.reduce((a, b2) => (b2.area > a.area ? b2 : a));
     const b = main.bbox;
-    const mm = componentMask(lc.labels, w, main.label, b);
-    parts.push(makeCandidate(fillHoles(mm), { x: b.x + bx, y: b.y + by, width: b.width, height: b.height }, W, H));
+    return makeCandidate(fillHoles(componentMask(lc.labels, w, main.label, b)), { x: b.x + bx, y: b.y + by, width: b.width, height: b.height }, W, H, undefined, SHAPE_MAX_PIECES * ra);
+  };
+  const parts = new Map<number, Candidate>();
+  for (const l of live) {
+    const pc = partOf(l);
+    if (pc) parts.set(l, pc);
   }
-  const conf = parts.map((p) => p.shape?.confidence ?? 0);
-  if (parts.some((p) => p.area < 0.5 * ra || p.area > 1.6 * ra)) return null;
-  // Gap markers are strong evidence; k-means markers need at least one convincing piece outline.
-  if (Math.max(...conf) < (viaGap ? REFERENCE_CONFIDENCE : 0.7)) return null;
-  // Pieces of an assembled grid share one angle and sit exactly one body apart on that grid. The
-  // angles are only trusted from convincing outlines; otherwise the cluster's own outline must
-  // show two grid directions.
-  if (Math.min(...conf) < UNCERTAIN_CONFIDENCE && c.secondPeak <= TOUCHING_SECOND_PEAK) return null;
-  const ang = parts.map((p) => (p.shape ? bodyOrientation(p.shape) : p.orientation));
-  let loose = false;
-  for (let i = 0; i < parts.length; i++) {
-    for (let j = i + 1; j < parts.length; j++) {
-      if (quarterDiff(ang[i], ang[j]) > SAME_GRID_DEG) loose = true;
-      const a = parts[i].shape, b = parts[j].shape;
-      if (!a || !b) continue;
-      const t = (-ang[i] * Math.PI) / 180;
-      const dx = b.center.x - a.center.x, dy = b.center.y - a.center.y;
-      const u = Math.abs(dx * Math.cos(t) - dy * Math.sin(t)) / a.bodySize, v = Math.abs(dx * Math.sin(t) + dy * Math.cos(t)) / a.bodySize;
-      const onGrid = (Math.abs(Math.max(u, v) - 1) < 0.15 && Math.min(u, v) < 0.15);
-      if (!onGrid) loose = true;
+  // Join neighbours without evidence for the cut, and neighbours on one assembled grid.
+  const root = new Int32Array(n + 1);
+  for (let l = 0; l <= n; l++) root[l] = l;
+  const find = (l: number): number => (root[l] === l ? l : (root[l] = find(root[l])));
+  const stats = pairStats();
+  // An assembled patch: the parts' outer edges run along the cluster's grid. Only a cluster of
+  // pieces at their own angles takes dark creases for cuts.
+  const outer = live.map((l) => { const pc = parts.get(l); return pc ? outerAngle(pc, c) : null; }).filter((a): a is number => a !== null);
+  const aligned = outer.filter((a) => quarterDiff(a, c.orientation) <= OUTER_GRID_DEG).length;
+  const mixed = c.secondPeak >= LOOSE_SECOND_PEAK && outer.length >= 2 && aligned < 0.75 * outer.length;
+  let creases = 0, cuts = 0;
+  for (const [key, v] of stats) {
+    const a = Math.floor(key / 64), b = key % 64;
+    const pa = parts.get(a), pb = parts.get(b);
+    if (!pa || !pb) continue;
+    const ca = pa.shape?.confidence ?? 0, cb = pb.shape?.confidence ?? 0;
+    const crease = median(v);
+    if (globalThis.process?.env?.SPLITDBG) globalThis.console.log('  pair', a, b, 'crease', crease.toFixed(1), 'conf', ca.toFixed(2), cb.toFixed(2), 'grid', onOneGrid(pa, pb, c, body));
+    cuts++;
+    if (crease >= CREASE_MIN) creases++;
+    const evidence = (crease >= CREASE_MIN && mixed) || viaGap || (Math.max(ca, cb) >= 0.7 && (Math.min(ca, cb) >= UNCERTAIN_CONFIDENCE || c.secondPeak > TOUCHING_SECOND_PEAK));
+    if (!evidence || onOneGrid(pa, pb, c, body)) root[find(a)] = find(b);
+  }
+  if (globalThis.process?.env?.SPLITDBG) globalThis.console.log('EDGEDBG', JSON.stringify(c.bbox), 'k', k, 'viaGap', viaGap, 'parts', live.map((l) => (area[l] / ra).toFixed(2)).join(','), 'creased', creases, '/', cuts, 'second', c.secondPeak.toFixed(2), 'mixed', mixed, aligned, '/', outer.length);
+  if (globalThis.process?.env?.SPLITDBG) globalThis.console.log('  outer angles', live.map((l) => { const pc = parts.get(l); return pc ? `${outerAngle(pc, c)?.toFixed(0) ?? 'n'}/${pc.orientation.toFixed(0)}` : '-'; }).join(','), 'cluster', c.orientation.toFixed(0));
+  const groups = new Map<number, number[]>();
+  for (const l of live) {
+    const r = find(l);
+    groups.set(r, [...(groups.get(r) ?? []), l]);
+  }
+  if (groups.size < 2) return null;
+  const out: Candidate[] = [];
+  for (const members of groups.values()) {
+    if (members.length === 1) {
+      const pc = parts.get(members[0]);
+      if (pc) out.push(pc);
+      continue;
     }
+    const r = members[0];
+    for (const l of members) for (let i = 0; i < labels.length; i++) if (labels[i] === l) labels[i] = r;
+    const pc = partOf(r);
+    if (pc) out.push(pc);
   }
-  return loose ? parts : null;
+  if (out.length < 2 || out.some((p) => p.area < 0.5 * ra)) return null;
+  return out;
+}
+
+/**
+ * Two parts of a cluster that are neighbours on one assembled grid: the straight parts of their
+ * outlines on the cluster's outer edge run along one grid (modulo 90°) and their centroids lie one
+ * body apart along an axis of it. The outer edges are real piece outlines, unlike the cuts between
+ * the parts, so they tell the angle even of parts that are not whole pieces. Loose pieces touching
+ * each other lie at their own angles and offsets.
+ */
+function onOneGrid(a: Candidate, b: Candidate, cluster: Candidate, body: number): boolean {
+  const aa = outerAngle(a, cluster) ?? a.orientation, ab = outerAngle(b, cluster) ?? b.orientation;
+  if (quarterDiff(aa, ab) > OUTER_GRID_DEG) return false;
+  const ca = maskCentroid(a), cb = maskCentroid(b);
+  const t = (-aa * Math.PI) / 180;
+  const dx = cb.x - ca.x, dy = cb.y - ca.y;
+  const u = Math.abs(dx * Math.cos(t) - dy * Math.sin(t)) / body, v = Math.abs(dx * Math.sin(t) + dy * Math.cos(t)) / body;
+  return Math.abs(Math.max(u, v) - 1) < GRID_TOLERANCE && Math.min(u, v) < GRID_TOLERANCE;
+}
+
+/**
+ * Dominant direction (degrees modulo 90) of the straight stretches of a part's outline that lie on
+ * the outer edge of its cluster; null when too little of it does.
+ */
+function outerAngle(part: Candidate, cluster: Candidate): number | null {
+  const { mask: cm, bbox: cb } = cluster;
+  const outside = (x: number, y: number) => {
+    const lx = Math.round(x) - cb.x, ly = Math.round(y) - cb.y;
+    return lx < 0 || ly < 0 || lx >= cm.width || ly >= cm.height || !cm.data[ly * cm.width + lx];
+  };
+  const onEdge = (p: Point) => outside(p.x + 1.5, p.y) || outside(p.x - 1.5, p.y) || outside(p.x, p.y + 1.5) || outside(p.x, p.y - 1.5);
+  const perim = polygonPerimeter(part.contour);
+  if (!(perim > 0)) return null;
+  const N = Math.max(32, Math.min(2048, Math.round(perim / 1.5)));
+  const pts = smoothContour(resampleContour(part.contour, N), 1.5);
+  const h = Math.max(2, Math.round(3 / (perim / N)));
+  const hist = new Float64Array(90);
+  let used = 0;
+  for (let i = 0; i < N; i++) {
+    const a = pts[(i - h + N) % N], b = pts[(i + h) % N];
+    if (!onEdge(a) || !onEdge(pts[i]) || !onEdge(b)) continue;
+    const a2 = pts[(i - 2 * h + N) % N], b2 = pts[(i + 2 * h) % N];
+    const d1 = Math.atan2(pts[i].y - a2.y, pts[i].x - a2.x), d2 = Math.atan2(b2.y - pts[i].y, b2.x - pts[i].x);
+    let dd = Math.abs(d2 - d1);
+    if (dd > Math.PI) dd = 2 * Math.PI - dd;
+    const w = Math.exp(-(((dd * 180) / Math.PI / 12) ** 2));
+    let deg = ((Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI) % 90;
+    if (deg < 0) deg += 90;
+    hist[Math.min(89, Math.floor(deg))] += w;
+    used++;
+  }
+  if (used * (perim / N) < 0.5 * Math.sqrt(part.area)) return null;
+  let best = 0, bestV = -1;
+  for (let i = 0; i < 90; i++) {
+    let v = 0;
+    for (let j = -3; j <= 3; j++) v += hist[(i + j + 90) % 90] * Math.exp(-(j * j) / 4.5);
+    if (v > bestV) { bestV = v; best = i; }
+  }
+  return best + 0.5;
+}
+
+/** Centroid of a candidate's mask in photo coordinates. */
+function maskCentroid(c: Candidate): Point {
+  let sx = 0, sy = 0, n = 0;
+  const { width: w, height: h } = c.mask;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (c.mask.data[y * w + x]) { sx += x; sy += y; n++; }
+  return n > 0 ? { x: c.bbox.x + sx / n, y: c.bbox.y + sy / n } : { x: c.bbox.x, y: c.bbox.y };
 }
 
 /**
@@ -909,6 +1226,21 @@ function bodyAspect(s: PieceShape): number {
   return Math.max(a, b) / Math.max(1e-6, Math.min(a, b));
 }
 
+/** Largest share of a split part's area its holes may take (a ring around a piece is a halo). */
+const MAX_PART_HOLE = 0.3;
+
+/** Area of a mask's holes relative to the mask's own area. */
+function holeShare(m: Mask): number {
+  const a = maskArea(m);
+  return a > 0 ? (maskArea(fillHoles(m)) - a) / a : 0;
+}
+
+/** Largest region (piece areas) whose soft halo or shadow is peeled off. */
+const PEEL_MAX_PIECES = 4;
+/** Largest part (piece areas) of a split that is split again at wider necks. */
+const RESPLIT_MAX_PIECES = 20;
+/** Largest candidate (piece areas) whose outline is analysed as a single piece. */
+const SHAPE_MAX_PIECES = 3;
 /** Largest hole that is filled, in piece areas (see objectUnitArea). */
 const HOLE_MAX_PIECES = 1.5;
 
@@ -993,7 +1325,10 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   // small colour difference of dark pieces on a dark table (clean photos keep full sharpness).
   const noise = estimateNoise(photo);
   const smoothing = noise < NOISE_SMOOTH_1 ? 0 : noise < NOISE_SMOOTH_2 ? 1 : 2;
-  const scored = smoothing > 0 ? boxBlurRGB(photo, smoothing) : photo;
+  // A phone JPEG stores colour at half resolution: its pixel-level colour noise (and how a decoder
+  // upsamples the colour) carries no information, so the colour is averaged over 3×3 pixels while
+  // the brightness stays sharp. Replays decoded differently, or re-encoded, then score alike.
+  const scored = smoothing > 0 ? boxBlurRGB(photo, smoothing) : blocky ? smoothChroma(photo, 1) : photo;
   let fit: BackgroundFit = fitBackground(scored);
   lap('background');
   const diag = opts.diagnostics;
@@ -1065,9 +1400,15 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
       const out: Candidate[] = [];
       let changed = false;
       for (const c of cands) {
-        const parts = removeThin(c, ref.refBody, ref.refArea, minArea, W, H);
-        if (parts) changed = true;
-        out.push(...(parts ?? [c]));
+        // Weak pixels (between the thresholds) far from any strong one: shading bands, the edge of
+        // a second surface, shadows that only hysteresis tied to a piece.
+        const anchored = globalThis.process?.env?.NODROP ? null : dropFarWeak(c, score, th.high, texOnly, Math.max(2, WEAK_REACH * ref.refBody), Math.max(minArea, ANCHOR_MIN * ref.refArea), ref.refArea, minArea, W, H);
+        if (anchored) changed = true;
+        for (const a of anchored ?? [c]) {
+          const parts = removeThin(a, ref.refBody, ref.refArea, minArea, W, H);
+          if (parts) changed = true;
+          out.push(...(parts ?? [a]));
+        }
       }
       if (changed) {
         cands = out;
@@ -1128,41 +1469,46 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     const out: Candidate[] = [];
     for (const c of cands) {
       const ra = refAreaAt(c);
-      const doubtful = !c.touchesBorder && c.area >= 0.6 * ra && (c.area > 1.3 * ra || !c.shape || c.shape.confidence < 0.7);
+      // (Not clusters of many pieces: peeling them is slow and changes little.)
+      const doubtful = !c.touchesBorder && c.area >= 0.6 * ra && c.area <= PEEL_MAX_PIECES * ra && (c.area > 1.3 * ra || !c.shape || c.shape.confidence < 0.7);
       out.push(...((doubtful ? peelSoft(c, scored, ra, W, H) : null) ?? [c]));
     }
     cands = out;
   }
 
-  // Split touching pieces at narrow necks.
+  // Split touching pieces at narrow necks, wider necks for what is still too large.
   let group = 0;
   if (refArea > 0 && opts.splitTouching !== false) {
+    const splitTouching = (c: Candidate, from: number): Candidate[] | null => {
+      const ra = refAreaAt(c), bodyAt = refBody * Math.sqrt(ra / refArea);
+      // A clean four-corner outline clearly larger than a piece is two pieces side by side.
+      const confidentSingle = c.shape !== null && c.shape.confidence >= 0.7 && c.shape.bodySize <= 1.2 * bodyAt;
+      if (c.area <= 1.4 * ra || confidentSingle) return null;
+      for (let k = from; k < NECK_RADII.length; k++) {
+        // Every part at least half a piece: the opening only cuts contacts clearly narrower than a
+        // piece body (pieces of an assembled patch touch along whole sides).
+        const parts = splitAtNecks(c, Math.max(2, NECK_RADII[k] * bodyAt), 0.3 * ra, 0.5 * ra);
+        if (globalThis.process?.env?.SPLITDBG && parts) globalThis.console.log('NECK', JSON.stringify(c.bbox), 'r', NECK_RADII[k], 'parts', parts.map((p) => `${(maskArea(p.mask) / ra).toFixed(2)}h${holeShare(p.mask).toFixed(2)}`).join(','));
+        // A part around a hole is a halo (glare, shadow) the piece was cut out of, not a piece.
+        if (!parts || parts.some((p) => holeShare(p.mask) > MAX_PART_HOLE)) continue;
+        const out: Candidate[] = [];
+        for (const p of parts) {
+          const pc = makeCandidate(p.mask, p.bbox, W, H, undefined, SHAPE_MAX_PIECES * ra);
+          // Parts of many pieces (an assembled frame) are not cut further.
+          out.push(...((pc.area <= RESPLIT_MAX_PIECES * ra ? splitTouching(pc, k) : null) ?? [pc]));
+        }
+        return out;
+      }
+      // Pieces touching along a whole side or slightly overlapping: cut along the edges between them.
+      return splitAtEdges(c, ra, bodyAt, preClose, scored, W, H);
+    };
     const out: Candidate[] = [];
     for (const c of cands) {
-      const ra = refAreaAt(c);
-      // A clean four-corner outline clearly larger than a piece is two pieces side by side.
-      const confidentSingle = c.shape !== null && c.shape.confidence >= 0.7 && c.shape.bodySize <= 1.2 * refBody * Math.sqrt(ra / refArea);
-      if (c.area > 1.4 * ra && !confidentSingle) {
-        const parts = splitAtNecks(c, Math.max(2, NECK_RADIUS * refBody * Math.sqrt(ra / refArea)), 0.3 * ra);
-        // Accept the split when every part is piece-sized and at least one is a convincing piece
-        // (the contact area may spoil the other outline).
-        const cand = parts?.map((p) => makeCandidate(p.mask, p.bbox, W, H)) ?? [];
-        const plausible = cand.length >= 2 && cand.every((p) => p.area >= 0.5 * ra) &&
-          cand.some((p) => p.area > patchRatio * ra || (p.shape !== null && p.shape.confidence >= REFERENCE_CONFIDENCE));
-        if (plausible) {
-          group++;
-          for (const p of cand) out.push({ ...p, group });
-          continue;
-        }
-        // Pieces touching along a whole side or slightly overlapping: cut along the edges between them.
-        const cut = splitAtEdges(c, ra, refBody * Math.sqrt(ra / refArea), preClose, scored, W, H);
-        if (cut) {
-          group++;
-          for (const p of cut) out.push({ ...p, group });
-          continue;
-        }
-      }
-      out.push(c);
+      const parts = splitTouching(c, 0);
+      if (parts) {
+        group++;
+        for (const p of parts) out.push({ ...p, group });
+      } else out.push(c);
     }
     cands = out;
   }
