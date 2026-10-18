@@ -19,7 +19,7 @@ import { buildReferenceIndex } from '../../src/pipeline/match';
 import { segmentPieces, type BackgroundModel, type SegmentDiagnostics } from '../../src/pipeline/pieces';
 import { basename } from 'node:path';
 import { decodeFeedbackImage, readFeedbackFile } from './io';
-import { cellJaccard, cellKey, centroidOf, containsPoint, correspondent, distanceToRect, formatCells, overlaps, rasterizeRegions, type RasterRegion } from './regions';
+import { cellJaccard, cellKey, centroidOf, containsPoint, correspondent, distanceToRect, formatCells, overlaps, rasterizeRegions, regionAtTap, type RasterRegion } from './regions';
 
 /** Outcome of one user mark under the current pipeline. */
 export interface MarkJudgement {
@@ -87,6 +87,8 @@ export interface FeedbackReplay {
 }
 
 const now = () => performance.now();
+/** How far (in piece body sizes) a 'missed' tap may land outside a region and still mean it. */
+const TAP_TOLERANCE = 0.12;
 
 function regionCenter(r: DetectedRegion): Point {
   return { x: r.bbox.x + r.bbox.width / 2, y: r.bbox.y + r.bbox.height / 2 };
@@ -218,16 +220,25 @@ export function replayFeedback(bundle: FeedbackBundle, name: string, opts: Repla
     const index = k + 1;
     if (mark.kind === 'missed') {
       const at = { x: mark.x * s, y: mark.y * s };
-      const origHit = origR.find((r) => containsPoint(r, at));
-      const original = origHit ? `inside ${describeRegion(origHit.region, origMatch.get(origHit.id))}` : 'not detected';
-      const hit = curR.find((r) => containsPoint(r, at));
+      // Taps land a few px off: a region within TAP_TOLERANCE body sizes counts as tapped.
+      const tol = Math.max(4, TAP_TOLERANCE * (diagnostics.refBody || 60));
+      const tapText = (t: { d: number } | null) => (t && t.d > 0 ? ` (tap ${Math.round(t.d)} px outside)` : '');
+      const origTap = regionAtTap(origR, at, tol);
+      const origHit = origTap?.r;
+      const original = origHit ? `inside ${describeRegion(origHit.region, origMatch.get(origHit.id))}${tapText(origTap)}` : 'not detected';
+      const tap = regionAtTap(curR, at, tol);
+      const hit = tap?.r;
       if (hit && isPiece(hit)) {
         // Inside a region, but is it a region of its own? Not when it also swallowed a piece the
         // app had found separately.
         const swallowed = overlaps(hit, origR).filter((o) => o.ofB > 0.5 && !containsPoint(o.r, at) && isPiece(o.r));
-        const nowText = describeRegion(hit.region, curMatch.get(hit.id));
+        const nowText = describeRegion(hit.region, curMatch.get(hit.id)) + tapText(tap);
+        const ratio = regionDiag.get(hit.id)?.areaRatio ?? 1;
         if (swallowed.length > 0) {
           out.marks.push({ index, mark, at, original, now: `${nowText}, merged with old #${swallowed.map((o) => o.r.id).join(',#')}`, fixed: false, verdict: 'MERGED', why: diagText(hit.id), currentIds: [hit.id] });
+        } else if (hit.region.kind !== 'piece' || ratio > 1.6) {
+          // A piece the user had to mark is not found when it only sits inside a larger region.
+          out.marks.push({ index, mark, at, original, now: `inside ${nowText}`, fixed: false, verdict: 'IN LARGER REGION', why: diagText(hit.id), currentIds: [hit.id] });
         } else {
           out.marks.push({ index, mark, at, original, now: nowText, fixed: true, verdict: 'FOUND', currentIds: [hit.id] });
         }

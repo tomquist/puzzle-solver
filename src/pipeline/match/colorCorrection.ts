@@ -5,7 +5,7 @@
  * colours to reference colours, and the remaining regions are matched again with it.
  */
 import type { RegionMatch } from '../../model/types';
-import { matchRegionDetailed, type MatchDetail } from './matchRegion';
+import { capForBorder, matchRegionDetailed, type MatchDetail } from './matchRegion';
 import { buildTemplate, DEFAULT_SCORE, type ColorCorrection, type ScoreParams } from './template';
 import type { MatchInput, MatchOptions, ReferenceIndex } from './types';
 
@@ -111,10 +111,17 @@ export function matchRegions(index: ReferenceIndex, inputs: MatchInput[], opts: 
 export function matchRegionsDetailed(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions = {}): MatchDetail[] {
   const first = inputs.map((inp) => matchRegionDetailed(index, inp, opts));
   const correction = estimateColorCorrection(index, first);
-  if (!correction) return first;
-  return inputs.map((inp, i) => {
-    const d = first[i];
-    if (d.match.status === 'confident' && d.match.candidates[0].confidence >= 0.9) return d;
-    return matchRegionDetailed(index, inp, opts, { correction, score: CORRECTED_SCORE });
-  });
+  const out = !correction
+    ? first
+    : inputs.map((inp, i) => {
+        const d = first[i];
+        if (d.match.status === 'confident' && d.match.candidates[0].confidence >= 0.9) return d;
+        return matchRegionDetailed(index, inp, opts, { correction, score: CORRECTED_SCORE });
+      });
+  // Outlines that include cast shadow / table: judged against the whole scan (hard shadows affect
+  // every piece of a photo, so the scan's typical border tells what is normal).
+  const borders = inputs.filter((inp) => inp.kind === 'piece' && inp.outline?.borderTable !== undefined).map((inp) => inp.outline!.borderTable!).sort((a, b) => a - b);
+  const scanMedian = borders.length >= 3 ? borders[borders.length >> 1] : undefined;
+  out.forEach((d, i) => capForBorder(d, inputs[i], scanMedian));
+  return out;
 }

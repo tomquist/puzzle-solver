@@ -22,13 +22,13 @@ import { boxBlurGray } from '../../cv/filter';
 import { simplifyPolygon, smoothContour } from '../../cv/polygon';
 import { otsuThreshold, threshold } from '../../cv/threshold';
 import type { DetectedRegion, PieceShape, QualityIssue, RegionKind } from '../../model/types';
-import { fitBackground, foregroundScore } from './background';
+import { backgroundAt, fitBackground, fitLocalTable, foregroundScore, type BackgroundFit } from './background';
 import { assessPhoto, assessRegions } from './quality';
 import { analyzePieceShape, bodyOrientation, orientationHistogram } from './shape';
 import type { BackgroundModel, RegionDiagnostics, SegmentOptions, Segmentation, SegmentedRegion } from './types';
 import { boxBlurRGB, doubleMask, halveGray, median, offsetPoints } from './util';
 import { noiseSigma } from '../quality/metrics';
-import { rgbaToGray } from '../../cv/color';
+import { rgbaToGray, rgbToLab } from '../../cv/color';
 
 /** Minimum shape confidence for a region to serve as a single-piece size reference. */
 const REFERENCE_CONFIDENCE = 0.45;
@@ -190,6 +190,15 @@ function rectGap(a: Rect, b: Rect): number {
 }
 
 /**
+ * A thin elongated region (seam stub, crack, piece of cable): mean width (area per length) below
+ * THIN_WIDTH and at least THIN_ELONGATION times longer than wide (a knob that fell off is compact).
+ */
+function isThin(c: Candidate, body: number): boolean {
+  const len = Math.max(c.bbox.width, c.bbox.height);
+  return len >= 0.3 * body && c.area / len < THIN_WIDTH * body && len * len >= THIN_ELONGATION * c.area;
+}
+
+/**
  * Reassemble pieces that fell apart because parts of their print match the table: a fragment
  * (< half the expected piece area) is merged with its nearest neighbour within `gap` px when the
  * union is still at most one piece in area and extent, and a closing bridges them into one blob.
@@ -203,7 +212,7 @@ function mergeFragments(cands: Candidate[], refAreaAt: (c: Candidate) => number,
     for (const fi of order) {
       const f = list[fi];
       const ra = refAreaAt(f);
-      if (f.touchesBorder || f.area >= 0.5 * ra) continue;
+      if (f.touchesBorder || f.area >= 0.5 * ra || isThin(f, refBody)) continue;
       let best = -1, bestGap = Infinity;
       list.forEach((t, ti) => {
         if (ti === fi || t.touchesBorder || t.area + f.area > 1.35 * ra) return;
@@ -253,6 +262,77 @@ function mergeFragments(cands: Candidate[], refAreaAt: (c: Candidate) => number,
     if (!merged) break;
   }
   return list;
+}
+
+/** Weak specks below this fraction of a piece are noise, not regions. */
+const NOISE_SPECK = 0.15;
+
+/** Median foreground score over a candidate's pixels (subsampled). */
+function medianScore(score: GrayImage, c: Candidate): number {
+  const step = Math.max(1, Math.round(Math.sqrt(c.area / 400)));
+  const v: number[] = [];
+  for (let y = 0; y < c.bbox.height; y += step) {
+    for (let x = 0; x < c.bbox.width; x += step) if (c.mask.data[y * c.bbox.width + x]) v.push(score.data[(y + c.bbox.y) * score.width + x + c.bbox.x]);
+  }
+  return v.length > 0 ? median(v) : 0;
+}
+
+/** Share of strong pixels (score above the high threshold) from which a blob is no table for the local model. */
+const LOCAL_STRONG_SHARE = 0.2;
+/** Width (fraction of the piece body size) below which a long structure counts as thin (seam, crack, cable). */
+const THIN_WIDTH = 0.3;
+/** Length (fraction of the body size) from which a thin structure is removed (shorter ones: corners, necks, knobs). */
+const THIN_LENGTH = 0.7;
+/** Share of a long loose part the opening removed from which it is thin as a whole (gap networks). */
+const THIN_REMOVED = 0.75;
+/** Length² / area from which a small region counts as elongated (a disc: 1.27; a 3:1 bar: 3). */
+const THIN_ELONGATION = 2.5;
+
+/**
+ * Remove thin elongated structures from a region: plank gaps and tile seams, cracks, cables and
+ * cloth folds score like a dark object and grow into every piece they touch. An opening with a disk
+ * of THIN_WIDTH/2 body sizes (re-grown by one pixel) keeps the bodies of pieces; what it removes,
+ * together with small leftovers it cut off (bulges of a seam), is a thin structure when it is long
+ * (≥ THIN_LENGTH body sizes) and is dropped. Everything else goes back: rounded-off corners, necks
+ * and knobs of pieces, short stubs. Returns the remaining parts as candidates (empty when the whole
+ * region was a thin structure), or null when nothing changed.
+ */
+function removeThin(c: Candidate, body: number, refArea: number, minArea: number, W: number, H: number): Candidate[] | null {
+  const r = Math.max(2, Math.round((THIN_WIDTH / 2) * body));
+  const pad = r + 2;
+  const { width: w, height: h } = c.mask;
+  const pw = w + 2 * pad, ph = h + 2 * pad;
+  const m = createMask(pw, ph);
+  for (let y = 0; y < h; y++) m.data.set(c.mask.data.subarray(y * w, (y + 1) * w), (y + pad) * pw + pad);
+  const kept = dilate(erode(m, r, 'disk'), r + 1, 'disk');
+  for (let i = 0; i < m.data.length; i++) kept.data[i] &= m.data[i];
+  // Pieces: kept blobs of at least a third of a piece. Everything else may belong to a strand.
+  const kc = labelComponents(kept, 8);
+  const big = new Set(kc.stats.filter((st) => st.area >= 0.3 * refArea).map((st) => st.label));
+  const loose = createMask(pw, ph);
+  let any = 0;
+  for (let i = 0; i < m.data.length; i++) {
+    if (m.data[i] && !big.has(kc.labels[i])) { loose.data[i] = 1; any++; }
+  }
+  if (any === 0) return null;
+  const { labels, stats } = labelComponents(loose, 8);
+  // Pixels of each loose part the opening removed (thin everywhere) versus kept (crumbs, bulges).
+  const removed = new Float64Array(stats.length + 1);
+  for (let i = 0; i < m.data.length; i++) if (labels[i] > 0 && !kept.data[i]) removed[labels[i]]++;
+  const thin = new Set<number>();
+  for (const st of stats) {
+    const len = Math.max(st.bbox.width, st.bbox.height);
+    // Long, and thin: on average (a compact blob far from any piece is a crumb, not a strand), or
+    // nearly all of it too thin for the opening (a network of gaps, whose bbox is no length).
+    if (len >= THIN_LENGTH * body && (st.area / len < THIN_WIDTH * body || removed[st.label] >= THIN_REMOVED * st.area)) thin.add(st.label);
+  }
+  if (thin.size === 0) return null;
+  const out = createMask(pw, ph);
+  for (let i = 0; i < m.data.length; i++) out.data[i] = m.data[i] && !thin.has(labels[i]) ? 1 : 0;
+  const parts = labelComponents(out, 8);
+  return parts.stats
+    .filter((st) => st.area >= minArea)
+    .map((st) => makeCandidate(componentMask(parts.labels, pw, st.label, st.bbox), { x: st.bbox.x + c.bbox.x - pad, y: st.bbox.y + c.bbox.y - pad, width: st.bbox.width, height: st.bbox.height }, W, H, st.area));
 }
 
 function makeCandidate(mask: Mask, bbox: Rect, photoW: number, photoH: number, area?: number): Candidate {
@@ -616,7 +696,9 @@ const SNAP_MIN_STEP = 8;
 /** Fraction of the step (and minimum deviation in sigmas) a boundary pixel must reach to stay. */
 const SNAP_FRACTION = 0.15;
 const SNAP_MIN_DEV = 2.5;
-/** Median colour score just inside the outline below which a region is not snapped. */
+/** Width of the snapped outer band, fraction of the body size (at least 3 px). */
+const SNAP_BAND = 0.035;
+/** Median colour score just inside the outline (or of the whole region) below which a region is not snapped. */
 const SNAP_MIN_CONTRAST = 12;
 
 /**
@@ -627,8 +709,10 @@ const SNAP_MIN_CONTRAST = 12;
  * table-like (below 30 % of the piece's brightness step, measured just inside) are dropped unless
  * their colour score is clearly piece-like.
  */
-function snapOutline(c: Candidate, img: RGBAImage, score: GrayImage, high: number, noise: number, W: number, H: number): Candidate | null {
-  const pad = 9;
+function snapOutline(c: Candidate, img: RGBAImage, score: GrayImage, high: number, noise: number, body: number, W: number, H: number): Candidate | null {
+  // Band width: 3 px, more on large pieces in blurry photos (the colour halo scales with the blur).
+  const k = Math.max(3, Math.round(SNAP_BAND * body));
+  const pad = k + 9;
   const x0 = Math.max(0, c.bbox.x - pad), y0 = Math.max(0, c.bbox.y - pad);
   const x1 = Math.min(W, c.bbox.x + c.bbox.width + pad), y1 = Math.min(H, c.bbox.y + c.bbox.height + pad);
   const w = x1 - x0, h = y1 - y0;
@@ -644,15 +728,15 @@ function snapOutline(c: Candidate, img: RGBAImage, score: GrayImage, high: numbe
     }
   }
   // Table brightness and spread from a ring just outside the region.
-  const near = dilate(m, 3), far = dilate(m, 8);
+  const near = dilate(m, k), far = dilate(m, k + 5);
   const ring: number[] = [];
   for (let i = 0; i < w * h; i++) if (far.data[i] && !near.data[i]) ring.push(Y[i]);
   if (ring.length < 30) return null;
   const tY = median(ring);
   const sY = Math.max(noise, 1.4826 * median(ring.map((v) => Math.abs(v - tY))), 1);
-  // The piece's brightness just inside the band (3–6 px in), averaged locally along the outline.
-  const band = erode(m, 3);
-  const deep = erode(m, 6);
+  // The piece's brightness just inside the band (k–2k px in), averaged locally along the outline.
+  const band = erode(m, k);
+  const deep = erode(m, 2 * k);
   const D = createGray(w, h), In = createGray(w, h);
   const ringScore: number[] = [];
   for (let i = 0; i < w * h; i++) {
@@ -664,8 +748,8 @@ function snapOutline(c: Candidate, img: RGBAImage, score: GrayImage, high: numbe
   }
   // Pieces that barely stand out (dark print on a dark table) keep their outline: their edge is
   // not a clean brightness step.
-  if (ringScore.length < 20 || median(ringScore) < SNAP_MIN_CONTRAST) return null;
-  const sumD = boxBlurGray(D, 4).data, cnt = boxBlurGray(In, 4).data;
+  if (ringScore.length < 20 || Math.max(median(ringScore), medianScore(score, c)) < SNAP_MIN_CONTRAST) return null;
+  const sumD = boxBlurGray(D, k + 1).data, cnt = boxBlurGray(In, k + 1).data;
   let removed = 0;
   const keep = cloneMask(m);
   for (let i = 0; i < w * h; i++) {
@@ -782,6 +866,34 @@ function isPlausibleSingle(c: Candidate): boolean {
   return r > 0.6 && r < 1.6;
 }
 
+/** Largest hole that is filled, in typical object areas (see typicalObjectArea). */
+const HOLE_MAX_OBJECTS = 3;
+
+/**
+ * Median area of the components of at least `minArea` px that do not touch the photo border
+ * (loose pieces and patches, not networks of tile gaps reaching the border); Infinity without any.
+ */
+function typicalObjectArea(m: Mask, minArea: number): number {
+  const { width: w, height: h } = m;
+  const { count, y: ry, x0: rx0, x1: rx1, root } = labelRuns(m, 1, 8);
+  const area = new Float64Array(count);
+  for (let i = 0; i < count; i++) {
+    const r = root[i];
+    if (area[r] < 0) continue;
+    if (ry[i] === 0 || ry[i] === h - 1 || rx0[i] === 0 || rx1[i] === w - 1) area[r] = -1;
+    else area[r] += rx1[i] - rx0[i] + 1;
+  }
+  const areas: number[] = [];
+  for (let i = 0; i < count; i++) if (root[i] === i && area[i] >= minArea) areas.push(area[i]);
+  return areas.length > 0 ? median(areas) : Infinity;
+}
+
+/**
+ * Smallest reference single as a share of the photo area (a piece covers ≥ 0.2 % even with 200
+ * pieces in view; specks of shadow or grain that happen to have a tidy outline are far smaller).
+ */
+const MIN_REFERENCE_SHARE = 5e-4;
+
 /** Shape confidence of clean single pieces (assembled patches rarely exceed ≈ 0.8). */
 const STRONG_SINGLE = 0.85;
 
@@ -791,8 +903,9 @@ const STRONG_SINGLE = 0.85;
  * sizes are clearly multi-modal take the smallest well-supported size cluster (patches are multiples
  * of a piece, never smaller).
  */
-function referenceSingles(cands: Candidate[]): Candidate[] {
-  const plausible = cands.filter(isPlausibleSingle);
+function referenceSingles(cands: Candidate[], minArea: number): Candidate[] {
+  // Crumbs and specks that happen to have a tidy outline are no reference (see MIN_REFERENCE_SHARE).
+  const plausible = cands.filter((c) => c.area >= minArea && isPlausibleSingle(c));
   const strong = plausible.filter((c) => c.shape!.confidence >= STRONG_SINGLE);
   const pool = strong.length >= 2 ? strong : plausible;
   if (pool.length < 2) return pool;
@@ -837,52 +950,113 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   const noise = estimateNoise(photo);
   const smoothing = noise < NOISE_SMOOTH_1 ? 0 : noise < NOISE_SMOOTH_2 ? 1 : 2;
   const scored = smoothing > 0 ? boxBlurRGB(photo, smoothing) : photo;
-  const fit = fitBackground(scored);
+  let fit: BackgroundFit = fitBackground(scored);
   lap('background');
-  const score = foregroundScore(scored, fit);
-  lap('score');
-  const th = chooseThreshold(score);
-  let fg = hysteresis(score, th.high, th.low);
-  lap('threshold');
   const diag = opts.diagnostics;
-  if (diag) Object.assign(diag, { score, high: th.high, low: th.low, colour: cloneMask(fg), minArea });
-  // Pixels only the texture cue found (colour could not separate them): kept for reporting.
-  const texOnly = createMask(W, H);
-  const addTexture = (tex: Mask | null) => {
-    if (!tex) return;
-    for (let i = 0; i < fg.data.length; i++) {
-      if (tex.data[i] && !fg.data[i]) { fg.data[i] = 1; texOnly.data[i] = 1; }
+
+  /** Score → threshold → texture → morphology → candidates → reference size → strands removed. */
+  const pass = (model: BackgroundFit) => {
+    const score = foregroundScore(scored, model);
+    lap('score');
+    const th = chooseThreshold(score);
+    let fg = hysteresis(score, th.high, th.low);
+    lap('threshold');
+    if (diag) Object.assign(diag, { score, high: th.high, low: th.low, colour: cloneMask(fg), minArea });
+    // Pixels only the texture cue found (colour could not separate them): kept for reporting.
+    const texOnly = createMask(W, H);
+    const addTexture = (tex: Mask | null) => {
+      if (!tex) return;
+      for (let i = 0; i < fg.data.length; i++) {
+        if (tex.data[i] && !fg.data[i]) { fg.data[i] = 1; texOnly.data[i] = 1; }
+      }
+    };
+    addTexture(textureForeground(score, fg));
+    // On a dark table cast shadows are invisible, so luminance texture is safe there and catches dark
+    // print whose colour equals the table (on light tables it would also catch the shadows).
+    // (Not on a patterned table: its pattern is all brightness structure.)
+    if (model.color[0] < DARK_TABLE_L && model.palette.length === 0) addTexture(textureForeground(rgbaToGray(scored), fg));
+    lap('texture');
+    // Pieces lying 1–3 px apart are still separate here (closing bridges them): kept for splitting.
+    const preClose = cloneMask(fg);
+    fg = close(fg, 2);
+    // Holes in pieces (print like the table) are filled; table enclosed by a grid of tile gaps or by
+    // an assembled frame is not (far larger than any piece).
+    fg = fillHoles(fg, HOLE_MAX_OBJECTS * typicalObjectArea(fg, minArea));
+    const unfiltered = diag ? cloneMask(fg) : null;
+    fg = removeSmallComponents(fg, minArea);
+    if (diag && unfiltered) {
+      for (let i = 0; i < fg.data.length; i++) unfiltered.data[i] &= fg.data[i] ^ 1;
+      Object.assign(diag, { texture: texOnly, removed: unfiltered });
     }
+    lap('morphology');
+    const { labels, stats } = labelComponents(fg, 8);
+    lap('components');
+    let cands: Candidate[] = stats.map((s) => makeCandidate(componentMask(labels, W, s.label, s.bbox), s.bbox, W, H, s.area));
+    lap('shapes');
+    // Single-piece reference size.
+    const references = () => {
+      const singles = referenceSingles(cands, MIN_REFERENCE_SHARE * W * H);
+      const others = cands.filter((c) => !c.touchesBorder);
+      const refArea = singles.length > 0 ? median(singles.map((c) => c.area)) : others.length > 0 ? median(others.map((c) => c.area)) : 0;
+      const refBody = singles.length > 0 ? median(singles.map((c) => c.shape!.bodySize)) : Math.sqrt(refArea);
+      return { singles, refArea, refBody, noReference: singles.length === 0 && others.length < 3 };
+    };
+    let ref = references();
+    // Plank gaps, tile seams, cracks, cables: thin long structures must neither join a piece nor
+    // become a region of their own.
+    if (ref.refBody > 0) {
+      const out: Candidate[] = [];
+      let changed = false;
+      for (const c of cands) {
+        const parts = removeThin(c, ref.refBody, ref.refArea, minArea, W, H);
+        if (parts) changed = true;
+        out.push(...(parts ?? [c]));
+      }
+      if (changed) {
+        cands = out;
+        ref = references();
+      }
+    }
+    lap('thin');
+    return { score, th, fg, texOnly, preClose, cands, ref };
   };
-  addTexture(textureForeground(score, fg));
-  // On a dark table cast shadows are invisible, so luminance texture is safe there and catches dark
-  // print whose colour equals the table (on light tables it would also catch the shadows).
-  // (Not on a patterned table: its pattern is all brightness structure.)
-  if (fit.color[0] < DARK_TABLE_L && fit.palette.length === 0) addTexture(textureForeground(rgbaToGray(scored), fg));
-  lap('texture');
-  // Pieces lying 1–3 px apart are still separate here (closing bridges them): kept for splitting.
-  const preClose = cloneMask(fg);
-  fg = close(fg, 2);
-  fg = fillHoles(fg);
-  const unfiltered = diag ? cloneMask(fg) : null;
-  fg = removeSmallComponents(fg, minArea);
-  if (diag && unfiltered) {
-    for (let i = 0; i < fg.data.length; i++) unfiltered.data[i] &= fg.data[i] ^ 1;
-    Object.assign(diag, { texture: texOnly, removed: unfiltered });
+
+  let p = pass(fit);
+  // Shadow zones and local lighting the smooth surface cannot follow: learn them from the table
+  // around the pieces found so far (coarse grid, cells of at least two pieces) and segment again.
+  if (p.ref.refBody > 0 && fit.palette.length === 0) {
+    // Excluded (on a 4× coarser grid): anything piece-shaped and every blob with a fair share of
+    // strong pixels (pieces, and patches of weak pieces whose print is speckled with them). Smooth
+    // weak blobs, which may be the shadow zone itself, stay in the estimate (a cell spans several
+    // pieces, so the median is robust).
+    const f = 4, cw = Math.ceil(W / f), ch = Math.ceil(H / f);
+    const whole = createMask(cw, ch);
+    const sd = p.score.data, high = p.th.high;
+    for (const c of p.cands) {
+      if (c.area < 0.25 * p.ref.refArea) continue;
+      const { x: bx, y: by, width: bw, height: bh } = c.bbox;
+      let strong = 0;
+      for (let y = 0; y < bh; y++) {
+        for (let x = 0; x < bw; x++) if (c.mask.data[y * bw + x] && sd[(y + by) * W + x + bx] >= high) strong++;
+      }
+      const pieceLike = c.area >= 0.5 * p.ref.refArea && c.shape !== null && c.shape.confidence >= MIN_SHAPE_CONFIDENCE;
+      if (!pieceLike && strong < LOCAL_STRONG_SHARE * c.area) continue;
+      for (let y = 0; y < bh; y++) {
+        const crow = (((y + by) / f) | 0) * cw;
+        for (let x = 0; x < bw; x++) if (c.mask.data[y * bw + x]) whole.data[crow + (((x + bx) / f) | 0)] = 1;
+      }
+    }
+    const exclude = dilate(whole, Math.max(1, Math.round((0.25 * p.ref.refBody) / f)));
+    const local = fitLocalTable(scored, fit, exclude, Math.max(2 * p.ref.refBody, Math.min(W, H) / 10));
+    lap('local');
+    if (local) {
+      fit = { ...fit, local };
+      p = pass(fit);
+    }
   }
-  lap('morphology');
-  const { labels, stats } = labelComponents(fg, 8);
-  lap('components');
-
-  let cands: Candidate[] = stats.map((s) => makeCandidate(componentMask(labels, W, s.label, s.bbox), s.bbox, W, H, s.area));
-  lap('shapes');
-
-  // Single-piece reference size.
-  const singles = referenceSingles(cands);
-  const others = cands.filter((c) => !c.touchesBorder);
-  const refArea = singles.length > 0 ? median(singles.map((c) => c.area)) : others.length > 0 ? median(others.map((c) => c.area)) : 0;
-  const refBody = singles.length > 0 ? median(singles.map((c) => c.shape!.bodySize)) : Math.sqrt(refArea);
-  const noReference = singles.length === 0 && others.length < 3;
+  const { score, th, texOnly, preClose, ref } = p;
+  let { fg, cands } = p;
+  const { singles, refArea, refBody, noReference } = ref;
   if (diag) Object.assign(diag, { refArea, refBody });
   // Expected single-piece area at a position (follows perspective size trends when measurable).
   const sizeTrend = fitSizeTrend(singles, W, H);
@@ -938,8 +1112,19 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   if (refArea > 0) cands = mergeFragments(cands, refAreaAt, refBody, W, H);
   lap('split');
   if (diag) diag.blockiness = blockiness;
-  if (blocky) cands = cands.map((c) => (c.touchesBorder ? c : snapOutline(c, scored, score, th.high, noise, W, H) ?? c));
+  if (blocky) cands = cands.map((c) => (c.touchesBorder ? c : snapOutline(c, scored, score, th.high, noise, refBody * Math.sqrt(refAreaAt(c) / Math.max(1, refArea)), W, H) ?? c));
   lap('snap');
+
+  // Noise is no region: strands (seam stubs, cracks) and small weak specks (shadow or grain noise
+  // that only the low threshold picked up). Strong crumbs and larger weak blobs, which may be a
+  // piece that is hard to see, stay.
+  if (refArea > 0) {
+    cands = cands.filter((c) => {
+      const ra = refAreaAt(c);
+      if (c.area >= fragRatio * ra) return !isThin(c, refBody * Math.sqrt(ra / refArea));
+      return !isThin(c, refBody * Math.sqrt(ra / refArea)) && (c.area >= NOISE_SPECK * ra || medianScore(score, c) >= th.high);
+    });
+  }
 
   // Classify and build regions.
   const ordered = readingOrder(cands);
@@ -954,8 +1139,11 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     const weakShape = !c.shape || c.shape.confidence < UNCERTAIN_CONFIDENCE;
     const clutter = c.touchesBorder && ra > 0 && isBorderClutter(c, refBody * Math.sqrt(ra / refArea), W, H);
     if (clutter) clutterAt.add(i);
+    // Much longer than a piece for at most a piece's area: a strand (seam, crack, shadow edge).
+    const bodyAt = refBody * Math.sqrt(ra / Math.max(1, refArea));
+    const strand = refArea > 0 && (isThin(c, bodyAt) || (Math.max(c.bbox.width, c.bbox.height) > 2.2 * bodyAt && ratio < 1.2));
     let kind: RegionKind = 'piece';
-    if (ratio < fragRatio || clutter) kind = 'unknown';
+    if (ratio < fragRatio || clutter || strand) kind = 'unknown';
     else if ((ratio > patchRatio && !confidentSingle) || (ratio > 1.4 && weakShape)) kind = 'patch';
     // Without any size reference (no convincing single piece, < 3 regions), a region without a
     // convincing single-piece shape is taken as an assembled patch (lone patches score ≤ 0.4,
@@ -974,7 +1162,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
       issues: [],
     };
     if (shape) region.shape = shape;
-    return { region, mask: c.mask, image: cropRGBA(photo, c.bbox) };
+    return { region, mask: c.mask, image: cropRGBA(photo, c.bbox), borderTable: 0 };
   });
 
   // Region-level structural issues.
@@ -1021,6 +1209,10 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
 
   if (diag) diag.regions = regionDiag;
   const bodies = regions.filter((r) => r.region.shape).map((r) => r.region.shape!.bodySize);
+  const bodyRef = bodies.length > 0 ? median(bodies) : refBody;
+  if (fit.palette.length === 0 && fit.color[0] >= BORDER_TABLE_MIN_L && bodyRef > 0) {
+    for (const r of regions) r.borderTable = borderTableFraction(photo, fit, r, bodyRef);
+  }
   const background: BackgroundModel = {
     ...fit,
     noise,
@@ -1044,6 +1236,40 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     lap('quality');
   }
   return seg;
+}
+
+/** Table lightness from which cast shadows are visible and the border-table fraction is measured. */
+const BORDER_TABLE_MIN_L = 60;
+
+/**
+ * How much more of a region's outer band (≈ 0.12 body sizes wide) looks like the table than the
+ * ring just inside it: table-like = the modelled table colour, possibly darkened by a cast shadow
+ * ((L* + 16) scaled by 0.5…1.08, a*, b* alike ± 5). Comparing with the inner ring discounts piece
+ * content that happens to be table-coloured (a pale sky on a cream table).
+ */
+function borderTableFraction(photo: RGBAImage, model: Pick<BackgroundModel, 'coefficients' | 'width' | 'height'>, r: SegmentedRegion, body: number): number {
+  const { mask } = r;
+  const { x: bx, y: by } = r.region.bbox;
+  const k = Math.max(2, Math.round(0.12 * body));
+  const core = erode(mask, k), inner = erode(mask, 2 * k);
+  // [pixels, table-like] for the outer band and the inner ring.
+  const n = [0, 0], t = [0, 0];
+  for (let y = 0; y < mask.height; y++) {
+    for (let x = 0; x < mask.width; x++) {
+      const i = y * mask.width + x;
+      if (!mask.data[i] || inner.data[i]) continue;
+      const ring = core.data[i] ? 1 : 0;
+      n[ring]++;
+      const X = x + bx, Y = y + by;
+      const o = (Y * photo.width + X) * 4;
+      const lab = rgbToLab(photo.data[o], photo.data[o + 1], photo.data[o + 2]);
+      const tb = backgroundAt(model, X, Y);
+      const rho = (lab[0] + 16) / (tb[0] + 16);
+      if (rho > 0.5 && rho < 1.08 && Math.abs(lab[1] - rho * tb[1]) < 5 && Math.abs(lab[2] - rho * tb[2]) < 5) t[ring]++;
+    }
+  }
+  if (n[0] === 0) return 0;
+  return Math.max(0, t[0] / n[0] - (n[1] > 0 ? t[1] / n[1] : 0));
 }
 
 /**

@@ -64,6 +64,35 @@ export function containsPoint(r: RasterRegion, p: Point): boolean {
   return x >= 0 && y >= 0 && x < r.rect.width && y < r.rect.height && r.mask.data[y * r.rect.width + x] === 1;
 }
 
+/** Distance from `p` to the nearest pixel of the region (0 inside), or Infinity beyond `maxD`. */
+export function distanceToRegion(r: RasterRegion, p: Point, maxD: number): number {
+  if (containsPoint(r, p)) return 0;
+  const px = Math.round(p.x) - r.rect.x, py = Math.round(p.y) - r.rect.y, R = Math.ceil(maxD);
+  let best = Infinity;
+  for (let y = Math.max(0, py - R); y <= Math.min(r.rect.height - 1, py + R); y++) {
+    for (let x = Math.max(0, px - R); x <= Math.min(r.rect.width - 1, px + R); x++) {
+      if (!r.mask.data[y * r.rect.width + x]) continue;
+      const d = Math.hypot(x - px, y - py);
+      if (d < best) best = d;
+    }
+  }
+  return best <= maxD ? best : Infinity;
+}
+
+/**
+ * The region a tap at `p` means: the one containing it, else the nearest within `tolerance` px
+ * (taps on a phone land a few px off, e.g. in the concave corner next to a knob).
+ */
+export function regionAtTap(regions: RasterRegion[], p: Point, tolerance: number): { r: RasterRegion; d: number } | null {
+  let best: { r: RasterRegion; d: number } | null = null;
+  for (const r of regions) {
+    const d = distanceToRegion(r, p, tolerance);
+    if (d === 0) return { r, d };
+    if (d < Infinity && (!best || d < best.d)) best = { r, d };
+  }
+  return best;
+}
+
 /** Distance from `p` to the region's bounding box (0 inside). */
 export function distanceToRect(r: Rect, p: Point): number {
   const dx = Math.max(0, r.x - p.x, p.x - (r.x + r.width));

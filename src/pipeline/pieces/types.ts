@@ -37,6 +37,12 @@ export interface BackgroundModel {
    * Empty for a plain table.
    */
   palette: { color: [number, number, number]; sigma: [number, number, number]; refL: number; interior: number }[];
+  /**
+   * Local corrections of the table colour (Lab residuals on a coarse grid of cell centres,
+   * interpolated bilinearly) where the smooth surface misses local shadows or lighting; absent
+   * when the surface explains the table everywhere.
+   */
+  local?: LocalTableGrid;
   /** Fraction of the photo classified as background. */
   coverage: number;
   /** Estimated sensor noise (gray levels, measured on the photo's border bands). */
@@ -49,6 +55,17 @@ export interface BackgroundModel {
   separability: number;
   /** Median foreground score of the pixels just inside the piece outlines (sigma units; outline contrast). */
   outlineContrast: number;
+}
+
+/** Coarse grid of local table-colour corrections (see {@link BackgroundModel.local}). */
+export interface LocalTableGrid {
+  cols: number;
+  rows: number;
+  /** Node spacing in photo px; node (i, j) sits at (j·cellW, i·cellH), the outer nodes on the photo border. */
+  cellW: number;
+  cellH: number;
+  /** Lab residual per node, 3 values per node, row-major. */
+  residual: Float32Array;
 }
 
 export interface SegmentOptions {
@@ -118,6 +135,13 @@ export interface SegmentedRegion {
   mask: Mask;
   /** Photo crop of `region.bbox`. */
   image: RGBAImage;
+  /**
+   * How much more of the region's outer band (≈ 0.12 piece sizes wide) than of the ring inside it
+   * is explained by the table, also when darkened by a cast shadow: high values mean the outline
+   * probably includes shadow or table. Measured on plain light tables only (L* ≥ 60, where shadows
+   * are visible); 0 otherwise. Outline-reliability evidence for matching.
+   */
+  borderTable: number;
 }
 
 /** Result of {@link segmentPieces}. */

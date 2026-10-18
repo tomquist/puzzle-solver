@@ -3,6 +3,7 @@
  * locate every region in the reference picture and derive fit hints.
  */
 import type { RGBAImage } from '../cv/image';
+import { convexHull, polygonArea } from '../cv/polygon';
 import { limitSize } from '../cv/resize';
 import type { CellRef, RegionMatch, ScanResult } from '../model/types';
 import type { ProgressCallback } from '../worker/api';
@@ -54,6 +55,11 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
     shape: s.region.shape,
     orientationDeg: s.region.orientationDeg,
     expectedBodySize: seg.medianBodySize,
+    outline: {
+      borderTable: s.borderTable,
+      issues: s.region.issues.map((i) => i.code),
+      solidity: s.region.contour.length >= 3 ? s.region.area / Math.max(1, polygonArea(convexHull(s.region.contour))) : undefined,
+    },
   }));
   const matched = inputs.length > 0 ? matchRegions(index, inputs, { placedCells: opts.placedCells }) : [];
   timings.match = now() - t;

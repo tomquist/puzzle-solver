@@ -28,6 +28,8 @@ interface Scenario {
   viaBoxPhoto?: boolean;
   /** Clean scenarios must not raise warnings. */
   clean?: boolean;
+  /** Recolour the painting (reference and pieces alike), e.g. part of it in dark wood tones. */
+  tone?: (img: RGBAImage) => RGBAImage;
 }
 
 const gain = (rng: Rng, spread: number): RGB => [rng.uniform(1 - spread, 1 + spread), rng.uniform(1 - spread, 1 + spread), rng.uniform(1 - spread, 1 + spread)];
@@ -39,6 +41,24 @@ const standard = (rng: Rng): RenderOptions => ({
   gain: gain(rng, 0.1),
   illumination: 0.1,
 });
+
+/**
+ * The painting with its lower part (below 40–50 % of the height) in dark tones of a wood table:
+ * pieces from there look like deep shadow on that table, and the reference shows them alike.
+ */
+function darkWoodLowerPart(img: RGBAImage, wood: RGB, level = 0.5): RGBAImage {
+  const out = { width: img.width, height: img.height, data: new Uint8ClampedArray(img.data) };
+  for (let y = 0; y < img.height; y++) {
+    const t = Math.max(0, Math.min(1, (y / img.height - 0.4) / 0.1));
+    if (t === 0) continue;
+    for (let x = 0; x < img.width; x++) {
+      const i = (y * img.width + x) * 4, d = img.data;
+      const f = level * (0.6 + (0.8 * (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2])) / 255);
+      for (let c = 0; c < 3; c++) out.data[i + c] = d[i + c] * (1 - t) + t * (0.75 * wood[c] * f + 0.25 * d[i + c] * level);
+    }
+  }
+  return out;
+}
 
 const SCENARIOS: Scenario[] = [
   { name: 'starry-320-dark', painting: 'starry-night', grid: { rows: 16, cols: 20 }, items: { singles: 24 }, seeds: [1, 2], render: standard, clean: true },
@@ -163,6 +183,34 @@ const SCENARIOS: Scenario[] = [
     painting: 'starry-night', grid: { rows: 16, cols: 20 }, items: { singles: 20 }, seeds: [29],
     render: (rng) => ({ ...standard(rng), pairs: { count: 6, gap: [-3, 3] } }),
   },
+  // From real feedback (light wood-look tiles): dark gaps crossing under and next to pieces, a large
+  // soft shadow from the border, pieces in dark tones of the table colour (the lower part of the
+  // painting recoloured, so the reference shows them alike), and all of it together.
+  {
+    name: 'wave-plank-gaps',
+    painting: 'great-wave', grid: { rows: 20, cols: 30 }, items: { singles: 16, patches: [[2, 2]] }, seeds: [30],
+    render: (rng) => ({ ...standard(rng), background: [196, 172, 140], pattern: { kind: 'planks', width: 260, gap: 12, tiles: true }, illumination: 0.15 }),
+  },
+  {
+    name: 'starry-shadow-zone',
+    painting: 'starry-night', grid: { rows: 16, cols: 20 }, items: { singles: 20 }, seeds: [31],
+    render: (rng) => ({ ...standard(rng), background: [206, 196, 178], shadowZone: { strength: 0.5 } }),
+  },
+  {
+    name: 'wave-dark-wood-pieces',
+    painting: 'great-wave', grid: { rows: 20, cols: 30 }, items: { singles: 20 }, seeds: [32],
+    tone: (img) => darkWoodLowerPart(img, [160, 140, 112], 0.55),
+    render: (rng) => ({ ...standard(rng), background: [160, 140, 112], backgroundTexture: 22, noiseSigma: 4, jpegQuality: 80 }),
+  },
+  {
+    name: 'starry-wood-tiles-real',
+    painting: 'starry-night', grid: { rows: 16, cols: 20 }, items: { singles: 14, patches: [[1, 2], [2, 2]] }, seeds: [33],
+    tone: (img) => darkWoodLowerPart(img, [192, 170, 142]),
+    render: (rng) => ({
+      ...standard(rng), background: [192, 170, 142], pattern: { kind: 'planks', width: 300, gap: 14, tiles: true },
+      shadowZone: { strength: 0.45 }, jpegQuality: 80, illumination: 0.15,
+    }),
+  },
 ];
 
 const COLUMNS = [
@@ -175,10 +223,17 @@ const painting = (name: Scenario['painting']) => {
   if (!paintings.has(name)) paintings.set(name, loadTestAsset(name));
   return paintings.get(name)!;
 };
+/** The scenario's painting, recoloured when the scenario says so. */
+const source = (s: Scenario) => {
+  if (!s.tone) return painting(s.painting);
+  const key = `${s.painting}:${s.name}`;
+  if (!paintings.has(key)) paintings.set(key, s.tone(painting(s.painting)));
+  return paintings.get(key)!;
+};
 
 /** The reference the app would build: the painting itself, or the rectified box photo. */
 function makeReference(s: Scenario, seed: number): RGBAImage {
-  const src = painting(s.painting);
+  const src = source(s);
   if (!s.viaBoxPhoto) return perturbReference(src, { seed });
   const box = renderBoxPhoto(perturbReference(src, { seed }), { seed, width: 2000, height: 1500 });
   const detection = detectBox(box.photo);
@@ -192,7 +247,7 @@ describe('scan benchmark', () => {
       const perSeed: MetricRecord[] = [];
       for (const seed of s.seeds) {
         await yieldToEventLoop();
-        const src = painting(s.painting);
+        const src = source(s);
         const cut = generateJigsaw(s.grid.rows, s.grid.cols, src.width, src.height, seed);
         const reference = makeReference(s, seed);
         const index = buildReferenceIndex(reference, s.grid, 'grid');

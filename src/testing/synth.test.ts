@@ -311,6 +311,47 @@ describe('renderPiecesPhoto real-photo options', () => {
       savePng('.debug/synth/real-glare.png', glare.photo);
     }
   });
+
+  it('paints plank gaps, a soft shadow zone from the border and dark table-coloured pieces', () => {
+    const wood = { ...base, background: [196, 172, 140] as [number, number, number] };
+    const plainWood = renderPiecesPhoto(ref, cut, items, wood);
+    const tableLum = lum(plainWood.photo, 5, 5);
+
+    // Tile gaps: thin dark lines over a few percent of the table, never under the pieces' print.
+    const planks = renderPiecesPhoto(ref, cut, items, { ...wood, pattern: { kind: 'planks', width: 200, gap: 10, tiles: true } });
+    expect(planks.truth.map((t) => t.bbox)).toEqual(plainWood.truth.map((t) => t.bbox));
+    let dark = 0;
+    const { width: W, height: H } = planks.photo;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (lum(planks.photo, x, y) < 0.7 * tableLum) dark++;
+    expect(dark / (W * H)).toBeGreaterThan(0.03);
+    expect(dark / (W * H)).toBeLessThan(0.35);
+
+    // Shadow zone: one side of the border band clearly darker; pieces stay where they were.
+    const zone = renderPiecesPhoto(ref, cut, items, { ...wood, shadowZone: { strength: 0.5 } });
+    expect(zone.truth.map((t) => t.bbox)).toEqual(plainWood.truth.map((t) => t.bbox));
+    const sides = [0, 0, 0, 0];
+    for (let k = 0; k < 40; k++) {
+      sides[0] += lum(zone.photo, Math.round(((k + 0.5) / 40) * W), 2);
+      sides[1] += lum(zone.photo, W - 3, Math.round(((k + 0.5) / 40) * H));
+      sides[2] += lum(zone.photo, Math.round(((k + 0.5) / 40) * W), H - 3);
+      sides[3] += lum(zone.photo, 2, Math.round(((k + 0.5) / 40) * H));
+    }
+    expect(Math.min(...sides)).toBeLessThan(0.85 * Math.max(...sides));
+
+    // Dark pieces: all of them with share 1, in dark tones of the table (warm, not the print's blue).
+    const darkP = renderPiecesPhoto(ref, cut, items, { ...wood, darkPieces: { share: 1, level: 0.45 } });
+    expect(darkP.truth.map((t) => t.bbox)).toEqual(plainWood.truth.map((t) => t.bbox));
+    for (const t of darkP.truth) {
+      const x = Math.round(t.center.x), y = Math.round(t.center.y), i = (y * W + x) * 4;
+      expect(lum(darkP.photo, x, y)).toBeLessThan(0.6 * tableLum);
+      expect(darkP.photo.data[i]).toBeGreaterThanOrEqual(darkP.photo.data[i + 2]);
+    }
+    if (DEBUG_IMAGES) {
+      savePng('.debug/synth/real-planks.png', planks.photo);
+      savePng('.debug/synth/real-shadow-zone.png', zone.photo);
+      savePng('.debug/synth/real-dark-pieces.png', darkP.photo);
+    }
+  });
 });
 
 describe('renderBoxPhoto / perturbReference', () => {

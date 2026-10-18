@@ -11,9 +11,9 @@
  */
 import { rgbToLab } from '../../cv/color';
 import { solveLinear } from '../../cv/geometry';
-import { createGray, type GrayImage, type RGBAImage } from '../../cv/image';
+import { createGray, type GrayImage, type Mask, type RGBAImage } from '../../cv/image';
 import { dilate } from '../../cv/morphology';
-import type { BackgroundModel } from './types';
+import type { BackgroundModel, LocalTableGrid } from './types';
 import { median, quantile } from './util';
 
 const NT = 6;
@@ -23,17 +23,31 @@ const W_L = 0.5;
 const RHO_MIN = 0.8;
 /** Cost (in sigmas) of explaining a pixel as the deepest accepted shadow; shallower shadows cost less. */
 const SHADOW_PENALTY = 2.5;
+/**
+ * Darkening beyond this (L* + 16) ratio (≈ 65 % less light) costs extra: cast shadows next to pieces
+ * hardly get that deep (large shadow zones are left to the local table model), dark pieces do.
+ */
+const RHO_DEEP = 0.7;
+/** Extra cost (sigmas per unit of ρ) of darkening beyond RHO_DEEP, so dark pieces stay strong. */
+const DEEP_SHADOW_SLOPE = 25;
+/**
+ * Table lightness (L*) from which that extra cost applies: on a dark table, what is darker still is
+ * mostly shadow and dark cardboard rims in the gaps between pieces lying close together.
+ */
+const DEEP_MIN_TABLE_L = 40;
 /** Modelled table lightness from which saturated pixels are compared by lightness only (over-exposure). */
 const CLIP_TABLE_L = 85;
 /** Floors for the per-channel noise sigma (Lab units), so noise-free backgrounds stay sane. */
 const SIGMA_FLOOR: [number, number, number] = [1.2, 1, 1];
 
 /** The fitted part of a {@link BackgroundModel} (segmentation statistics are added later). */
-export type BackgroundFit = Pick<BackgroundModel, 'color' | 'coefficients' | 'sigma' | 'width' | 'height' | 'lightingRatio' | 'bandFit' | 'palette'>;
+export type BackgroundFit = Pick<BackgroundModel, 'color' | 'coefficients' | 'sigma' | 'width' | 'height' | 'lightingRatio' | 'bandFit' | 'palette' | 'local'>;
 
 /** A further table colour (patterned cloth, floor beyond the table edge); see BackgroundModel.palette. */
 export type PaletteColour = BackgroundModel['palette'][number];
 
+/** Largest local table residual (sigmas) from which local corrections are used at all. */
+const LOCAL_MIN_RESIDUAL = 3;
 /** Share of the border band a further table colour must cover. */
 const PALETTE_MIN_SHARE = 0.1;
 /** Cost (sigmas) of explaining a pixel as a blend of two table colours (pattern edges, mixed weave). */
@@ -48,11 +62,134 @@ function norm(x: number, n: number): number {
   return n > 1 ? (2 * x) / (n - 1) - 1 : 0;
 }
 
-/** Modelled background Lab colour at photo pixel (x, y). */
-export function backgroundAt(model: Pick<BackgroundModel, 'coefficients' | 'width' | 'height'>, x: number, y: number): [number, number, number] {
+/** Modelled background Lab colour at photo pixel (x, y) (smooth surface plus local corrections). */
+export function backgroundAt(model: Pick<BackgroundModel, 'coefficients' | 'width' | 'height'> & { local?: LocalTableGrid }, x: number, y: number): [number, number, number] {
   const u = norm(x, model.width), v = norm(y, model.height);
   const k = model.coefficients;
-  return [evalPoly(k[0], u, v), evalPoly(k[1], u, v), evalPoly(k[2], u, v)];
+  const c: [number, number, number] = [evalPoly(k[0], u, v), evalPoly(k[1], u, v), evalPoly(k[2], u, v)];
+  if (model.local) {
+    const r = localAt(model.local, x, y);
+    c[0] += r[0]; c[1] += r[1]; c[2] += r[2];
+  }
+  return c;
+}
+
+/** Bilinear interpolation of the local residual grid at photo pixel (x, y). */
+export function localAt(g: LocalTableGrid, x: number, y: number): [number, number, number] {
+  const fx = Math.max(0, Math.min(g.cols - 1, (x + 0.5) / g.cellW)), fy = Math.max(0, Math.min(g.rows - 1, (y + 0.5) / g.cellH));
+  const j0 = Math.min(g.cols - 2, Math.floor(fx)), i0 = Math.min(g.rows - 2, Math.floor(fy));
+  if (g.cols < 2 || g.rows < 2) {
+    const j = Math.round(fx), i = Math.round(fy), o = (i * g.cols + j) * 3;
+    return [g.residual[o], g.residual[o + 1], g.residual[o + 2]];
+  }
+  const tx = fx - j0, ty = fy - i0;
+  const out: [number, number, number] = [0, 0, 0];
+  for (let c = 0; c < 3; c++) {
+    const a = g.residual[(i0 * g.cols + j0) * 3 + c], b = g.residual[(i0 * g.cols + j0 + 1) * 3 + c];
+    const d = g.residual[((i0 + 1) * g.cols + j0) * 3 + c], e = g.residual[((i0 + 1) * g.cols + j0 + 1) * 3 + c];
+    out[c] = (a * (1 - tx) + b * tx) * (1 - ty) + (d * (1 - tx) + e * tx) * ty;
+  }
+  return out;
+}
+
+/** Local residual grid interpolated along one photo row: 3 values per node column. */
+function localRow(g: LocalTableGrid, y: number): Float32Array {
+  const fy = Math.max(0, Math.min(g.rows - 1, (y + 0.5) / g.cellH));
+  const i0 = Math.min(Math.max(0, g.rows - 2), Math.floor(fy)), i1 = Math.min(g.rows - 1, i0 + 1), ty = fy - i0;
+  const row = new Float32Array(g.cols * 3);
+  for (let j = 0; j < g.cols; j++) {
+    for (let c = 0; c < 3; c++) row[j * 3 + c] = g.residual[(i0 * g.cols + j) * 3 + c] * (1 - ty) + g.residual[(i1 * g.cols + j) * 3 + c] * ty;
+  }
+  return row;
+}
+
+/**
+ * Local table-colour corrections: the median Lab residual (photo minus smooth model) of the table
+ * pixels (`exclude` = objects; a mask at any resolution, stretched over the photo) in a
+ * `cell`-sized window around each node of a grid with half that spacing, so shadow zones and local
+ * lighting the quadratic surface cannot follow become table. The outer nodes sit on the photo
+ * border (half windows there), so a shadow reaching in from the edge is followed up to the edge.
+ * Nodes with too little table are filled from their neighbours. Returns null when the residuals
+ * are negligible everywhere (< LOCAL_MIN_RESIDUAL sigmas).
+ */
+export function fitLocalTable(photo: RGBAImage, fit: BackgroundFit, exclude: Mask, cell: number): LocalTableGrid | null {
+  const { width: w, height: h, data } = photo;
+  const cols = Math.max(2, Math.round((2 * w) / cell) + 1), rows = Math.max(2, Math.round((2 * h) / cell) + 1);
+  const cellW = w / (cols - 1), cellH = h / (rows - 1);
+  const step = Math.max(2, Math.round(cell / 18));
+  const res = new Float32Array(cols * rows * 3);
+  const valid = new Uint8Array(cols * rows);
+  const k = fit.coefficients;
+  // Residuals of the table samples on one regular grid (NaN = excluded), shared by the overlapping
+  // windows.
+  const sw = Math.ceil(w / step), sh = Math.ceil(h / step);
+  const samp = new Float32Array(sw * sh * 3).fill(NaN);
+  const ew = exclude.width, eh = exclude.height;
+  for (let j = 0; j < sh; j++) {
+    const y = Math.min(h - 1, j * step + (step >> 1));
+    const v = norm(y, h), erow = (((y * eh) / h) | 0) * ew;
+    for (let i = 0; i < sw; i++) {
+      const x = Math.min(w - 1, i * step + (step >> 1));
+      if (exclude.data[erow + (((x * ew) / w) | 0)]) continue;
+      const p = (y * w + x) * 4;
+      const lab = rgbToLab(data[p], data[p + 1], data[p + 2]);
+      const u = norm(x, w), o = (j * sw + i) * 3;
+      samp[o] = lab[0] - evalPoly(k[0], u, v);
+      samp[o + 1] = lab[1] - evalPoly(k[1], u, v);
+      samp[o + 2] = lab[2] - evalPoly(k[2], u, v);
+    }
+  }
+  const vals: number[][] = [[], [], []];
+  const first = (lo: number) => Math.max(0, Math.ceil((lo - (step >> 1)) / step - 1e-9));
+  const last = (hi: number, n: number) => Math.min(n - 1, Math.floor((hi - (step >> 1)) / step - 1e-9));
+  for (let r = 0; r < rows; r++) {
+    const cy = r * cellH, j0 = first(cy - cell / 2), j1 = last(cy + cell / 2, sh);
+    for (let c = 0; c < cols; c++) {
+      const cx = c * cellW, i0 = first(cx - cell / 2), i1 = last(cx + cell / 2, sw);
+      vals[0].length = vals[1].length = vals[2].length = 0;
+      for (let j = j0; j <= j1; j++) {
+        for (let i = i0; i <= i1; i++) {
+          const o = (j * sw + i) * 3;
+          if (Number.isNaN(samp[o])) continue;
+          vals[0].push(samp[o]);
+          vals[1].push(samp[o + 1]);
+          vals[2].push(samp[o + 2]);
+        }
+      }
+      const n = Math.max(0, (j1 - j0 + 1) * (i1 - i0 + 1));
+      if (vals[0].length < Math.max(20, 0.25 * n)) continue;
+      valid[r * cols + c] = 1;
+      for (let ch = 0; ch < 3; ch++) res[(r * cols + c) * 3 + ch] = median(vals[ch]);
+    }
+  }
+  // Fill cells without enough table from their neighbours (repeated averaging).
+  for (let guard = 0; guard < cols + rows; guard++) {
+    let missing = 0;
+    const next = Uint8Array.from(valid);
+    for (let i = 0; i < rows; i++) {
+      for (let j = 0; j < cols; j++) {
+        if (valid[i * cols + j]) continue;
+        let n = 0;
+        const sum = [0, 0, 0];
+        for (const [di, dj] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+          const ii = i + di, jj = j + dj;
+          if (ii < 0 || jj < 0 || ii >= rows || jj >= cols || !valid[ii * cols + jj]) continue;
+          n++;
+          for (let c = 0; c < 3; c++) sum[c] += res[(ii * cols + jj) * 3 + c];
+        }
+        if (n === 0) { missing++; continue; }
+        for (let c = 0; c < 3; c++) res[(i * cols + j) * 3 + c] = sum[c] / n;
+        next[i * cols + j] = 1;
+      }
+    }
+    valid.set(next);
+    if (missing === 0) break;
+  }
+  let big = 0;
+  for (let i = 0; i < cols * rows; i++) {
+    for (let c = 0; c < 3; c++) big = Math.max(big, Math.abs(res[i * 3 + c]) / fit.sigma[c]);
+  }
+  return big >= LOCAL_MIN_RESIDUAL ? { cols, rows, cellW, cellH, residual: res } : null;
 }
 
 /**
@@ -74,7 +211,10 @@ export function lightingRatio(model: Pick<BackgroundModel, 'coefficients'>): num
 
 /**
  * Noise-normalised colour distance of a Lab pixel to the background colour (bL, ba, bb), tolerant
- * to cast shadows. `is*` are inverse sigmas. Shared by the model fit and the per-pixel score.
+ * to cast shadows. `is*` are inverse sigmas. Used by the model fit and the palette score; unlike
+ * the main per-pixel score ({@link foregroundScore}) it adds no extra cost for darkening beyond
+ * RHO_DEEP, so deep shadow zones stay table for the fit (and are left to the local model) rather
+ * than becoming a further table colour.
  */
 function distance(L: number, a: number, b: number, bL: number, ba: number, bb: number, isL: number, isa: number, isb: number): number {
   const dL = (L - bL) * isL, da = (a - ba) * isa, db = (b - bb) * isb;
@@ -529,8 +669,10 @@ function paletteScore(photo: RGBAImage, model: BackgroundFit, out: GrayImage): G
 }
 
 /**
- * Per-pixel foreground score of a photo: colour distance to the background model in sigma units,
- * tolerant to cast shadows (same formula as used for the fit; Lab via lookup tables).
+ * Per-pixel foreground score of a photo: colour distance to the background model (plus the local
+ * corrections, when present) in sigma units, tolerant to cast shadows (the fit's formula, plus an
+ * extra cost for darkening beyond RHO_DEEP so dark table-coloured pieces stay strong; Lab via
+ * lookup tables).
  */
 export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayImage {
   const { width: w, height: h, data: d } = photo;
@@ -542,13 +684,24 @@ export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayIma
   const us = new Float32Array(w);
   for (let x = 0; x < w; x++) us[x] = norm(x, w);
   const lut = F_LUT, lin = LIN;
-  const wl = W_L, rhoMin = RHO_MIN, pen0 = SHADOW_PENALTY / (1 - RHO_MIN);
+  const wl = W_L, rhoMin = RHO_MIN, pen0 = SHADOW_PENALTY / (1 - RHO_MIN), deep = DEEP_SHADOW_SLOPE, rhoDeep = RHO_DEEP;
+  // Local corrections per pixel column for the current row (bilinear in the grid).
+  const g = model.local;
+  const corr = g ? new Float32Array(w * 3) : null;
+  const colPos = g ? Float32Array.from({ length: w }, (_, x) => Math.max(0, Math.min(g.cols - 1, (x + 0.5) / g.cellW))) : null;
   for (let y = 0; y < h; y++) {
     const v = norm(y, h);
     // c(u) = A + B·u + k3·u² per channel for this row.
     const AL = kL[0] + kL[2] * v + kL[5] * v * v, BL = kL[1] + kL[4] * v, CL = kL[3];
     const Aa = ka[0] + ka[2] * v + ka[5] * v * v, Ba = ka[1] + ka[4] * v, Ca = ka[3];
     const Ab = kb[0] + kb[2] * v + kb[5] * v * v, Bb = kb[1] + kb[4] * v, Cb = kb[3];
+    if (g && corr && colPos) {
+      const nodes = localRow(g, y);
+      for (let x = 0; x < w; x++) {
+        const f = colPos[x], j0 = Math.min(Math.max(0, g.cols - 2), Math.floor(f)), j1 = Math.min(g.cols - 1, j0 + 1), t = f - j0;
+        for (let c = 0; c < 3; c++) corr[x * 3 + c] = nodes[j0 * 3 + c] * (1 - t) + nodes[j1 * 3 + c] * t;
+      }
+    }
     const row = y * w;
     for (let x = 0; x < w; x++) {
       const p = (row + x) << 2;
@@ -565,7 +718,12 @@ export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayIma
       const fz = lut[i] + (t - i) * (lut[i + 1] - lut[i]);
       const L = 116 * fy - 16, A = 500 * (fx - fy), B = 200 * (fy - fz);
       const u = us[x], uu = u * u;
-      const bL = AL + BL * u + CL * uu, ba = Aa + Ba * u + Ca * uu, bb = Ab + Bb * u + Cb * uu;
+      let bL = AL + BL * u + CL * uu, ba = Aa + Ba * u + Ca * uu, bb = Ab + Bb * u + Cb * uu;
+      if (corr) {
+        bL += corr[x * 3];
+        ba += corr[x * 3 + 1];
+        bb += corr[x * 3 + 2];
+      }
       const dL = (L - bL) * isL, da = (A - ba) * isa, db = (B - bb) * isb;
       let d2 = wl * dL * dL + da * da + db * db;
       if (bL >= CLIP_TABLE_L && d[p] >= 254 && d[p + 1] >= 254 && d[p + 2] >= 254) {
@@ -573,10 +731,10 @@ export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayIma
         d2 = Math.min(d2, wl * dL * dL);
       } else if (L < bL) {
         const ref = bL + 16;
-        let rho = ref > 1 ? (L + 16) / ref : 1;
-        if (rho < rhoMin) rho = rhoMin;
+        const raw = ref > 1 ? (L + 16) / ref : 1;
+        const rho = raw < rhoMin ? rhoMin : raw;
         const sL = (L + 16 - rho * ref) * isL, sa = (A - rho * ba) * isa, sb = (B - rho * bb) * isb;
-        const pen = pen0 * (1 - rho);
+        const pen = pen0 * (1 - rho) + (raw < rhoDeep && bL >= DEEP_MIN_TABLE_L ? deep * (rhoDeep - raw) : 0);
         const s2 = wl * sL * sL + sa * sa + sb * sb + pen * pen;
         if (s2 < d2) d2 = s2;
       }
