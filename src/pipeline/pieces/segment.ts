@@ -452,7 +452,7 @@ function chooseThreshold(score: GrayImage): { high: number; low: number; separab
   g.data.set(vals);
   const o = otsuThreshold(g);
   const t = Math.expm1(o.threshold);
-  const high = Math.max(4.5, Math.min(14, t));
+  const high = globalThis.process?.env?.THFIX ? Number(globalThis.process.env.THFIX) : Math.max(4.5, Math.min(14, t)); // DBG
   return { high, low: Math.max(3.2, 0.55 * high), separability: o.separability };
 }
 
@@ -1375,7 +1375,8 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
 
   /** Score → threshold → texture → morphology → candidates → reference size → strands removed. */
   const pass = (model: BackgroundFit) => {
-    const score = foregroundScore(scored, model);
+    const score0 = foregroundScore(scored, model);
+    const score = globalThis.process?.env?.SSM ? boxBlurGray(score0, Number(globalThis.process.env.SSM)) : score0; // DBG
     lap('score');
     const th = chooseThreshold(score);
     let fg = hysteresis(score, th.high, th.low);
