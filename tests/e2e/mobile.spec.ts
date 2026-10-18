@@ -129,11 +129,21 @@ test('mobile audit: every main screen', async ({ page }, info) => {
   await page.keyboard.press('Escape');
   await page.getByRole('radio', { name: 'Photo' }).click();
 
-  // Select a piece with connections from the list: the selection bar replaces the action bar.
-  const linkedKey = (await page.getByTestId('link').first().getAttribute('data-a')) ?? '';
+  // Select a piece (one with connections when the mock scan has some) from the list: the
+  // selection bar replaces the action bar.
+  const links = page.getByTestId('link');
+  const linkedKey = (await links.count()) > 0 ? ((await links.first().getAttribute('data-a')) ?? '') : '';
   await page.locator(linkedKey ? `[data-testid="piece-item-${linkedKey}"]` : '[data-testid^="piece-item-"]').first().click();
   await expect(page.getByTestId('selection-bar')).toBeVisible();
   await a.check('13a-scan-result-selected');
+
+  // The photo in full screen, with the selection.
+  await page.getByTestId('open-fullscreen-photo').click();
+  await expect(page.getByTestId('fullscreen')).toBeVisible();
+  await expect(page.getByTestId('fullscreen').getByTestId('selection-bar')).toBeVisible();
+  await a.check('13b-fullscreen-selected');
+  await page.getByTestId('fullscreen-close').click();
+  await expect(page.getByTestId('fullscreen')).toHaveCount(0);
 
   // Its details (it has a suggested place, so the sheet shows its Placed / Not this one actions).
   await page.getByTestId('selection-details').click();

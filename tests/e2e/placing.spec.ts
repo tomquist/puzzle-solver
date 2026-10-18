@@ -4,7 +4,7 @@
  * piece (its connections highlighted, everything else faded), press-and-hold for the clean photo,
  * and the placing flow from the first step to the finish card.
  */
-import { expect, test, type Page, type TestInfo } from '@playwright/test';
+import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
 
 const asset = (name: string) => fileURLToPath(new URL(`../../test-assets/${name}`, import.meta.url));
@@ -48,6 +48,20 @@ async function act(page: Page, testId: string) {
   await expect.poll(async () => (await page.getByTestId('placing-done').isVisible()) || (await page.locator('.topbar-sub').textContent()) !== before).toBe(true);
 }
 
+/** The selection colour (--sel) as computed. */
+const SELECTION_COLOUR = 'rgb(46, 230, 255)';
+
+/** Dash pattern, colour, opacity and drawn width (screen px) of a connection's line. */
+async function lineStyle(link: Locator) {
+  return link.evaluate((g) => {
+    const el = g.querySelector('.link-line') as SVGGraphicsElement;
+    const svg = el.ownerSVGElement!;
+    const scale = svg.getBoundingClientRect().width / svg.viewBox.baseVal.width;
+    const cs = getComputedStyle(el);
+    return { dash: cs.strokeDasharray, stroke: cs.stroke, px: parseFloat(cs.strokeWidth) * scale, opacity: Number(getComputedStyle(g).opacity) };
+  });
+}
+
 const wake = (page: Page) => page.evaluate(() => (window as unknown as { __wake: { requests: number; releases: number; held: number } }).__wake);
 
 async function createPuzzleAndScan(page: Page) {
@@ -65,9 +79,21 @@ async function createPuzzleAndScan(page: Page) {
   await expect(page.locator('[data-testid^="item-"]').first()).toBeVisible();
 }
 
+/**
+ * createPuzzleAndScan until the scan has connection lines: the mock pipeline seeds its pieces with
+ * the (random) puzzle id, and a few seeds give no linked pair that is shown.
+ */
+async function createPuzzleWithLinks(page: Page) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await createPuzzleAndScan(page);
+    if ((await page.getByTestId('link').count()) > 0) return;
+  }
+  throw new Error('No mock scan with connection lines after 4 puzzles');
+}
+
 test('result screen: hidden no-matches, groups, connections, view options, wake lock', async ({ page }, info) => {
   await stubWakeLock(page);
-  await createPuzzleAndScan(page);
+  await createPuzzleWithLinks(page);
 
   // No "No match" filter; assembled grids (one label each) and connection lines are shown.
   await expect(page.getByRole('radio', { name: /No match/ })).toHaveCount(0);
@@ -126,7 +152,7 @@ test('result screen: hidden no-matches, groups, connections, view options, wake 
 });
 
 test('result screen: select a piece to see its connections; hold the photo to see it clean', async ({ page }, info) => {
-  await createPuzzleAndScan(page);
+  await createPuzzleWithLinks(page);
   const link = page.getByTestId('link').first();
   await expect(link).toBeVisible();
   const key = (await link.getAttribute('data-a'))!;
@@ -136,11 +162,17 @@ test('result screen: select a piece to see its connections; hold the photo to se
   const bar = page.getByTestId('selection-bar');
   const opacity = (el: SVGElement | HTMLElement) => Number(getComputedStyle(el).opacity);
 
-  // Nothing selected: nothing is faded.
+  // Nothing selected: nothing is faded; lines are solid, about 2 screen px, readable.
   await expect(page.locator('[data-testid^="item-"].faded')).toHaveCount(0);
+  const line = await lineStyle(link);
+  expect(line.dash).toBe('none');
+  expect(line.px).toBeGreaterThan(1.5);
+  expect(line.px).toBeLessThan(2.5);
+  expect(line.opacity).toBeGreaterThan(0.7);
 
   // Tap a piece on the photo: it is emphasised, its connections drawn strongly, the pieces it
-  // joins ringed, everything else faded – and the photo stays visible.
+  // joins outlined, everything else faded and the photo around them darkened – the photo stays
+  // visible.
   await item.click();
   await expect(item).toHaveClass(/\bselected\b/);
   await expect(bar).toBeVisible();
@@ -150,17 +182,38 @@ test('result screen: select a piece to see its connections; hold the photo to se
   const active = page.locator('[data-testid="link"][data-active="true"]');
   expect(await active.count()).toBeGreaterThan(0);
   await expect(active.first()).toHaveClass(/\bactive\b/);
-  await expect(page.getByTestId(`item-${other}`)).toHaveClass(/\blinked\b/);
+  // Selected lines: solid, about 4 screen px, in the selection colour, fully opaque.
+  const sel = await lineStyle(active.first());
+  expect(sel.dash).toBe('none');
+  expect(sel.px).toBeGreaterThan(3.5);
+  expect(sel.px).toBeLessThan(4.5);
+  expect(sel.stroke).toBe(SELECTION_COLOUR);
+  await expect.poll(async () => (await lineStyle(active.first())).opacity).toBe(1);
+  // The joined piece: outline in the selection colour, a tint, its label fully visible.
+  const joined = page.getByTestId(`item-${other}`);
+  await expect(joined).toHaveClass(/\blinked\b/);
+  expect(await joined.locator('.item-line').first().evaluate((el) => getComputedStyle(el).stroke)).toBe(SELECTION_COLOUR);
+  expect(Number(await joined.locator('.item-fill').first().evaluate((el) => getComputedStyle(el).fillOpacity))).toBeGreaterThan(0);
+  await expect.poll(() => page.getByTestId(`label-${other}`).evaluate(opacity)).toBe(1);
   await expect(page.getByTestId(`ring-${key}`)).toBeVisible();
   await expect(page.getByTestId(`ring-${other}`)).toBeVisible();
+  await expect(page.getByTestId('selection-scrim')).toBeAttached();
+  // Everything else fades to about 0.2.
   const faded = page.locator('[data-testid^="item-"].faded');
   expect(await faded.count()).toBeGreaterThan(0);
-  await expect.poll(() => faded.first().evaluate(opacity)).toBeLessThan(0.5);
+  await expect.poll(() => faded.first().evaluate(opacity)).toBeLessThanOrEqual(0.25);
   await expect(page.locator('[data-testid^="label-"].faded').first()).toBeAttached();
   const inactive = page.locator('[data-testid="link"]:not([data-active])');
   if (await inactive.count()) await expect(inactive.first()).toHaveClass(/\bfaded\b/);
   await expect(photo).toBeInViewport();
   await shot(page, info, '01b-selected');
+
+  // The joined piece named in the bar is a link: the selection moves there, and back.
+  await page.getByTestId(`mention-${other}`).click();
+  await expect(joined).toHaveClass(/\bselected\b/);
+  await expect(item).toHaveClass(/\blinked\b/);
+  await page.getByTestId(`mention-${key}`).click();
+  await expect(item).toHaveClass(/\bselected\b/);
 
   // Tapping it again clears the selection; so does a tap on the empty photo.
   await item.click();
@@ -169,6 +222,9 @@ test('result screen: select a piece to see its connections; hold the photo to se
   await expect(page.locator('[data-testid^="item-"].faded')).toHaveCount(0);
   await page.getByTestId(`label-${key}`).click();
   await expect(bar).toBeVisible();
+  // (The mentions zoomed the photo in: back to the whole photo, then tap its empty corner.)
+  const wholePhoto = photo.getByRole('button', { name: 'Show whole picture' });
+  if (await wholePhoto.isVisible()) await wholePhoto.click();
   await page.getByTestId('scan-overlay').click({ position: { x: 3, y: 3 } });
   await expect(bar).toBeHidden();
 
@@ -216,6 +272,111 @@ test('result screen: select a piece to see its connections; hold the photo to se
   await expect(bar).toBeVisible();
   await page.getByTestId('selection-clear').click();
   await expect(bar).toBeHidden();
+});
+
+test('result screen: full-screen photo – select inside, close, the selection stays', async ({ page }, info) => {
+  await createPuzzleWithLinks(page);
+  const key = (await page.getByTestId('link').first().getAttribute('data-a'))!;
+  const fs = page.getByTestId('fullscreen');
+
+  // Open: the photo fills the viewport, the page's bars are gone.
+  await page.getByTestId('open-fullscreen-photo').click();
+  await expect(fs).toBeVisible();
+  const vp = page.viewportSize()!;
+  const box = (await fs.boundingBox())!;
+  expect(Math.abs(box.width - vp.width)).toBeLessThan(2);
+  expect(Math.abs(box.height - vp.height)).toBeLessThan(2);
+  await expect(page.getByTestId('action-bar')).toHaveCount(0);
+  await shot(page, info, '06-fullscreen');
+
+  // Select a piece inside: the same highlighting, and the info bar over the bottom.
+  const item = fs.getByTestId(`item-${key}`);
+  await item.click();
+  await expect(item).toHaveClass(/\bselected\b/);
+  await expect(fs.getByTestId('selection-bar')).toBeVisible();
+  await expect(fs.locator('[data-testid="link"][data-active="true"]').first()).toBeAttached();
+  // The labels toggle and press-and-hold work here too.
+  await fs.getByTestId('fullscreen-labels').click();
+  await expect(fs.getByTestId('fullscreen-labels')).toHaveAttribute('aria-pressed', 'false');
+  await expect(fs.locator('[data-testid^="label-"]').first()).toBeVisible(); // the selection keeps its labels
+  await fs.getByTestId('fullscreen-labels').click();
+  await expect(fs.getByTestId('fullscreen-labels')).toHaveAttribute('aria-pressed', 'true');
+  const centre = { x: box.x + box.width / 2, y: box.y + box.height * 0.3 };
+  await page.mouse.move(centre.x, centre.y);
+  await page.mouse.down();
+  await expect(fs.locator('.fs-peek')).toHaveAttribute('data-peek', 'true');
+  await page.mouse.up();
+  await expect(fs.locator('.fs-peek')).toHaveAttribute('data-peek', 'false');
+  await expect(item).toHaveClass(/\bselected\b/);
+  await shot(page, info, '06b-fullscreen-selected');
+
+  // Close: back on the page, still selected.
+  await fs.getByTestId('fullscreen-close').click();
+  await expect(fs).toHaveCount(0);
+  await expect(page.getByTestId('selection-bar')).toBeVisible();
+  await expect(page.getByTestId(`item-${key}`)).toHaveClass(/\bselected\b/);
+
+  // Esc closes it too (and keeps the selection); so does the back gesture.
+  await page.getByTestId('open-fullscreen-photo').click();
+  await expect(fs).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(fs).toHaveCount(0);
+  await expect(page.getByTestId(`item-${key}`)).toHaveClass(/\bselected\b/);
+  await page.getByTestId('open-fullscreen-photo').click();
+  await expect(fs).toBeVisible();
+  await page.goBack();
+  await expect(fs).toHaveCount(0);
+  await expect(page.getByTestId('scan-result')).toBeVisible();
+
+  // The picture has full screen too (Picture / Both).
+  await page.getByRole('radio', { name: 'Picture' }).click();
+  await page.getByTestId('open-fullscreen-picture').click();
+  await expect(fs).toBeVisible();
+  await expect(fs.locator('[data-testid^="marker-"]').first()).toBeVisible();
+  await fs.getByTestId('fullscreen-close').click();
+  await expect(fs).toHaveCount(0);
+});
+
+test('result screen: a one-finger drag on the images scrolls the page until zoomed in', async ({ page, browserName }, info) => {
+  test.skip(browserName !== 'chromium' || !info.project.use.hasTouch, 'real touch input via CDP (Chromium with touch)');
+  await createPuzzleAndScan(page);
+  await page.getByRole('radio', { name: 'Both' }).click();
+  const cdp = await page.context().newCDPSession(page);
+  const drag = async (x: number, y0: number, y1: number) => {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y: y0 }] });
+    for (let i = 1; i <= 10; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y0 + ((y1 - y0) * i) / 10 }] });
+    // Hold still before lifting the finger: no fling that keeps scrolling afterwards.
+    await page.waitForTimeout(150);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y1 }] });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  };
+  const scrollY = () => page.evaluate(() => window.scrollY);
+  const transform = () => page.getByTestId('result-photo').locator('.zoompan-content').evaluate((el) => (el as HTMLElement).style.transform);
+
+  // At the fit zoom: dragging up on the photo – and on the picture – scrolls the page.
+  for (const testId of ['result-photo', 'result-ref']) {
+    const frame = testId === 'result-photo' ? page.getByTestId('result-photo') : page.locator('.result-ref');
+    await frame.scrollIntoViewIfNeeded();
+    await page.evaluate(() => window.scrollBy(0, -40));
+    const b = (await frame.boundingBox())!;
+    const y = Math.min(b.y + b.height * 0.6, page.viewportSize()!.height - 120);
+    const before = await scrollY();
+    await drag(b.x + b.width / 2, y, y - 200);
+    await expect.poll(scrollY, { message: `drag on ${testId} scrolls the page` }).toBeGreaterThan(before + 60);
+  }
+
+  // Zoomed in (double-tap): one finger pans the image and the page stays put.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await expect.poll(scrollY).toBe(0);
+  const photo = page.getByTestId('result-photo');
+  const b = (await photo.boundingBox())!;
+  await page.mouse.dblclick(b.x + b.width / 2, b.y + b.height / 2);
+  await expect(photo.getByRole('button', { name: 'Show whole picture' })).toBeVisible();
+  const t0 = await transform();
+  const before = await scrollY();
+  await drag(b.x + b.width / 2, b.y + b.height * 0.6, b.y + b.height * 0.3);
+  await expect.poll(transform).not.toBe(t0);
+  expect(Math.abs((await scrollY()) - before)).toBeLessThan(5);
 });
 
 test('guided placing: assembled grids first, Placed/Skip/Not here, finish card', async ({ page }, info) => {

@@ -32,12 +32,18 @@ to be analysed. Everything runs locally in the browser – no server, no upload.
    against the reference → fit detection.
 3. **Results** – the photo with every piece thinly outlined (no fill) and a small number label
    placed just outside the outline (`ui/lib/labels.ts`), colour-coded by confidence; a small tick
-   outside the outline marks the side that is "up". Press-and-hold shows the clean photo. Tapping
-   a piece selects it: its connection lines are drawn strongly, the pieces it joins are ringed,
-   everything else fades, and a bar replaces the action bar with where it goes and its connections
-   in words; the details sheet adds the box picture around the target, the piece type
-   (corner/edge/interior), the rotation needed and the other candidates. The reference shows
-   numbered markers at the matched locations.
+   outside the outline marks the side that is "up"; connection lines are solid light lines with a
+   dark halo. Press-and-hold shows the clean photo. Tapping a piece selects it: its connection
+   lines turn thick and cyan, the pieces it joins get cyan outlines and rings, everything else
+   fades and the photo around them darkens, and a bar replaces the action bar with where it goes
+   and its connections in words (each mention selects that piece); the details sheet adds the box
+   picture around the target, the piece type (corner/edge/interior), the rotation needed and the
+   other candidates. The reference shows numbered markers at the matched locations. Photo and
+   picture open in a full-screen view (Fullscreen API where available, else a fixed layer; closes
+   with ×, Esc or back) that shares the selection.
+   Overlay strokes inside the zoom view are sized with `--u` (one screen px in content units, set
+   by `ZoomPanView`): `vector-effect: non-scaling-stroke` does not undo its CSS scale. At the fit
+   zoom a one-finger drag on a picture scrolls the page (`touch-action: pan-y`); zoomed in, it pans.
    The guided placing mode shows one item at a time: the photo around it (3–4 piece sizes, corner
    marks; tap for an upright close-up), the turn, and the upright box picture around the target
    (about 7 × 7 cells, at most 2.5× the picture's resolution, pinch to zoom) with an overview of

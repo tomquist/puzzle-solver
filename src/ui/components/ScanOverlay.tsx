@@ -10,7 +10,7 @@
  * the selection. `peek` hides everything (to see the clean photo); with labels off only the
  * selection is drawn.
  */
-import { useEffect, useMemo, useRef, type MouseEvent } from 'react';
+import { useEffect, useId, useMemo, useRef, type MouseEvent } from 'react';
 import type { Point } from '../../cv/geometry';
 import type { Rect } from '../../cv/image';
 import type { DetectedRegion, ScanResult } from '../../model/types';
@@ -140,6 +140,7 @@ export function ScanOverlay({
   const isActive = (l: ItemLink) => !!selected && (l.a === selected || l.b === selected);
   const shownLinks = links.filter((l) => isActive(l) || (showConnections && showLabels));
 
+  const maskId = `sel-mask-${useId().replace(/:/g, '')}`;
   const pending = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(pending.current), []);
   const cancelPending = () => window.clearTimeout(pending.current);
@@ -162,7 +163,15 @@ export function ScanOverlay({
   const svgCls = ['overlay', 'scan-overlay', selected && 'has-selection', !showLabels && 'labels-off', peek && 'peek'].filter(Boolean).join(' ');
 
   return (
-    <svg className={svgCls} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" onDoubleClick={cancelPending} data-testid="scan-overlay">
+    <svg
+      className={svgCls}
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      onDoubleClick={cancelPending}
+      // One screen px in photo units, for dash patterns that must not shrink with the zoom.
+      style={{ ['--u' as string]: `${1 / scale}px` }}
+      data-testid="scan-overlay"
+    >
       {/* Empty photo: clears the selection. */}
       <rect
         className="bg-hit"
@@ -174,6 +183,22 @@ export function ScanOverlay({
           if (e.detail <= 1 && selected) clearLater();
         }}
       />
+
+      {/* With a selection, the photo darkens except for the selected item and the items it joins. */}
+      {selected && (
+        <>
+          <mask id={maskId} maskUnits="userSpaceOnUse" x={0} y={0} width={width} height={height}>
+            <rect x={0} y={0} width={width} height={height} fill="#fff" />
+            {[selected, ...linked].flatMap((key) =>
+              (overlayByKey.get(key)?.item.regionIds ?? []).map((id) => {
+                const reg = byId.get(id);
+                return reg ? <path key={`${key}-${id}`} d={polygonPath(reg.contour)} fill="#000" stroke="#000" strokeWidth={8 / scale} strokeLinejoin="round" /> : null;
+              }),
+            )}
+          </mask>
+          <rect className="selection-scrim" x={0} y={0} width={width} height={height} mask={`url(#${maskId})`} data-testid="selection-scrim" />
+        </>
+      )}
 
       {/* Outlines, turn ticks and touch targets */}
       {items.map((o) => {
@@ -281,8 +306,8 @@ export function ScanOverlay({
           >
             <path className="link-under" d={curve.d} vectorEffect="non-scaling-stroke" />
             <path className="link-line" d={curve.d} vectorEffect="non-scaling-stroke" />
-            <circle className="link-end" cx={curve.from.x} cy={curve.from.y} r={(active ? 3.5 : 2.4) / scale} />
-            <circle className="link-end" cx={curve.to.x} cy={curve.to.y} r={(active ? 3.5 : 2.4) / scale} />
+            <circle className="link-end" cx={curve.from.x} cy={curve.from.y} r={(active ? 4.5 : 3) / scale} />
+            <circle className="link-end" cx={curve.to.x} cy={curve.to.y} r={(active ? 4.5 : 3) / scale} />
           </g>
         );
       })}

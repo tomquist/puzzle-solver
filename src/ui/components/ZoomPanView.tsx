@@ -2,12 +2,16 @@
  * Zoom & pan viewport for an image plus overlays (pinch, wheel, drag, double-tap, +/- buttons).
  * Children are laid out in content coordinates (contentWidth × contentHeight CSS px before scaling).
  * Optionally it starts on a part of the content (`start`) and offers a button back to it.
+ *
+ * Touch: while the content is at its fit zoom, a one-finger vertical drag scrolls the page
+ * (touch-action: pan-y) – the image only takes two fingers (pinch). Once zoomed in, one finger
+ * pans the image. `alwaysPan` (a full-screen view) gives one finger to the image at any zoom.
  */
 import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import type { Point } from '../../cv/geometry';
 import type { Rect } from '../../cv/image';
 import { useElementSize } from '../hooks/useElementSize';
-import { centerOn, clampPan, fitTransform, transformForRect, zoomAt, type ViewTransform } from '../lib/overlay';
+import { centerOn, clampPan, fitTransform, insetArea, shiftTransform, transformForRect, zoomAt, type Insets, type ViewTransform } from '../lib/overlay';
 import { IconExpand, IconPlus, IconTarget } from './Icons';
 
 export interface ZoomPanHandle {
@@ -31,6 +35,8 @@ export function ZoomPanView({
   start,
   startLabel = 'Back to the spot',
   maxZoom,
+  alwaysPan = false,
+  insets,
 }: {
   contentWidth: number;
   contentHeight: number;
@@ -46,6 +52,10 @@ export function ZoomPanView({
   startLabel?: string;
   /** Upper limit for the scale (screen px per content px), e.g. to avoid a blurry blow-up. */
   maxZoom?: number;
+  /** One finger pans the image even at the fit zoom (no page to scroll, e.g. full screen). */
+  alwaysPan?: boolean;
+  /** Bars laid over the viewport (CSS px): the fitted content stays clear of them. */
+  insets?: Insets;
 }) {
   const viewport = useRef<HTMLDivElement>(null);
   const { width: vw, height: vh } = useElementSize(viewport);
@@ -63,22 +73,27 @@ export function ZoomPanView({
   const startKey = start ? `${start.x},${start.y},${start.width},${start.height}` : '';
   const lastStartKey = useRef(startKey);
 
-  const fit = fitTransform(contentWidth, contentHeight, vw, vh, Math.min(margin, Math.min(vw, vh) / 8));
+  // Fitting, centring and clamping happen in the area not covered by `insets` (e.g. a bar laid over
+  // the bottom): fitted content stays clear of it, zoomed content can still be panned under it.
+  const area = insetArea(vw, vh, insets);
+  const { w: aw, h: ah, dx, dy } = area;
+  const toView = (x: ViewTransform) => shiftTransform(x, dx, dy);
+  const clamp = (x: ViewTransform) => toView(clampPan(shiftTransform(x, -dx, -dy), contentWidth, contentHeight, aw, ah));
+  const fit = toView(fitTransform(contentWidth, contentHeight, aw, ah, Math.min(margin, Math.min(aw, ah) / 8)));
   const minScale = fit.scale;
   const maxScale = Math.max(fit.scale, Math.min(Math.max(fit.scale * 6, 2.5), maxZoom ?? Infinity));
-  const startT = start && vw && vh ? transformForRect(start, contentWidth, contentHeight, vw, vh, minScale, maxScale) : undefined;
+  const startT = start && vw && vh ? toView(transformForRect(start, contentWidth, contentHeight, aw, ah, minScale, maxScale)) : undefined;
   const tRef = useRef(t);
   tRef.current = t;
+  const clampRef = useRef(clamp);
+  clampRef.current = clamp;
 
-  const apply = useCallback(
-    (next: ViewTransform) => {
-      interacted.current = true;
-      const fitScale = lastFit.current?.scale ?? 0;
-      // At (or below) the fit scale the content simply stays fitted and centered.
-      setT(next.scale <= fitScale * 1.001 && lastFit.current ? lastFit.current : clampPan(next, contentWidth, contentHeight, vw, vh));
-    },
-    [contentWidth, contentHeight, vw, vh],
-  );
+  const apply = useCallback((next: ViewTransform) => {
+    interacted.current = true;
+    const fitScale = lastFit.current?.scale ?? 0;
+    // At (or below) the fit scale the content simply stays fitted and centered.
+    setT(next.scale <= fitScale * 1.001 && lastFit.current ? lastFit.current : clampRef.current(next));
+  }, []);
 
   // Fit (or show the start rectangle) on first layout; on resize keep the zoom only if the user
   // had zoomed in.
@@ -96,26 +111,27 @@ export function ZoomPanView({
     }
     const zoomed = prev && tRef.current.scale > prev.scale * 1.02;
     if (!zoomed) setT(fit);
-    else setT((cur) => clampPan(cur, contentWidth, contentHeight, vw, vh));
-    // startT follows from startKey and the sizes listed here.
-  }, [vw, vh, contentWidth, contentHeight, fit.scale, startKey]);
+    else setT((cur) => clampRef.current(cur));
+    // startT and fit follow from startKey and the sizes listed here.
+  }, [vw, vh, contentWidth, contentHeight, fit.scale, fit.x, fit.y, startKey]);
 
   useImperativeHandle(
     handle,
     () => ({
       focus(p: Point, zoom = 3) {
         const scale = Math.min(maxScale, Math.max(fit.scale, fit.scale * zoom));
-        apply(centerOn(p, scale, vw, vh));
+        apply(toView(centerOn(p, scale, aw, ah)));
       },
       focusRect(r: Rect, maxZoom = 3) {
-        apply(transformForRect(r, contentWidth, contentHeight, vw, vh, fit.scale, Math.min(maxScale, fit.scale * maxZoom)));
+        apply(toView(transformForRect(r, contentWidth, contentHeight, aw, ah, fit.scale, Math.min(maxScale, fit.scale * maxZoom))));
       },
       reset() {
         interacted.current = true;
         setT(fit);
       },
     }),
-    [apply, fit, maxScale, vw, vh, contentWidth, contentHeight],
+    // toView follows from dx / dy.
+    [apply, fit, maxScale, aw, ah, dx, dy, contentWidth, contentHeight],
   );
 
   // Wheel zoom needs a non-passive listener.
@@ -131,6 +147,9 @@ export function ZoomPanView({
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
   }, [apply, minScale, maxScale]);
+
+  /** Whether one finger pans the image (zoomed in, or always) rather than scrolling the page. */
+  const oneFingerPans = () => alwaysPan || tRef.current.scale > (lastFit.current?.scale ?? Infinity) * 1.05;
 
   const local = (e: { clientX: number; clientY: number }): Point => {
     const r = viewport.current!.getBoundingClientRect();
@@ -168,6 +187,11 @@ export function ZoomPanView({
       return;
     }
     if (!g.moved && Math.hypot(p.x - g.start.x, p.y - g.start.y) < TAP_SLOP) return;
+    if (e.pointerType === 'touch' && !oneFingerPans()) {
+      // At the fit zoom one finger belongs to the page (it scrolls): this is no tap, no pan.
+      g.moved = true;
+      return;
+    }
     if (!g.moved) {
       g.moved = true;
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -188,7 +212,7 @@ export function ZoomPanView({
   };
 
   const zoomBy = (factor: number) => {
-    apply(zoomAt(tRef.current, factor, { x: vw / 2, y: vh / 2 }, minScale, maxScale));
+    apply(zoomAt(tRef.current, factor, { x: dx + aw / 2, y: dy + ah / 2 }, minScale, maxScale));
   };
 
   const zoomedIn = t.scale > fit.scale * 1.05;
@@ -198,7 +222,7 @@ export function ZoomPanView({
     <div className={`zoompan ${className}`}>
       <div
         ref={viewport}
-        className="zoompan-viewport"
+        className={`zoompan-viewport${alwaysPan || zoomedIn ? '' : ' scroll-through'}`}
         role="group"
         aria-label={label}
         onPointerDown={onPointerDown}
@@ -225,6 +249,9 @@ export function ZoomPanView({
             width: contentWidth,
             height: contentHeight,
             transform: `translate(${t.x}px, ${t.y}px) scale(${t.scale})`,
+            // One screen px in content units: overlay strokes are sized with it, because
+            // vector-effect: non-scaling-stroke does not undo this CSS scale (Blink, WebKit).
+            ['--u' as string]: `${1 / t.scale}px`,
           }}
         >
           {typeof children === 'function' ? children(t.scale, fit.scale) : children}

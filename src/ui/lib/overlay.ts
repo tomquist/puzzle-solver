@@ -186,6 +186,25 @@ export function transformForRect(r: Rect, cw: number, ch: number, vw: number, vh
   return clampPan(centerOn({ x: r.x + r.width / 2, y: r.y + r.height / 2 }, scale, vw, vh), cw, ch, vw, vh);
 }
 
+/** Parts of a viewport covered by bars (CSS px), which fitted content keeps clear of. */
+export interface Insets {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+/** The uncovered area of a viewport: its size and offset. */
+export function insetArea(vw: number, vh: number, insets?: Insets): { w: number; h: number; dx: number; dy: number } {
+  if (!insets) return { w: vw, h: vh, dx: 0, dy: 0 };
+  return { w: Math.max(1, vw - insets.left - insets.right), h: Math.max(1, vh - insets.top - insets.bottom), dx: insets.left, dy: insets.top };
+}
+
+/** A transform moved by (dx, dy) – between viewport and inset-area coordinates. */
+export function shiftTransform(t: ViewTransform, dx: number, dy: number): ViewTransform {
+  return { scale: t.scale, x: t.x + dx, y: t.y + dy };
+}
+
 /** Bounding box of several rectangles (undefined for none). */
 export function unionRect(rects: Rect[]): Rect | undefined {
   if (rects.length === 0) return undefined;

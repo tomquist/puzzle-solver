@@ -13,7 +13,8 @@ import type { QualityIssue, ScanRecord } from '../../../model/types';
 import { describeCell } from '../../../pipeline/grid';
 import { haptic } from '../../../platform/device';
 import { Banner, EmptyState, ErrorState, Snackbar, Spinner, type SnackbarMessage } from '../../components/Feedback';
-import { IconCheck, IconChevron, IconClose, IconPuzzle, IconScan } from '../../components/Icons';
+import { FullscreenView, leaveFullscreenView } from '../../components/FullscreenView';
+import { IconCheck, IconChevron, IconClose, IconEye, IconEyeOff, IconFullscreen, IconPuzzle, IconScan } from '../../components/Icons';
 import { ItemDetail } from '../../components/ItemDetail';
 import { QualityBanner } from '../../components/Quality';
 import { ReferenceOverlay, type RefMarker } from '../../components/ReferenceOverlay';
@@ -33,12 +34,13 @@ import { formatDate, plural } from '../../lib/format';
 import {
   cellsText,
   connectionsOf,
-  describeConnections,
+  connectionTokens,
   itemCounts,
   itemKindText,
   itemTitle,
   linkedTo,
   placingOrder,
+  type ConnectionToken,
   type ItemPlacement,
   type ScanItem,
 } from '../../lib/items';
@@ -101,9 +103,11 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
   const photoView = useRef<ZoomPanHandle>(null);
   const refView = useRef<ZoomPanHandle>(null);
   const photoFrame = useRef<HTMLDivElement>(null);
+  const fsView = useRef<ZoomPanHandle>(null);
   const { peeking, handlers: peekHandlers } = useHoldToPeek();
 
   const [view, setView] = useState<ViewMode>(() => (typeof matchMedia !== 'undefined' && matchMedia('(min-width: 900px)').matches ? 'both' : 'photo'));
+  const [fullscreen, setFullscreen] = useState<'photo' | 'picture'>();
   const [openKey, setOpenKey] = useState<string>();
   const [selectedKey, setSelectedKey] = useState<string>();
   const [rejected, setRejected] = useState<Record<string, number>>({});
@@ -131,19 +135,24 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
   const selected = selectedKey && visible.some((i) => i.key === selectedKey) ? byKey.get(selectedKey) : undefined;
   const clearSelection = useCallback(() => setSelectedKey(undefined), []);
 
-  /** Bring the selected item and the items it joins into view (from the list or the details). */
+  /**
+   * Bring the selected item and the items it joins into view (from the list, the details or a
+   * mention in the selection bar) – in the full-screen view when it is open.
+   */
   const reveal = (key: string) => {
     const item = byKey.get(key);
     if (!item) return;
     const p = placementOf(item);
-    if (view !== 'picture') {
+    const photoHandle = fullscreen === 'photo' ? fsView.current : !fullscreen && view !== 'picture' ? photoView.current : null;
+    if (photoHandle) {
       const rects = [item.bbox, ...linkedTo(key, links).flatMap((k) => (byKey.get(k) ? [byKey.get(k)!.bbox] : []))];
       const box = unionRect(rects)!;
       const pad = Math.max(box.width, box.height) * 0.25 + Math.max(item.bbox.width, item.bbox.height);
-      photoView.current?.focusRect(paddedBox({ x: box.x - pad / 2, y: box.y - pad / 2, width: box.width + pad, height: box.height + pad }, 0, result.width, result.height), 2.5);
-      photoFrame.current?.scrollIntoView({ block: 'start', behavior: scrollBehavior() });
+      photoHandle.focusRect(paddedBox({ x: box.x - pad / 2, y: box.y - pad / 2, width: box.width + pad, height: box.height + pad }, 0, result.width, result.height), 2.5);
+      if (!fullscreen) photoFrame.current?.scrollIntoView({ block: 'start', behavior: scrollBehavior() });
     }
-    if (p && view !== 'photo') refView.current?.focus({ x: p.x, y: p.y }, 3);
+    const refHandle = fullscreen === 'picture' ? fsView.current : !fullscreen && view !== 'photo' ? refView.current : null;
+    if (p && refHandle) refHandle.focus({ x: p.x, y: p.y }, 3);
   };
   const select = (key: string, opts: { reveal?: boolean } = {}) => {
     setSelectedKey(key);
@@ -188,6 +197,65 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
   const openItem = openKey ? byKey.get(openKey) : undefined;
   const selectedPlacement = selected ? placementOf(selected) : undefined;
   const labelOf = (key: string) => (visible.some((i) => i.key === key) ? byKey.get(key)?.label : undefined);
+
+  // The photo and the picture with their overlays – in the page and in the full-screen view.
+  const photoContent = (scale: number, fitScale: number) => (
+    <>
+      <img src={photoUrl} alt="" className="fill" draggable={false} />
+      <ScanOverlay
+        result={result}
+        items={overlayItems}
+        links={links}
+        selectedKey={selected?.key}
+        showLabels={prefs.view.labels}
+        showTurnHints={prefs.view.turnHints}
+        showConnections={prefs.view.connections}
+        peek={peeking}
+        highlightRegionIds={issue?.regionIds}
+        highlightArea={issue?.area}
+        scale={scale}
+        fitScale={fitScale}
+        onSelect={(key) => select(key)}
+        onClear={clearSelection}
+      />
+    </>
+  );
+  const pictureContent = (scale: number) =>
+    reference && (
+      <>
+        <img src={reference.url} alt="" className="fill" draggable={false} />
+        <ReferenceOverlay
+          width={reference.width}
+          height={reference.height}
+          grid={puzzle.grid}
+          showGrid={false}
+          markers={markers}
+          links={prefs.view.connections ? links : links.filter((l) => l.a === selected?.key || l.b === selected?.key)}
+          selectedKey={selected?.key}
+          highlight={selectedPlacement?.cells}
+          scale={scale}
+          onMarker={(key) => select(key)}
+        />
+      </>
+    );
+  const selectionBar = (variant: 'bar' | 'overlay') =>
+    selected && (
+      <SelectionBar
+        variant={variant}
+        item={selected}
+        placement={selectedPlacement}
+        placed={isPlacedItem(selected)}
+        connections={connectionTokens(connectionsOf(selected.key, links), labelOf)}
+        onSelectKey={(key) => select(key, { reveal: true })}
+        onDetails={() => {
+          // The details are a sheet of the page: leave the full-screen view for them.
+          if (fullscreen) leaveFullscreenView(() => setFullscreen(undefined));
+          setOpenKey(selected.key);
+        }}
+        onClear={clearSelection}
+      />
+    );
+  const toggleLabels = () => updatePrefs((p) => ({ ...p, view: { ...p.view, labels: !p.view.labels } }));
   const hintVisible = !prefs.dismissed.includes(PLACING_HINT) && toPlace.length > 0;
   const subtitle = `${formatDate(scan.createdAt)} · ${plural(counts.pieces, 'piece')} found`;
 
@@ -253,60 +321,26 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
               >
                 {photoUrl ? (
                   <ZoomPanView contentWidth={result.width} contentHeight={result.height} handle={photoView} label="Your photo with the recognised pieces" margin={6}>
-                    {(scale, fitScale) => (
-                      <>
-                        <img src={photoUrl} alt="" className="fill" draggable={false} />
-                        <ScanOverlay
-                          result={result}
-                          items={overlayItems}
-                          links={links}
-                          selectedKey={selected?.key}
-                          showLabels={prefs.view.labels}
-                          showTurnHints={prefs.view.turnHints}
-                          showConnections={prefs.view.connections}
-                          peek={peeking}
-                          highlightRegionIds={issue?.regionIds}
-                          highlightArea={issue?.area}
-                          scale={scale}
-                          fitScale={fitScale}
-                          onSelect={(key) => select(key)}
-                          onClear={clearSelection}
-                        />
-                      </>
-                    )}
+                    {photoContent}
                   </ZoomPanView>
                 ) : (
                   <Spinner label="Loading photo…" />
                 )}
                 <span className="viewer-label">{peeking ? 'Without labels' : 'Your photo'}</span>
+                {photoUrl && <FullscreenButton onClick={() => setFullscreen('photo')} testId="open-fullscreen-photo" />}
               </div>
             )}
             {view !== 'photo' && (
               <div className="viewer-frame result-ref" style={reference ? { aspectRatio: `${reference.width} / ${reference.height}` } : undefined}>
                 {reference ? (
                   <ZoomPanView contentWidth={reference.width} contentHeight={reference.height} handle={refView} label="Box picture with where the pieces go" margin={14}>
-                    {(scale) => (
-                      <>
-                        <img src={reference.url} alt="" className="fill" draggable={false} />
-                        <ReferenceOverlay
-                          width={reference.width}
-                          height={reference.height}
-                          grid={puzzle.grid}
-                          showGrid={false}
-                          markers={markers}
-                          links={prefs.view.connections ? links : links.filter((l) => l.a === selected?.key || l.b === selected?.key)}
-                          selectedKey={selected?.key}
-                          highlight={selectedPlacement?.cells}
-                          scale={scale}
-                          onMarker={(key) => select(key)}
-                        />
-                      </>
-                    )}
+                    {pictureContent}
                   </ZoomPanView>
                 ) : (
                   <Spinner label="Loading picture…" />
                 )}
                 <span className="viewer-label">Box picture</span>
+                {reference && <FullscreenButton onClick={() => setFullscreen('picture')} testId="open-fullscreen-picture" />}
               </div>
             )}
             {view !== 'picture' && (
@@ -373,15 +407,8 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
         <FeedbackLink puzzleId={puzzle.id} scanId={scan.id} />
       </main>
 
-      {selected ? (
-        <SelectionBar
-          item={selected}
-          placement={selectedPlacement}
-          placed={isPlacedItem(selected)}
-          connections={describeConnections(connectionsOf(selected.key, links), labelOf)}
-          onDetails={() => setOpenKey(selected.key)}
-          onClear={clearSelection}
-        />
+      {fullscreen ? null : selected ? (
+        selectionBar('bar')
       ) : (
         <div className="action-bar" data-testid="action-bar">
           <div className="action-bar-inner">
@@ -423,36 +450,111 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
           onClose={() => setOpenKey(undefined)}
         />
       )}
+      {fullscreen && (
+        <FullscreenView
+          label={fullscreen === 'photo' ? 'Your photo, full screen' : 'Box picture, full screen'}
+          title={fullscreen === 'photo' ? (peeking ? 'Without labels' : 'Your photo') : 'Box picture'}
+          onClose={() => setFullscreen(undefined)}
+          tools={
+            fullscreen === 'photo' && (
+              <button
+                className="icon-btn glass"
+                onClick={toggleLabels}
+                aria-pressed={prefs.view.labels}
+                aria-label="Labels"
+                title={prefs.view.labels ? 'Hide labels' : 'Show labels'}
+                data-testid="fullscreen-labels"
+              >
+                {prefs.view.labels ? <IconEye /> : <IconEyeOff />}
+              </button>
+            )
+          }
+          footer={
+            selected ? (
+              selectionBar('overlay')
+            ) : (
+              <p className="fs-hint">{fullscreen === 'photo' ? 'Tap a piece to see what it joins. Press and hold to see the photo without labels.' : 'Tap a number to see that piece.'}</p>
+            )
+          }
+        >
+          {(insets) =>
+            fullscreen === 'photo' ? (
+              <div className="fs-peek" data-peek={peeking ? 'true' : 'false'} {...peekHandlers}>
+                <ZoomPanView
+                  contentWidth={result.width}
+                  contentHeight={result.height}
+                  handle={fsView}
+                  label="Your photo with the recognised pieces, full screen"
+                  margin={8}
+                  insets={insets}
+                  alwaysPan
+                >
+                  {photoContent}
+                </ZoomPanView>
+              </div>
+            ) : (
+              reference && (
+                <ZoomPanView
+                  contentWidth={reference.width}
+                  contentHeight={reference.height}
+                  handle={fsView}
+                  label="Box picture with where the pieces go, full screen"
+                  margin={14}
+                  insets={insets}
+                  alwaysPan
+                >
+                  {pictureContent}
+                </ZoomPanView>
+              )
+            )
+          }
+        </FullscreenView>
+      )}
       <Snackbar message={snack} onClose={closeSnack} />
     </>
   );
 }
 
+function FullscreenButton({ onClick, testId }: { onClick: () => void; testId: string }) {
+  return (
+    <button className="icon-btn small glass frame-fullscreen" onClick={onClick} aria-label="Full screen" title="Full screen" data-testid={testId}>
+      <IconFullscreen size={18} />
+    </button>
+  );
+}
+
 /**
- * The selected item in a compact bar where the action bar is (the photo stays visible): where it
- * goes, how to turn it and what it joins; tap for the details, × (or the empty photo) to clear.
+ * The selected item in a compact bar where the action bar is (the photo stays visible), or laid
+ * over the bottom of the full-screen view: where it goes, how to turn it and what it joins – each
+ * joined item a link that moves the selection there. Tap the card for the details, × (or the
+ * empty photo) to clear.
  */
 function SelectionBar({
+  variant,
   item,
   placement,
   placed,
   connections,
+  onSelectKey,
   onDetails,
   onClear,
 }: {
+  variant: 'bar' | 'overlay';
   item: ScanItem;
   placement: ItemPlacement | undefined;
   placed: boolean;
-  connections: string;
+  connections: ConnectionToken[];
+  onSelectKey: (key: string) => void;
   onDetails: () => void;
   onClear: () => void;
 }) {
   const where = placement ? cellsText(placement) : 'No place left';
   const turn = placement?.rotationDeg !== undefined ? turnInstruction(placement.rotationDeg).short : undefined;
   return (
-    <div className="action-bar selection-bar" data-testid="selection-bar" role="region" aria-label={`Selected: ${itemTitle(item)}`}>
+    <div className={variant === 'bar' ? 'action-bar selection-bar' : 'selection-bar overlay'} data-testid="selection-bar" role="region" aria-label={`Selected: ${itemTitle(item)}`}>
       <div className="action-bar-inner">
-        <button className="selection-main" onClick={onDetails} data-testid="selection-details">
+        {/* The whole card opens the details for touch; the Details button is the accessible way. */}
+        <div className="selection-main" onClick={onDetails} data-testid="selection-card">
           <span className={`num-badge st-${itemTone(item)}`}>{placed ? '✓' : item.label}</span>
           <span className="selection-text">
             <span className="selection-where">
@@ -460,17 +562,41 @@ function SelectionBar({
               {placed ? ' · placed' : ''}
             </span>
             <span className="muted xsmall">{[itemKindText(item), turn].filter(Boolean).join(' · ')}</span>
-            {connections && (
+            {connections.length > 0 && (
               <span className="selection-links small" data-testid="selection-links">
-                {connections}
+                {connections.map((t, i) =>
+                  'text' in t ? (
+                    <span key={i}>{t.text}</span>
+                  ) : (
+                    <button
+                      key={i}
+                      className="mention"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSelectKey(t.key);
+                      }}
+                      aria-label={`Select #${t.label}`}
+                      data-testid={`mention-${t.key}`}
+                    >
+                      #{t.label}
+                    </button>
+                  ),
+                )}
               </span>
             )}
           </span>
-          <span className="selection-more">
+          <button
+            className="selection-more"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDetails();
+            }}
+            data-testid="selection-details"
+          >
             <span className="selection-more-text">Details</span>
             <IconChevron size={18} />
-          </span>
-        </button>
+          </button>
+        </div>
         <button className="icon-btn" onClick={onClear} aria-label="Clear selection" data-testid="selection-clear">
           <IconClose />
         </button>

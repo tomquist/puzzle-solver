@@ -347,24 +347,40 @@ export function connectionGroups(conns: Connection[]): { side?: PuzzleSide; keys
 /** Where the other item joins, from the item's point of view: "on its right side", "below". */
 export const SIDE_PHRASE: Record<PuzzleSide, string> = { top: 'above', right: 'on its right side', bottom: 'below', left: 'on its left side' };
 
-/** "#3", "#3 and #4", "#3, #4 and #5". */
-export function listLabels(labels: (number | string)[]): string {
-  const t = labels.map((l) => `#${l}`);
-  return t.length <= 1 ? (t[0] ?? '') : `${t.slice(0, -1).join(', ')} and ${t[t.length - 1]}`;
-}
+/** A piece of the connections sentence: plain text, or a mention of an item ("#9"). */
+export type ConnectionToken = { text: string } | { key: string; label: number | string };
 
 /**
- * The connections of an item in words: "Joins #9 on its right side, #14 below"; links without a
- * known side read "next to #20" ("Goes next to #20" when no side is known at all). '' when none.
+ * The connections of an item as a sentence of tokens (so the mentions can be links): "Joins #9 on
+ * its right side, #14 below"; links without a known side read "next to #20" ("Goes next to #20"
+ * when no side is known at all). Items without a label (not shown) are left out; [] when none.
  */
-export function describeConnections(conns: Connection[], labelOf: (key: string) => number | string | undefined): string {
+export function connectionTokens(conns: Connection[], labelOf: (key: string) => number | string | undefined): ConnectionToken[] {
   const groups = connectionGroups(conns)
-    .map((g) => ({ side: g.side, labels: g.keys.map(labelOf).filter((l): l is number | string => l !== undefined) }))
-    .filter((g) => g.labels.length > 0);
-  const sided = groups.filter((g) => g.side).map((g) => `${listLabels(g.labels)} ${SIDE_PHRASE[g.side!]}`);
+    .map((g) => ({ side: g.side, items: g.keys.flatMap((key) => (labelOf(key) !== undefined ? [{ key, label: labelOf(key)! }] : [])) }))
+    .filter((g) => g.items.length > 0);
+  const list = (items: { key: string; label: number | string }[]): ConnectionToken[] =>
+    items.flatMap((it, i) => [...(i === 0 ? [] : [{ text: i === items.length - 1 ? ' and ' : ', ' }]), it]);
+  const sided = groups.filter((g) => g.side);
   const loose = groups.find((g) => !g.side);
-  if (!sided.length) return loose ? `Goes next to ${listLabels(loose.labels)}` : '';
-  return `Joins ${sided.join(', ')}${loose ? `; next to ${listLabels(loose.labels)}` : ''}`;
+  if (!sided.length) return loose ? [{ text: 'Goes next to ' }, ...list(loose.items)] : [];
+  const out: ConnectionToken[] = [{ text: 'Joins ' }];
+  sided.forEach((g, i) => out.push(...(i > 0 ? [{ text: ', ' }] : []), ...list(g.items), { text: ` ${SIDE_PHRASE[g.side!]}` }));
+  if (loose) out.push({ text: '; next to ' }, ...list(loose.items));
+  // Merge neighbouring text tokens.
+  return out.reduce<ConnectionToken[]>((acc, t) => {
+    const last = acc[acc.length - 1];
+    if (last && 'text' in last && 'text' in t) acc[acc.length - 1] = { text: last.text + t.text };
+    else acc.push(t);
+    return acc;
+  }, []);
+}
+
+/** The connections sentence as plain text ('' when none). */
+export function describeConnections(conns: Connection[], labelOf: (key: string) => number | string | undefined): string {
+  return connectionTokens(conns, labelOf)
+    .map((t) => ('text' in t ? t.text : `#${t.label}`))
+    .join('');
 }
 
 /** "row 5, column 12" style text for a placement (ranges for assembled grids). */

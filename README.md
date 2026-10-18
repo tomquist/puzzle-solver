@@ -21,10 +21,13 @@ puzzles are stored in the browser (IndexedDB).
    and take one photo from directly above. Already assembled patches can be in the photo too.
 5. **Read the result.** Every piece gets a thin outline and a small number next to it (so the piece
    itself stays visible): green = confident, amber = unsure, blue = assembled grid; a small tick
-   marks the side that goes up. Tap a piece to select it: its connection lines and the pieces it
-   joins light up, everything else fades, and a bar at the bottom says where it goes and what it
-   joins ("Joins #9 on its right side, #14 below"); *Details* compares it with the box picture and
-   marks it as placed. Press and hold the photo to see it without any labels.
+   marks the side that goes up, and lines connect pieces that go together. Tap a piece to select
+   it: its connection lines turn thick and bright, the pieces it joins are outlined, the rest of the
+   photo darkens, and a bar at the bottom says where it goes and what it joins ("Joins #9 on its
+   right side, #14 below" – tap a number to jump there); *Details* compares it with the box picture
+   and marks it as placed. Press and hold the photo to see it without any labels. The corner button
+   opens the photo (or the box picture) in full screen; pinch to zoom, one finger pans. On the page,
+   a one-finger drag on a picture scrolls the page until you zoom in.
 6. **Place them.** *Start placing* walks through the pieces one by one: the piece in your photo
    with its surroundings (tap for an upright close-up), how to turn it, and where it goes – the
    box picture around the spot (pinch to zoom) with an overview of the whole picture.
