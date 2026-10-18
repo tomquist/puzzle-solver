@@ -1,0 +1,257 @@
+{
+  "reviewed": "2026-10-18",
+  "marks": {
+    "1": {
+      "verdict": "ok",
+      "note": "pale mauve/grey piece, not detected"
+    },
+    "2": {
+      "verdict": "ok",
+      "note": "pale mauve/grey piece, not detected"
+    },
+    "3": {
+      "verdict": "ok",
+      "note": "pale mauve/grey piece, not detected"
+    },
+    "4": {
+      "verdict": "ok",
+      "note": "pale mauve/grey piece, not detected"
+    },
+    "5": {
+      "verdict": "ok",
+      "note": "pale mauve/grey piece, not detected"
+    },
+    "6": {
+      "verdict": "ok",
+      "note": "pale mauve/grey piece, not detected"
+    },
+    "7": {
+      "verdict": "ok",
+      "note": "pale mauve/grey piece, not detected"
+    },
+    "8": {
+      "verdict": "ok",
+      "note": "pale mauve/grey piece, not detected"
+    },
+    "9": {
+      "verdict": "ok",
+      "note": "pale mauve/grey piece, not detected"
+    },
+    "10": {
+      "verdict": "ok",
+      "note": "pale mauve/grey piece, not detected"
+    },
+    "11": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "12": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "13": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "14": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "15": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "16": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "17": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "18": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "19": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "20": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "21": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "22": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "23": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "24": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "25": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "26": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "27": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "28": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "29": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "30": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "31": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "32": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "33": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "34": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "35": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "36": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "37": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "38": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "39": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "40": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "41": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "42": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    },
+    "43": {
+      "verdict": "ok",
+      "note": "outline covers only a fragment (a pink spot, a darker stripe or part of an assembled block)"
+    }
+  },
+  "area": {
+    "x": 500,
+    "y": 600,
+    "width": 1200,
+    "height": 1400
+  },
+  "objects": [
+    {
+      "x": 904,
+      "y": 700,
+      "note": "M10, pale mauve piece"
+    },
+    {
+      "x": 800,
+      "y": 910,
+      "note": "M2, brownish piece"
+    },
+    {
+      "x": 660,
+      "y": 1120,
+      "note": "M7, grey-mauve piece"
+    },
+    {
+      "x": 1090,
+      "y": 1090,
+      "note": "M3, grey/mauve piece"
+    },
+    {
+      "x": 1320,
+      "y": 990,
+      "note": "pink piece with red spots"
+    },
+    {
+      "x": 1470,
+      "y": 760,
+      "note": "pink piece with a red spot"
+    },
+    {
+      "x": 1380,
+      "y": 1230,
+      "note": "pink piece with red spots"
+    },
+    {
+      "x": 1610,
+      "y": 1020,
+      "note": "dark striped piece"
+    },
+    {
+      "x": 710,
+      "y": 1450,
+      "note": "M8, mauve piece"
+    },
+    {
+      "x": 980,
+      "y": 1360,
+      "note": "M9, dark/pink piece"
+    },
+    {
+      "x": 860,
+      "y": 1690,
+      "note": "M5, grey/mauve piece"
+    },
+    {
+      "x": 1440,
+      "y": 1630,
+      "unsure": true,
+      "note": "left of a pair (M6 tap between them); possibly an assembled pair"
+    },
+    {
+      "x": 1610,
+      "y": 1630,
+      "unsure": true,
+      "note": "right of that pair"
+    },
+    {
+      "x": 1130,
+      "y": 1880,
+      "note": "M4, grey/mauve piece"
+    }
+  ]
+}
