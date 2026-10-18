@@ -12,7 +12,7 @@ import {
   itemKindText,
   itemTitle,
   linkedTo,
-  listLabels,
+  connectionTokens,
   placingOrder,
   type ItemLink,
   type ScanItem,
@@ -262,7 +262,22 @@ describe('connections in words', () => {
   it('groups several items on one side', () => {
     const conns = [{ key: 'r3', side: 'right' as const }, { key: 'r5', side: 'right' as const }, { key: 'r6', side: 'top' as const }];
     expect(connectionGroups(conns)).toEqual([{ side: 'right', keys: ['r3', 'r5'] }, { side: 'top', keys: ['r6'] }]);
-    expect(listLabels([3, 5, 6])).toBe('#3, #5 and #6');
+    const three = [{ key: 'r3', side: 'right' as const }, { key: 'r5', side: 'right' as const }, { key: 'r6', side: 'right' as const }];
+    expect(describeConnections(three, labelOf)).toBe('Joins #3, #5 and #6 on its right side');
+  });
+
+  it('splits the sentence into text and mentions (for links)', () => {
+    expect(connectionTokens(connectionsOf('r4', links), labelOf)).toEqual([
+      { text: 'Joins ' },
+      { key: 'r2', label: 2 },
+      { text: ' above, ' },
+      { key: 'r9', label: 9 },
+      { text: ' on its right side, ' },
+      { key: 'r14', label: 14 },
+      { text: ' below; next to ' },
+      { key: 'r20', label: 20 },
+    ]);
+    expect(connectionTokens([], labelOf)).toEqual([]);
   });
 });
 

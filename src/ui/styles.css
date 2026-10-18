@@ -28,6 +28,8 @@
   --st-ambiguous: #f59e0b;
   --st-unmatched: #ef4444;
   --st-patch: #3b82f6;
+  /* the selected piece's connections (always with a dark halo, so it reads on any photo) */
+  --sel: #2ee6ff;
   --placed: rgba(47, 107, 102, 0.55);
 
   --radius: 14px;
@@ -1486,6 +1488,10 @@ input[aria-invalid='true'] {
 .zoompan-viewport:active {
   cursor: grabbing;
 }
+/* At the fit zoom a one-finger vertical drag scrolls the page; pinch still zooms the image. */
+.zoompan-viewport.scroll-through {
+  touch-action: pan-y;
+}
 .zoompan-content {
   position: absolute;
   left: 0;
@@ -1521,7 +1527,7 @@ svg.overlay {
 .grid-lines {
   fill: none;
   stroke: rgba(255, 255, 255, 0.55);
-  stroke-width: 1;
+  stroke-width: calc(var(--u, 1px) * 1);
   mix-blend-mode: difference;
 }
 .placed-cell {
@@ -1530,12 +1536,12 @@ svg.overlay {
 .highlight-cell {
   fill: none;
   stroke: #fff;
-  stroke-width: 3;
+  stroke-width: calc(var(--u, 1px) * 3);
 }
 .coverage rect {
   fill: rgba(34, 197, 94, 0.12);
   stroke: var(--st-confident);
-  stroke-width: 2;
+  stroke-width: calc(var(--u, 1px) * 2);
 }
 .coverage text {
   fill: #fff;
@@ -1642,8 +1648,9 @@ svg.overlay {
 .issue-area {
   fill: rgba(255, 255, 255, 0.12);
   stroke: #fff;
-  stroke-width: 3;
-  stroke-dasharray: 10 6;
+  stroke-width: calc(var(--u, 1px) * 3);
+  /* --u: one screen px in content units (set by the overlay), so dashes keep their size. */
+  stroke-dasharray: calc(var(--u, 1px) * 10) calc(var(--u, 1px) * 6);
 }
 
 .marker {
@@ -1652,7 +1659,7 @@ svg.overlay {
 .marker circle {
   fill: var(--st);
   stroke: #fff;
-  stroke-width: 2;
+  stroke-width: calc(var(--u, 1px) * 2);
 }
 .marker text {
   fill: #fff;
@@ -1663,11 +1670,11 @@ svg.overlay {
 .marker-cell {
   fill: none;
   stroke: var(--st);
-  stroke-width: 2.5;
+  stroke-width: calc(var(--u, 1px) * 2.5);
 }
 .marker.selected circle {
   stroke: #111;
-  stroke-width: 4;
+  stroke-width: calc(var(--u, 1px) * 4);
 }
 
 /* ------------------------------------------------------------------ corner editor */
@@ -2364,7 +2371,7 @@ canvas.crop {
 .item-line {
   fill: none;
   stroke: var(--st);
-  stroke-width: 1.5;
+  stroke-width: calc(var(--u, 1px) * 1.5);
   stroke-opacity: 0.9;
   stroke-linejoin: round;
 }
@@ -2374,7 +2381,7 @@ canvas.crop {
   stroke-linejoin: round;
 }
 .item.assembled .item-line {
-  stroke-width: 2;
+  stroke-width: calc(var(--u, 1px) * 2);
   stroke-opacity: 1;
 }
 .item:focus-visible .item-fill,
@@ -2390,42 +2397,53 @@ canvas.crop {
 .item.bare .item-line {
   stroke-opacity: 0;
 }
-/* Selected: a clear outline with a dark halo and a tint. */
+/* Selected: a white outline with a dark halo and a tint in the selection colour. */
 .item.selected .item-halo {
-  stroke: rgba(0, 0, 0, 0.55);
-  stroke-width: 6;
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: calc(var(--u, 1px) * 7);
 }
 .item.selected .item-line {
-  stroke-width: 3;
+  stroke: #fff;
+  stroke-width: calc(var(--u, 1px) * 3);
   stroke-opacity: 1;
 }
 .item.selected .item-fill {
-  fill-opacity: 0.16;
+  fill: var(--sel);
+  fill-opacity: 0.22;
 }
-/* The items the selection joins. */
+/* The items the selection joins: outline and tint in the selection colour. */
 .item.linked .item-halo {
-  stroke: rgba(0, 0, 0, 0.45);
-  stroke-width: 4.5;
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: calc(var(--u, 1px) * 6.5);
 }
 .item.linked .item-line {
-  stroke: #fff;
-  stroke-width: 2;
+  stroke: var(--sel);
+  stroke-width: calc(var(--u, 1px) * 3);
   stroke-opacity: 1;
 }
+.item.linked .item-fill {
+  fill: var(--sel);
+  fill-opacity: 0.18;
+}
 .item.faded {
-  opacity: 0.3;
+  opacity: 0.2;
 }
 .item.dimmed {
   opacity: 0.35;
 }
 .item.highlighted .item-line {
   stroke: #fff;
-  stroke-width: 3;
-  stroke-dasharray: 8 5;
+  stroke-width: calc(var(--u, 1px) * 3);
+  stroke-dasharray: calc(var(--u, 1px) * 8) calc(var(--u, 1px) * 5);
 }
 .item .hit {
   fill: transparent;
   stroke: none;
+}
+/* With a selection the rest of the photo darkens (the selected and joined pieces stay clear). */
+.selection-scrim {
+  fill: rgba(0, 0, 0, 0.38);
+  pointer-events: none;
 }
 
 /* Number labels: a small pill just outside the outline. */
@@ -2440,7 +2458,7 @@ canvas.crop {
 .label rect {
   fill: var(--st);
   stroke: rgba(255, 255, 255, 0.92);
-  stroke-width: 1.25;
+  stroke-width: calc(var(--u, 1px) * 1.25);
 }
 .label text {
   fill: #fff;
@@ -2461,15 +2479,19 @@ canvas.crop {
 }
 .label.selected rect {
   stroke: #fff;
-  stroke-width: 2.5;
+  stroke-width: calc(var(--u, 1px) * 2.5);
+}
+.label.linked rect {
+  stroke: var(--sel);
+  stroke-width: calc(var(--u, 1px) * 2.5);
 }
 .label.faded {
-  opacity: 0.25;
+  opacity: 0.2;
 }
 .label-tail {
   fill: var(--st);
   stroke: rgba(255, 255, 255, 0.92);
-  stroke-width: 1;
+  stroke-width: calc(var(--u, 1px) * 1);
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
 }
@@ -2477,7 +2499,7 @@ canvas.crop {
 .turn-tick {
   fill: var(--st);
   stroke: rgba(255, 255, 255, 0.92);
-  stroke-width: 1;
+  stroke-width: calc(var(--u, 1px) * 1);
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
 }
@@ -2485,50 +2507,55 @@ canvas.crop {
   display: none;
 }
 
-/* Connections: subtle until a piece is selected. */
+/*
+ * Connections: solid light lines with a dark halo – readable on grey, light, dark and busy
+ * photos, but calmer than a selected piece's lines (solid, thicker, selection colour).
+ * (Dash patterns would be in photo units and shrink to dots when zoomed out.)
+ */
 .link {
   pointer-events: none;
+  opacity: 0.8;
   transition: opacity 0.15s ease;
 }
 .link path {
   fill: none;
 }
 .link-end {
-  fill: rgba(255, 255, 255, 0.92);
-  stroke: rgba(0, 0, 0, 0.45);
-  stroke-width: 1;
+  fill: #fff;
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: calc(var(--u, 1px) * 1.25);
   vector-effect: non-scaling-stroke;
 }
 .link-under {
-  stroke: rgba(0, 0, 0, 0.35);
-  stroke-width: 3.5;
+  stroke: rgba(0, 0, 0, 0.5);
+  stroke-width: calc(var(--u, 1px) * 3.5);
   stroke-linecap: round;
 }
 .link-line {
-  stroke: rgba(255, 255, 255, 0.85);
-  stroke-width: 1.5;
-  stroke-dasharray: 5 4;
+  stroke: #fff;
+  stroke-width: calc(var(--u, 1px) * 2);
   stroke-linecap: round;
 }
 .link.faded {
-  opacity: 0.12;
+  opacity: 0.1;
+}
+.link.active {
+  opacity: 1;
 }
 .link.active .link-under {
-  stroke: rgba(0, 0, 0, 0.6);
-  stroke-width: 7;
+  stroke: rgba(0, 0, 0, 0.7);
+  stroke-width: calc(var(--u, 1px) * 8);
 }
 .link.active .link-line {
-  stroke: #fff;
-  stroke-width: 3;
-  stroke-dasharray: 8 6;
-  animation: link-flow 0.9s linear infinite;
+  stroke: var(--sel);
+  stroke-width: calc(var(--u, 1px) * 4);
 }
-@keyframes link-flow {
-  to {
-    stroke-dashoffset: -14;
-  }
+.link.active .link-end {
+  fill: var(--sel);
+  stroke: rgba(0, 0, 0, 0.7);
+  stroke-width: calc(var(--u, 1px) * 1.5);
 }
-/* Rings around the selected item (solid) and the items it joins (dashed). */
+/* Rings around the selected item (white) and the items it joins (selection colour). */
 .ring {
   pointer-events: none;
 }
@@ -2536,32 +2563,28 @@ canvas.crop {
   fill: none;
 }
 .ring-under {
-  stroke: rgba(0, 0, 0, 0.5);
-  stroke-width: 5;
+  stroke: rgba(0, 0, 0, 0.55);
+  stroke-width: calc(var(--u, 1px) * 5.5);
 }
 .ring-line {
   stroke: #fff;
-  stroke-width: 2.5;
-}
-.ring.linked .ring-under {
-  stroke-width: 4;
+  stroke-width: calc(var(--u, 1px) * 2.5);
 }
 .ring.linked .ring-line {
-  stroke-width: 2;
-  stroke-dasharray: 6 4;
+  stroke: var(--sel);
 }
 .marker-block {
   fill: var(--st);
   fill-opacity: 0.14;
   stroke: var(--st);
-  stroke-width: 2.5;
+  stroke-width: calc(var(--u, 1px) * 2.5);
 }
 .marker.faded {
-  opacity: 0.3;
+  opacity: 0.2;
 }
 .marker.linked circle {
-  stroke: #fff;
-  stroke-width: 3;
+  stroke: var(--sel);
+  stroke-width: calc(var(--u, 1px) * 3);
 }
 
 /* The photo: long press must not select text or open a menu; scrolled to below the top bar. */
@@ -2663,11 +2686,11 @@ canvas.crop {
 }
 .target-outline-under {
   stroke: rgba(0, 0, 0, 0.65);
-  stroke-width: 4.5;
+  stroke-width: calc(var(--u, 1px) * 4.5);
 }
 .target-outline {
   stroke: #fff;
-  stroke-width: 2;
+  stroke-width: calc(var(--u, 1px) * 2);
 }
 /* Overview of the whole picture: thin frame, crosshair on the spot. */
 .overview {
@@ -2778,13 +2801,150 @@ canvas.crop {
   flex: none;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 2px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 10px;
+  background: none;
   color: var(--accent);
   font-weight: 650;
   font-size: 0.85rem;
+  cursor: pointer;
+}
+.selection-more:hover {
+  background: var(--accent-soft);
+}
+/* A joined piece named in the sentence: a link that moves the selection there. */
+.mention {
+  position: relative;
+  display: inline;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 750;
+  white-space: nowrap;
+  text-decoration: underline;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+/* ≥ 44 px touch target around the short text. */
+.mention::before {
+  content: '';
+  position: absolute;
+  left: -14px;
+  right: -14px;
+  top: -12px;
+  bottom: -12px;
 }
 .page.with-selection {
   padding-bottom: calc(150px + env(safe-area-inset-bottom));
+}
+/* In the full-screen view the bar floats over the photo. */
+.selection-bar.overlay .action-bar-inner {
+  padding: 6px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.selection-bar.overlay .selection-main {
+  border-color: transparent;
+}
+
+/* ------------------------------------------------------------------ full-screen view */
+
+.frame-fullscreen {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+.fs-view {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: #000;
+  color: #fff;
+  outline: none;
+}
+.fs-stage,
+.fs-peek {
+  position: absolute;
+  inset: 0;
+}
+.fs-peek {
+  -webkit-touch-callout: none;
+}
+.fs-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: calc(8px + env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+  pointer-events: none;
+}
+.fs-top > * {
+  pointer-events: auto;
+}
+.fs-title {
+  min-width: 0;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  font-size: 0.85rem;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fs-tools {
+  display: flex;
+  gap: 8px;
+}
+.fs-tools .icon-btn[aria-pressed='false'] {
+  background: rgba(20, 20, 20, 0.75);
+  color: rgba(255, 255, 255, 0.75);
+}
+.fs-foot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  padding: 8px max(10px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+  pointer-events: none;
+}
+.fs-foot > * {
+  width: 100%;
+  max-width: 680px;
+  pointer-events: auto;
+}
+.fs-hint {
+  width: auto;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 0.8rem;
+  text-align: center;
+}
+/* Zoom buttons below the top bar (the bottom has the selection). */
+.fs-view .zoompan-controls {
+  top: calc(64px + env(safe-area-inset-top));
+  right: max(10px, env(safe-area-inset-right));
+  bottom: auto;
 }
 /* Narrow phones: the chevron alone says "more" (the word stays for screen readers). */
 @media (max-width: 400px) {

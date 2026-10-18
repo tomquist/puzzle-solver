@@ -111,6 +111,17 @@ export const IconEye = (p: IconProps) => (
     <circle cx="12" cy="12" r="3" />
   </Svg>
 );
+export const IconEyeOff = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M10.6 5.1A10.8 10.8 0 0 1 12 5c7 0 11 7 11 7a18.5 18.5 0 0 1-2.6 3.5M6.6 6.6A18.4 18.4 0 0 0 1 12s4 7 11 7a10.6 10.6 0 0 0 5.4-1.5" />
+    <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2M1 1l22 22" />
+  </Svg>
+);
+export const IconFullscreen = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M16 21h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+  </Svg>
+);
 export const IconZoom = (p: IconProps) => (
   <Svg {...p}>
     <circle cx="11" cy="11" r="7" />
