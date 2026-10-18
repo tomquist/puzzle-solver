@@ -395,6 +395,12 @@ describe('matchRegion — outline reliability', () => {
     capForBorder(normalScan, { outline: { borderTable: 0.22 } }, 0.06);
     expect(normalScan.match.status).toBe('confident');
     expect(normalScan.match.candidates[0].confidence).toBeGreaterThan(0.98);
+    // Real photo (test-corpus/feedback/2026-10-18-wood-planks-1500pc.json): wood table, diffuse
+    // light, median 0.17, placements right. It must not lose every confident match.
+    const woodTable = detail(0.9);
+    capForBorder(woodTable, { outline: { borderTable: 0.17 } }, 0.17);
+    expect(woodTable.match.status).toBe('confident');
+    expect(woodTable.match.candidates[0].confidence).toBeGreaterThan(0.85);
   });
 
   it('discounts doubtful segmentation', () => {

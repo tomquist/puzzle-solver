@@ -392,9 +392,10 @@ export function outlineFactor(input: Pick<MatchInput, 'kind' | 'outline'>): numb
 const BORDER_TABLE_LIMIT = 0.32;
 /**
  * Median border-table excess of a scan's pieces above which the photo's outlines systematically
- * include cast shadows (clean light tables ≲ 0.1, hard shadows ≳ 0.2).
+ * include cast shadows (clean synthetic light tables ≲ 0.06, a real wood table in diffuse light
+ * 0.17 with correct placements, hard cast shadows ≳ 0.23).
  */
-const BORDER_TABLE_SCAN_LIMIT = 0.15;
+const BORDER_TABLE_SCAN_LIMIT = 0.2;
 
 /**
  * Cap the confidence of a region whose outline probably includes cast shadow or table (at most
