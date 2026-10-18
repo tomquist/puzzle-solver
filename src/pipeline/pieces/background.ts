@@ -453,11 +453,71 @@ function lightFactor(fit: BackgroundFit, u: number, v: number, ref: number): num
   return Math.max(0.2, (evalPoly(fit.coefficients[0], u, v) + 16) / (ref + 16));
 }
 
+/** Own lighting of a palette colour at (u, v) relative to the main surface's (factor on L* + 16). */
+function ownLight(p: PaletteColour, u: number, v: number): number {
+  return Math.exp(p.light[0] + p.light[1] * u + p.light[2] * v);
+}
+
 /** A palette colour under the lighting at (u, v). */
 function paletteAt(fit: BackgroundFit, k: number, u: number, v: number): [number, number, number] {
   const p = fit.palette[k];
-  const f = lightFactor(fit, u, v, p.refL);
+  const f = lightFactor(fit, u, v, p.refL) * ownLight(p, u, v);
   return [f * (p.color[0] + 16) - 16, f * p.color[1], f * p.color[2]];
+}
+
+/** Range of (L* + 16) ratios to the main-lit colour within which a sample may show a second surface. */
+const OWN_LIGHT_RANGE: [number, number] = [0.6, 1.6];
+/** Ridge weight (per sample) that keeps a palette colour's own lighting near the main surface's. */
+const OWN_LIGHT_RIDGE = 0.05;
+
+/**
+ * Own lighting of a further table colour: a second surface (another table, the floor beyond the
+ * table edge) faces the light differently from the main one, so its brightness follows a gradient
+ * of its own. Fitted as a plane of log (L* + 16) ratios over the samples `idx` that show the colour
+ * under some brightness (chroma scaled alike, ratio within OWN_LIGHT_RANGE), with robust refits and a
+ * ridge towards the main surface's lighting; zero (the main lighting) with too few samples.
+ */
+function fitOwnLight(s: Samples, fit: BackgroundFit, idx: readonly number[], p: PaletteColour): [number, number, number] {
+  const us: number[] = [], vs: number[] = [], ys: number[] = [];
+  const ta = 3 * Math.max(1.5, p.sigma[1]), tb = 3 * Math.max(1.5, p.sigma[2]);
+  for (const i of idx) {
+    const u = s.u[i], v = s.v[i];
+    const f = lightFactor(fit, u, v, p.refL);
+    const L = s.lab[i * 3], a = s.lab[i * 3 + 1], b = s.lab[i * 3 + 2];
+    const rho = (L + 16) / (f * (p.color[0] + 16));
+    if (!(rho >= OWN_LIGHT_RANGE[0] && rho <= OWN_LIGHT_RANGE[1])) continue;
+    if (Math.abs(a - rho * f * p.color[1]) > ta || Math.abs(b - rho * f * p.color[2]) > tb) continue;
+    us.push(u);
+    vs.push(v);
+    ys.push(Math.log(rho));
+  }
+  const n = ys.length;
+  if (n < 20) return [0, 0, 0];
+  let g: number[] = [0, 0, 0];
+  const w = new Float64Array(n).fill(1);
+  for (let iter = 0; iter < 4; iter++) {
+    const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], r = [0, 0, 0];
+    let total = 0;
+    for (let j = 0; j < n; j++) {
+      const f = [1, us[j], vs[j]];
+      for (let a = 0; a < 3; a++) {
+        r[a] += w[j] * f[a] * ys[j];
+        for (let b = 0; b < 3; b++) A[a][b] += w[j] * f[a] * f[b];
+      }
+      total += w[j];
+    }
+    for (let a = 0; a < 3; a++) A[a][a] += OWN_LIGHT_RIDGE * total;
+    const sol = solveLinear(A, r);
+    if (!sol) break;
+    g = sol;
+    const res = ys.map((y, j) => Math.abs(y - g[0] - g[1] * us[j] - g[2] * vs[j]));
+    const c = 4.685 * Math.max(0.02, 1.4826 * median(res));
+    for (let j = 0; j < n; j++) {
+      const t = res[j] / c;
+      w[j] = t < 1 ? (1 - t * t) ** 2 : 0;
+    }
+  }
+  return [g[0], g[1], g[2]];
 }
 
 /**
@@ -579,7 +639,9 @@ function findPalette(s: Samples, fit: BackgroundFit): void {
     // Plain paint is about as uniform as a plain table.
     if (globalThis.process?.env?.PALDBG) globalThis.console.log('PALDBG sigma', sigma.map((v) => v.toFixed(2)).join(','), 'main', mainSigma.map((v) => v.toFixed(2)).join(','), 'color', color.map((v) => v.toFixed(1)).join(','));
     if (sigma[1] > 3 * mainSigma[1] + 2 || sigma[2] > 3 * mainSigma[2] + 2 || sigma[0] > 2 * mainSigma[0] + 2.5) break;
-    fit.palette.push({ color, sigma, refL, interior: 0 });
+    const colour: PaletteColour = { color, sigma, refL, light: [0, 0, 0], interior: 0 };
+    colour.light = fitOwnLight(s, fit, out, colour);
+    fit.palette.push(colour);
   }
   if (fit.palette.length === 0) return;
   // With the other colours known, the main surface's own spread (a fine pattern inflates it).
@@ -624,8 +686,11 @@ function findPalette(s: Samples, fit: BackgroundFit): void {
  */
 function paletteScore(photo: RGBAImage, model: BackgroundFit, out: GrayImage): GrayImage {
   const { width: w, height: h, data: d } = photo;
-  const nc = model.palette.length + 1;
-  const sig = [model.sigma, ...model.palette.map((p) => p.sigma)];
+  // With local corrections, the corrected main colour is one more table colour (the smooth surface
+  // stays one too: corrections at the edge of a second surface hold for one side only).
+  const g = model.local;
+  const nc = model.palette.length + 1 + (g ? 1 : 0);
+  const sig = [model.sigma, ...model.palette.map((p) => p.sigma), ...(g ? [model.sigma] : [])];
   const inv = sig.map((s) => [1 / s[0], 1 / s[1], 1 / s[2]]);
   const pairInv: number[][][] = [];
   for (let i = 0; i < nc; i++) {
@@ -635,14 +700,20 @@ function paletteScore(photo: RGBAImage, model: BackgroundFit, out: GrayImage): G
   const k = model.coefficients;
   const lut = F_LUT, lin = LIN;
   const cols: number[][] = Array.from({ length: nc }, () => [0, 0, 0]);
+  const np = model.palette.length;
   for (let y = 0; y < h; y++) {
     const v = norm(y, h);
+    const nodes = g ? localRow(g, y) : null;
     for (let x0 = 0; x0 < w; x0 += 8) {
-      const u = norm(Math.min(w - 1, x0 + 4), w);
+      const xc = Math.min(w - 1, x0 + 4), u = norm(xc, w);
       cols[0][0] = evalPoly(k[0], u, v); cols[0][1] = evalPoly(k[1], u, v); cols[0][2] = evalPoly(k[2], u, v);
-      for (let j = 1; j < nc; j++) {
+      for (let j = 1; j <= np; j++) {
         const c = paletteAt(model, j - 1, u, v);
         cols[j][0] = c[0]; cols[j][1] = c[1]; cols[j][2] = c[2];
+      }
+      if (g && nodes) {
+        const f = Math.max(0, Math.min(g.cols - 1, (xc + 0.5) / g.cellW)), j0 = Math.min(Math.max(0, g.cols - 2), Math.floor(f)), j1 = Math.min(g.cols - 1, j0 + 1), t = f - j0;
+        for (let c = 0; c < 3; c++) cols[np + 1][c] = cols[0][c] + nodes[j0 * 3 + c] * (1 - t) + nodes[j1 * 3 + c] * t;
       }
       for (let x = x0; x < Math.min(w, x0 + 8); x++) {
         const p = (y * w + x) << 2;

@@ -1,0 +1,11 @@
+{
+  "reviewed": "2026-10-18",
+  "marks": {
+    "1": { "verdict": "ok", "note": "dark piece lying across a plank gap" },
+    "2": { "verdict": "ok", "note": "pink and dark piece; tap near its right edge" },
+    "3": { "verdict": "ok", "note": "dark grey piece lying across a plank gap" },
+    "4": { "verdict": "ok", "note": "dark green piece; tap a few px outside its left edge" },
+    "5": { "verdict": "ok", "note": "grey piece; tap in the notch at its top edge" },
+    "6": { "verdict": "ok", "note": "small pink and dark piece" }
+  }
+}

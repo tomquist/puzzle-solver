@@ -453,7 +453,7 @@ function chooseThreshold(score: GrayImage): { high: number; low: number; separab
   const o = otsuThreshold(g);
   const t = Math.expm1(o.threshold);
   if (globalThis.process?.env?.THDBG) globalThis.console.log('THDBG otsu', t.toFixed(2), 'sep', o.separability.toFixed(3));
-  const high = Math.max(4.5, Math.min(14, t));
+  const high = globalThis.process?.env?.THFIX ? Number(globalThis.process.env.THFIX) : Math.max(4.5, Math.min(14, t));
   return { high, low: Math.max(3.2, 0.55 * high), separability: o.separability };
 }
 
@@ -1426,7 +1426,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   let p = pass(fit);
   // Shadow zones and local lighting the smooth surface cannot follow: learn them from the table
   // around the pieces found so far (coarse grid, cells of at least two pieces) and segment again.
-  if (p.ref.refBody > 0 && fit.palette.length === 0) {
+  if (p.ref.refBody > 0 && (fit.palette.length === 0 || globalThis.process?.env?.LOCALPAL)) {
     // Excluded (on a 4× coarser grid): anything piece-shaped and every blob with a fair share of
     // strong pixels (pieces, and patches of weak pieces whose print is speckled with them). Smooth
     // weak blobs, which may be the shadow zone itself, stay in the estimate (a cell spans several
@@ -1443,9 +1443,10 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
       }
       const pieceLike = c.area >= 0.5 * p.ref.refArea && c.shape !== null && c.shape.confidence >= MIN_SHAPE_CONFIDENCE;
       if (!pieceLike && strong < LOCAL_STRONG_SHARE * c.area) continue;
+      const strongOnly = globalThis.process?.env?.LOCALBIG && c.area > Number(globalThis.process.env.LOCALBIG) * p.ref.refArea;
       for (let y = 0; y < bh; y++) {
         const crow = (((y + by) / f) | 0) * cw;
-        for (let x = 0; x < bw; x++) if (c.mask.data[y * bw + x]) whole.data[crow + (((x + bx) / f) | 0)] = 1;
+        for (let x = 0; x < bw; x++) if (c.mask.data[y * bw + x] && (!strongOnly || sd[(y + by) * W + x + bx] >= high)) whole.data[crow + (((x + bx) / f) | 0)] = 1;
       }
     }
     const exclude = dilate(whole, Math.max(1, Math.round((0.25 * p.ref.refBody) / f)));

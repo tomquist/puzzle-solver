@@ -10,7 +10,8 @@ import { PNG } from 'pngjs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { serializeFeedback, type FeedbackBundle } from '../../feedback/format';
 import { writeInspection } from '../../../scripts/feedback/inspect';
-import { evaluateFeedbackFile, replayFeedback, type FeedbackMetrics, type FeedbackReplay } from '../../../scripts/feedback/replay';
+import { evaluateFeedbackFile, feedbackMetrics, replayFeedback, type FeedbackMetrics, type FeedbackReplay } from '../../../scripts/feedback/replay';
+import { readReview, reviewPath, type FeedbackReview } from '../../../scripts/feedback/review';
 import { makeSyntheticFeedback } from '../../../scripts/feedback/synthetic';
 
 const dir = mkdtempSync(join(tmpdir(), 'feedback-tooling-'));
@@ -52,6 +53,25 @@ describe('feedback tooling', () => {
     expect(metrics.placementsTop1).toBe(1);
     expect(metrics.boxError).toBeLessThan(0.02);
     expect(metrics.items).toBe(bundle.marks.length + bundle.scan!.placements.length);
+  });
+
+  it('counts only marks the visual review confirmed', () => {
+    // The 'missed' mark on empty table (added last) is a user mistake.
+    const tableMark = bundle.marks.length;
+    const review: FeedbackReview = {
+      reviewed: '2026-10-18',
+      marks: Object.fromEntries(replay.marks.map((j) => [String(j.index), { verdict: j.index === tableMark ? 'wrong' : 'ok' }])),
+    };
+    const file = join(dir, 'puzzle-feedback-synthetic.json');
+    writeFileSync(reviewPath(file), JSON.stringify(review));
+    expect(readReview(file)).toEqual(review);
+    rmSync(reviewPath(file));
+    const reviewed = feedbackMetrics({ ...replay, reviewed: true, marks: replay.marks.map((j) => ({ ...j, review: review.marks[String(j.index)] })) });
+    expect(reviewed.missedFound).toBe(1);
+    expect(reviewed.falseRemoved).toBe(metrics.falseRemoved);
+    // Unreviewed marks of a reviewed file don't count either.
+    const partial = feedbackMetrics({ ...replay, reviewed: true, marks: replay.marks.map((j) => ({ ...j, review: undefined })) });
+    expect(partial.missedFound).toBeUndefined();
   });
 
   it('writes readable inspection images and a summary', () => {

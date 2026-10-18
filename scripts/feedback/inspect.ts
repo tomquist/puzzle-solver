@@ -405,6 +405,8 @@ export function formatSummary(r: FeedbackReplay): string {
     for (const j of r.marks) {
       const target = j.mark.kind === 'missed' ? `(${Math.round(j.at.x)},${Math.round(j.at.y)})` : `#${j.mark.regionId}`;
       lines.push(pad(`M${j.index}`, 5) + pad(j.mark.kind, 13) + pad(target, 12) + pad(j.verdict, 16) + `${j.original} -> ${j.now}`);
+      if (j.review) lines.push(' '.repeat(46) + `review: ${j.review.verdict}${j.review.parts ? `, ${j.review.parts} parts` : ''}${j.review.verdict === 'ok' ? '' : ' (not counted)'}${j.review.note ? ` – ${j.review.note}` : ''}`);
+      else if (r.reviewed) lines.push(' '.repeat(46) + 'review: none (not counted)');
       if (j.why) lines.push(' '.repeat(46) + `why: ${j.why}`);
     }
   }

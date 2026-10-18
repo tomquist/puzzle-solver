@@ -19,6 +19,7 @@ import { buildReferenceIndex } from '../../src/pipeline/match';
 import { segmentPieces, type BackgroundModel, type SegmentDiagnostics } from '../../src/pipeline/pieces';
 import { basename } from 'node:path';
 import { decodeFeedbackImage, readFeedbackFile } from './io';
+import { readReview, type FeedbackReview, type MarkReview } from './review';
 import { cellJaccard, cellKey, centroidOf, containsPoint, correspondent, distanceToRect, formatCells, overlaps, rasterizeRegions, regionAtTap, type RasterRegion } from './regions';
 
 /** Outcome of one user mark under the current pipeline. */
@@ -40,6 +41,8 @@ export interface MarkJudgement {
   why?: string;
   /** Current regions involved (to highlight them). */
   currentIds: number[];
+  /** Verdict of the visual review of this mark (see review.ts), when the file has one. */
+  review?: MarkReview;
 }
 
 export interface PlacementJudgement {
@@ -77,6 +80,8 @@ export interface FeedbackReplay {
   diagnostics: SegmentDiagnostics | null;
   background: BackgroundModel | null;
   marks: MarkJudgement[];
+  /** True when the marks were reviewed: then only marks reviewed 'ok' count in the metrics. */
+  reviewed?: boolean;
   placements: PlacementJudgement[];
   boxPhoto: RGBAImage | null;
   box: BoxJudgement | null;
@@ -132,6 +137,8 @@ const cellsOk = (found: CellRef[], truth: CellRef[]): boolean =>
 export interface ReplayOptions {
   /** Skip the box re-detection. */
   skipBox?: boolean;
+  /** Visual review of the marks; without one every mark counts. */
+  review?: FeedbackReview;
 }
 
 /** Re-run the current pipeline on a feedback file and judge every mark, placement and the box. */
@@ -332,6 +339,8 @@ export function replayFeedback(bundle: FeedbackBundle, name: string, opts: Repla
       originalOk: cellsOk(originalCells, p.cells), ok: out.matched && curIds.length > 0 && cellsOk(currentCells, p.cells),
     });
   }
+  if (opts.review) for (const j of out.marks) j.review = opts.review.marks[String(j.index)];
+  out.reviewed = !!opts.review;
   return out;
 }
 
@@ -376,16 +385,21 @@ export type FeedbackMetrics = Record<string, number>;
 /**
  * Per-file metrics (rates 0..1; keys without any applicable mark are left out so they are neither
  * gated nor averaged): missedFound, falseRemoved, mergedSplit, wrongFixed, placementsTop1, boxError.
+ * With a review only marks reviewed 'ok' count; mergedExact is the share of merged marks with a
+ * reviewed part count that now come out as exactly that many regions.
  */
 export function feedbackMetrics(r: FeedbackReplay): FeedbackMetrics {
   const m: FeedbackMetrics = {};
+  const counts = (j: MarkJudgement) => !r.reviewed || j.review?.verdict === 'ok';
   const rate = (key: string, kind: FeedbackMark['kind'], filter: (j: MarkJudgement) => boolean = () => true) => {
-    const js = r.marks.filter((j) => j.mark.kind === kind && j.fixed !== null && filter(j));
+    const js = r.marks.filter((j) => j.mark.kind === kind && j.fixed !== null && counts(j) && filter(j));
     if (js.length > 0) m[key] = js.filter((j) => j.fixed).length / js.length;
   };
   rate('missedFound', 'missed');
   rate('falseRemoved', 'not_a_piece');
   rate('mergedSplit', 'merged');
+  const exact = r.marks.filter((j) => j.mark.kind === 'merged' && counts(j) && j.review?.parts);
+  if (exact.length > 0) m.mergedExact = exact.filter((j) => j.currentIds.length === j.review!.parts).length / exact.length;
   rate('wrongFixed', 'wrong_place');
   if (r.placements.length > 0 && r.matched) m.placementsTop1 = r.placements.filter((p) => p.ok).length / r.placements.length;
   if (r.box) m.boxError = r.box.error;
@@ -400,6 +414,6 @@ export { regionCenter };
 /** Replay one feedback file from disk and compute its metrics (bench/feedback.eval.ts, tests). */
 export function evaluateFeedbackFile(path: string, opts: ReplayOptions = {}): { replay: FeedbackReplay; metrics: FeedbackMetrics } {
   const name = basename(path).replace(/\.json$/i, '');
-  const replay = replayFeedback(readFeedbackFile(path), name, opts);
+  const replay = replayFeedback(readFeedbackFile(path), name, { ...opts, review: opts.review ?? readReview(path) });
   return { replay, metrics: feedbackMetrics(replay) };
 }

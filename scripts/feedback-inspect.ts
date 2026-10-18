@@ -12,6 +12,7 @@ import { REPO_ROOT } from '../src/testing/nodeImageIO';
 import { readFeedbackFile } from './feedback/io';
 import { writeInspection } from './feedback/inspect';
 import { replayFeedback } from './feedback/replay';
+import { readReview } from './feedback/review';
 
 function main(argv: string[]): number {
   const files: string[] = [];
@@ -35,7 +36,7 @@ function main(argv: string[]): number {
     const name = basename(f).replace(/\.json$/i, '');
     try {
       const bundle = readFeedbackFile(resolve(f));
-      const replay = replayFeedback(bundle, name, { skipBox });
+      const replay = replayFeedback(bundle, name, { skipBox, review: readReview(resolve(f)) });
       const dir = resolve(out, name);
       const { summary, files: written } = writeInspection(replay, dir);
       console.log(summary);

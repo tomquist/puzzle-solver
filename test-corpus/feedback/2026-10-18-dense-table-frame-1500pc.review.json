@@ -1,0 +1,15 @@
+{
+  "reviewed": "2026-10-18",
+  "marks": {
+    "1": { "verdict": "ok", "parts": 3, "note": "two loose pieces plus an assembled pair (dark over light, pattern continues), which stays together" },
+    "2": { "verdict": "ok", "parts": 3, "note": "purple, magenta and greenish loose pieces touching" },
+    "3": { "verdict": "ok", "parts": 3, "note": "assembled pair at the top (pink pattern on black), a crown-topped dark piece and a round red piece touching below" },
+    "4": { "verdict": "ok", "parts": 3, "note": "three separate dark/red pieces, two overlapping" },
+    "5": { "verdict": "ok", "note": "lower part of the frame's left strip (one assembled region) plus a chain of 5-6 loose pieces, two overlapping, two purple ones possibly joined" },
+    "6": { "verdict": "ok", "note": "frame (top and left border, one assembled region) merged with loose pieces and the lighter surface at the top right" },
+    "7": { "verdict": "ok", "parts": 2, "note": "two separate red pieces at different angles, nearly touching" },
+    "8": { "verdict": "ok", "note": "cluster of 5-6 overlapping purple/grey pieces, cut off by the bottom photo edge" },
+    "9": { "verdict": "ok", "note": "cluster of about 7 overlapping purple/grey pieces, cut off by the bottom photo edge" },
+    "10": { "verdict": "ok", "parts": 2, "note": "red piece above a dark piece, both cut off by the right photo edge" }
+  }
+}
