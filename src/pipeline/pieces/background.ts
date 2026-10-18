@@ -92,14 +92,15 @@ export function tableChromasAt(fit: BackgroundFit, x: number, y: number): { a: n
 
 /**
  * Distance (sigmas) of chroma (a, b) from what a table colour can look like under other lighting:
- * its chroma scaled between neutral (deep shadow, glare) and 1.25 times; the nearest of `colours`.
+ * its chroma scaled between neutral (deep shadow, glare) and `maxScale` times (1.25 by default; a
+ * soft shadow on warm wood deepens the colour further); the nearest of `colours`.
  */
-export function tableChromaDistance(colours: readonly { a: number; b: number; sa: number; sb: number }[], a: number, b: number): number {
+export function tableChromaDistance(colours: readonly { a: number; b: number; sa: number; sb: number }[], a: number, b: number, maxScale = 1.25): number {
   let best = Infinity;
   for (const c of colours) {
     const pa = a / c.sa, pb = b / c.sb, qa = c.a / c.sa, qb = c.b / c.sb;
     const len2 = qa * qa + qb * qb;
-    const t = len2 > 1e-9 ? Math.max(0, Math.min(1.25, (pa * qa + pb * qb) / len2)) : 0;
+    const t = len2 > 1e-9 ? Math.max(0, Math.min(maxScale, (pa * qa + pb * qb) / len2)) : 0;
     const d = Math.hypot(pa - t * qa, pb - t * qb);
     if (d < best) best = d;
   }

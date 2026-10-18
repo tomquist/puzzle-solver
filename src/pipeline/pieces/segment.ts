@@ -536,14 +536,14 @@ function splitAtNecks(c: Candidate, r: number, minCore: number, minPart: number)
 }
 
 /**
- * Black top-hat of the luminance over `rect` (7×7 closing minus luminance, gray levels): high on
+ * Black top-hat of the luminance over `rect` ((2r+1)² closing minus luminance, gray levels): high on
  * thin dark valleys such as the crease between two touching pieces (cardboard edge, shadow), low on
  * the step edges of a piece's print.
  */
-function blackTopHat(img: RGBAImage, rect: Rect): Float32Array {
+function blackTopHat(img: RGBAImage, rect: Rect, r: number): Float32Array {
   const { width: W, height: H, data } = img;
   const { x: x0, y: y0, width: w, height: h } = rect;
-  const pad = 4, pw = w + 2 * pad, ph = h + 2 * pad;
+  const pad = r + 1, pw = w + 2 * pad, ph = h + 2 * pad;
   const Y = new Float32Array(pw * ph);
   for (let y = 0; y < ph; y++) {
     const yy = Math.min(H - 1, Math.max(0, y + y0 - pad));
@@ -552,20 +552,20 @@ function blackTopHat(img: RGBAImage, rect: Rect): Float32Array {
       Y[y * pw + x] = 0.299 * data[o] + 0.587 * data[o + 1] + 0.114 * data[o + 2];
     }
   }
-  // Closing = min filter of the max filter (3-px radius squares, separable).
+  // Closing = min filter of the max filter (r-px radius squares, separable).
   const filt = (src: Float32Array, isMax: boolean): Float32Array => {
     const tmp = new Float32Array(pw * ph), out = new Float32Array(pw * ph);
     for (let y = 0; y < ph; y++) {
       for (let x = 0; x < pw; x++) {
         let v = src[y * pw + x];
-        for (let k = Math.max(0, x - 3); k <= Math.min(pw - 1, x + 3); k++) v = isMax ? Math.max(v, src[y * pw + k]) : Math.min(v, src[y * pw + k]);
+        for (let k = Math.max(0, x - r); k <= Math.min(pw - 1, x + r); k++) v = isMax ? Math.max(v, src[y * pw + k]) : Math.min(v, src[y * pw + k]);
         tmp[y * pw + x] = v;
       }
     }
     for (let y = 0; y < ph; y++) {
       for (let x = 0; x < pw; x++) {
         let v = tmp[y * pw + x];
-        for (let k = Math.max(0, y - 3); k <= Math.min(ph - 1, y + 3); k++) v = isMax ? Math.max(v, tmp[k * pw + x]) : Math.min(v, tmp[k * pw + x]);
+        for (let k = Math.max(0, y - r); k <= Math.min(ph - 1, y + r); k++) v = isMax ? Math.max(v, tmp[k * pw + x]) : Math.min(v, tmp[k * pw + x]);
         out[y * pw + x] = v;
       }
     }
@@ -577,6 +577,8 @@ function blackTopHat(img: RGBAImage, rect: Rect): Float32Array {
   return out;
 }
 
+/** Half width (body sizes, at least 3 px) of the dark valleys measured as creases between pieces. */
+const CREASE_WIDTH = 0.03;
 /** Median crease strength (top-hat gray levels, see blackTopHat) from which a cut needs no further evidence. */
 const CREASE_MIN = 10;
 /**
@@ -680,6 +682,60 @@ function watershed(mask: Mask, grad: Uint8Array, labels: Int32Array): void {
 }
 
 /**
+ * k centres of a set of pixel positions (indices into a `w`-wide grid): Lloyd iterations from
+ * farthest-point starts at the deepest point (`depth`) and at the four extreme points; the solution
+ * with the least squared distance wins. (A single start flips with slight changes of the set.)
+ */
+function kMeansCentres(pts: readonly number[], w: number, k: number, depth: ArrayLike<number>): { cx: number[]; cy: number[] } {
+  const n = pts.length;
+  const xs = Float64Array.from(pts, (i) => i % w), ys = Float64Array.from(pts, (i) => Math.floor(i / w));
+  let deep = 0, minX = 0, maxX = 0, minY = 0, maxY = 0;
+  for (let j = 1; j < n; j++) {
+    if (depth[pts[j]] > depth[pts[deep]]) deep = j;
+    if (xs[j] < xs[minX]) minX = j;
+    if (xs[j] > xs[maxX]) maxX = j;
+    if (ys[j] < ys[minY]) minY = j;
+    if (ys[j] > ys[maxY]) maxY = j;
+  }
+  const starts = [...new Set([deep, minX, maxX, minY, maxY])];
+  let best = { cx: [xs[deep]], cy: [ys[deep]] }, bestCost = Infinity;
+  const nearest = new Float64Array(n);
+  for (const s of starts) {
+    const cx = [xs[s]], cy = [ys[s]];
+    nearest.fill(Infinity);
+    while (cx.length < k) {
+      const m = cx.length - 1;
+      let bi = 0, bd = -1;
+      for (let j = 0; j < n; j++) {
+        const d = (xs[j] - cx[m]) ** 2 + (ys[j] - cy[m]) ** 2;
+        if (d < nearest[j]) nearest[j] = d;
+        if (nearest[j] > bd) { bd = nearest[j]; bi = j; }
+      }
+      cx.push(xs[bi]);
+      cy.push(ys[bi]);
+    }
+    let cost = 0;
+    for (let iter = 0; iter < 10; iter++) {
+      const sx = new Float64Array(k), sy = new Float64Array(k), cnt = new Float64Array(k);
+      cost = 0;
+      for (let j = 0; j < n; j++) {
+        let bm = 0, bd = Infinity;
+        for (let m = 0; m < k; m++) {
+          const d = (xs[j] - cx[m]) ** 2 + (ys[j] - cy[m]) ** 2;
+          if (d < bd) { bd = d; bm = m; }
+        }
+        sx[bm] += xs[j]; sy[bm] += ys[j]; cnt[bm]++;
+        cost += bd;
+      }
+      for (let m = 0; m < k; m++) if (cnt[m] > 0) { cx[m] = sx[m] / cnt[m]; cy[m] = sy[m] / cnt[m]; }
+    }
+    // (A clearly better solution only: near ties keep the earlier start.)
+    if (cost < 0.98 * bestCost) { bestCost = cost; best = { cx, cy }; }
+  }
+  return best;
+}
+
+/**
  * Split a cluster of touching or slightly overlapping loose pieces along the edges between them.
  * Markers come from the foreground before closing (pieces 1–3 px apart are separate there) or,
  * failing that, from k-means of the interior (k = area / piece area). A watershed on the colour
@@ -736,39 +792,13 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
       for (let i = 0; i < labels.length; i++) if (comps.labels[i] === st.label) labels[i] = n + 1;
     });
   } else {
-    // Markers 2: k-means of interior pixel positions (farthest-point start).
+    // Markers 2: k-means of interior pixel positions.
     const dt = distanceTransform(c.mask).data;
     const pts: number[] = [];
     const stride = Math.max(1, Math.round(Math.sqrt(c.area / 40000)));
     for (let y = 0; y < h; y += stride) for (let x = 0; x < w; x += stride) if (dt[y * w + x] >= 0.12 * body) pts.push(y * w + x);
     if (pts.length < 10 * k) return null;
-    const cx: number[] = [], cy: number[] = [];
-    let far = pts[0], farD = -1;
-    for (const i of pts) if (dt[i] > farD) { farD = dt[i]; far = i; }
-    cx.push(far % w); cy.push(Math.floor(far / w));
-    while (cx.length < k) {
-      let bi = pts[0], bd = -1;
-      for (const i of pts) {
-        const x = i % w, y = (i - x) / w;
-        let d = Infinity;
-        for (let m = 0; m < cx.length; m++) d = Math.min(d, (x - cx[m]) ** 2 + (y - cy[m]) ** 2);
-        if (d > bd) { bd = d; bi = i; }
-      }
-      cx.push(bi % w); cy.push(Math.floor(bi / w));
-    }
-    for (let iter = 0; iter < 10; iter++) {
-      const sx = new Float64Array(k), sy = new Float64Array(k), n = new Float64Array(k);
-      for (const i of pts) {
-        const x = i % w, y = (i - x) / w;
-        let best = 0, bd = Infinity;
-        for (let m = 0; m < k; m++) {
-          const d = (x - cx[m]) ** 2 + (y - cy[m]) ** 2;
-          if (d < bd) { bd = d; best = m; }
-        }
-        sx[best] += x; sy[best] += y; n[best]++;
-      }
-      for (let m = 0; m < k; m++) if (n[m] > 0) { cx[m] = sx[m] / n[m]; cy[m] = sy[m] / n[m]; }
-    }
+    const { cx, cy } = kMeansCentres(pts, w, k, dt);
     const r2 = (0.15 * body) ** 2;
     pts.forEach((i) => {
       const x = i % w, y = (i - x) / w;
@@ -779,7 +809,8 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
   watershed(c.mask, colourGradient(img, c.bbox), labels);
   const n = nLabels;
   // Shared boundary per pair of labels, with the crease strength along it.
-  const th = blackTopHat(img, c.bbox);
+  // (The crease widens with the magnification: wider valleys on large pieces.)
+  const th = blackTopHat(img, c.bbox, Math.max(3, Math.round(CREASE_WIDTH * body)));
   const pairStats = () => {
     const shared = new Map<number, number[]>();
     for (let y = 0; y < h; y++) {
@@ -1158,6 +1189,102 @@ function snapOutline(c: Candidate, img: RGBAImage, score: GrayImage, high: numbe
   if (stats.length === 0) return null;
   const main = stats.reduce((a, b) => (b.area > a.area ? b : a));
   if (main.area < 0.85 * c.area) return null;
+  return { ...makeCandidate(componentMask(labels, w, main.label, main.bbox), { x: main.bbox.x + x0, y: main.bbox.y + y0, width: main.bbox.width, height: main.bbox.height }, W, H, main.area), group: c.group, merged: c.merged };
+}
+
+/** Width (body sizes) of the outer band searched for a soft cast shadow around a dark piece. */
+const SHADOW_BAND = 0.1;
+/** Narrowest such band (px): thinner shadow halos are left to the outline snapping. */
+const SHADOW_BAND_MIN = 8;
+/** Deepest shadow colour, as a multiple of the table's chroma (soft shadow on warm wood deepens it). */
+const SHADOW_CHROMA_SCALE = 2.5;
+
+/**
+ * Peel a soft cast shadow off a dark piece: in an outer band of SHADOW_BAND body sizes, pixels darker
+ * than the table (or at its brightness) but less than halfway to the piece's own brightness (measured
+ * just inside the band, locally along the outline), in a table hue, and reached from outside through
+ * such pixels, are given back to the table. The piece ends at the half-way point of its own edge; a
+ * shadow is a smooth ramp on the table side of it. Null when nothing (or too much) would change.
+ */
+function peelShadowHalo(c: Candidate, img: RGBAImage, fit: BackgroundFit, noise: number, body: number, W: number, H: number): Candidate | null {
+  const K = Math.round(SHADOW_BAND * body);
+  if (K < SHADOW_BAND_MIN) return null;
+  const pad = 9;
+  const x0 = Math.max(0, c.bbox.x - pad), y0 = Math.max(0, c.bbox.y - pad);
+  const x1 = Math.min(W, c.bbox.x + c.bbox.width + pad), y1 = Math.min(H, c.bbox.y + c.bbox.height + pad);
+  const w = x1 - x0, h = y1 - y0;
+  const m = createMask(w, h);
+  for (let y = 0; y < c.bbox.height; y++) {
+    for (let x = 0; x < c.bbox.width; x++) m.data[(y + c.bbox.y - y0) * w + x + c.bbox.x - x0] = c.mask.data[y * c.bbox.width + x];
+  }
+  const Y = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const o = ((y + y0) * W + x + x0) * 4;
+      Y[y * w + x] = 0.299 * img.data[o] + 0.587 * img.data[o + 1] + 0.114 * img.data[o + 2];
+    }
+  }
+  // Table brightness and spread from a ring just outside the region.
+  const near = dilate(m, 2), far = dilate(m, 8);
+  const ring: number[] = [];
+  for (let i = 0; i < w * h; i++) if (far.data[i] && !near.data[i]) ring.push(Y[i]);
+  if (ring.length < 30) return null;
+  const tY = median(ring);
+  const sY = Math.max(noise, 1.4826 * median(ring.map((v) => Math.abs(v - tY))), 1);
+  // The piece's own brightness K–2K px in, averaged locally along the outline.
+  const band = erode(m, K), deep = erode(m, 2 * K);
+  const P = createGray(w, h), In = createGray(w, h);
+  for (let i = 0; i < w * h; i++) {
+    if (!band.data[i] || deep.data[i]) continue;
+    P.data[i] = Y[i];
+    In.data[i] = 1;
+  }
+  const sumP = boxBlurGray(P, 2 * K).data, cnt = boxBlurGray(In, 2 * K).data;
+  // Shadow pixels of the outer band.
+  const shade = new Uint8Array(w * h);
+  const cache = new Map<number, ReturnType<typeof tableChromasAt>>();
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (!m.data[i] || band.data[i] || cnt[i] < 0.02) continue;
+      const pY = sumP[i] / cnt[i];
+      if (tY - pY < SNAP_MIN_STEP * sY) continue;
+      if (Y[i] > tY + SNAP_MIN_DEV * sY || Y[i] < 0.5 * (tY + pY)) continue;
+      const key = (y >> 3) * 4096 + (x >> 3);
+      let colours = cache.get(key);
+      if (!colours) cache.set(key, (colours = tableChromasAt(fit, Math.min(W - 1, x0 + (x & ~7) + 4), Math.min(H - 1, y0 + (y & ~7) + 4))));
+      const o = ((y + y0) * W + x + x0) * 4;
+      const lab = rgbToLab(img.data[o], img.data[o + 1], img.data[o + 2]);
+      if (tableChromaDistance(colours, lab[1], lab[2], SHADOW_CHROMA_SCALE) <= PEEL_CHROMA) shade[i] = 1;
+    }
+  }
+  // Reached from outside through shadow pixels (4-connected).
+  const gone = new Uint8Array(w * h);
+  const queue = new Int32Array(w * h);
+  let head = 0, tail = 0;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      if (shade[i] && (!m.data[i - 1] || !m.data[i + 1] || !m.data[i - w] || !m.data[i + w])) { gone[i] = 1; queue[tail++] = i; }
+    }
+  }
+  while (head < tail) {
+    const i = queue[head++];
+    for (const j of [i - 1, i + 1, i - w, i + w]) {
+      if (j < 0 || j >= w * h || gone[j] || !shade[j]) continue;
+      gone[j] = 1;
+      queue[tail++] = j;
+    }
+  }
+  const keep = cloneMask(m);
+  let removed = 0;
+  for (let i = 0; i < w * h; i++) if (gone[i]) { keep.data[i] = 0; removed++; }
+  if (removed < 0.02 * c.area) return null;
+  const cleaned = fillHoles(open(keep, 1));
+  const { labels, stats } = labelComponents(cleaned, 8);
+  if (stats.length === 0) return null;
+  const main = stats.reduce((a, b) => (b.area > a.area ? b : a));
+  if (main.area < 0.6 * c.area) return null;
   return { ...makeCandidate(componentMask(labels, w, main.label, main.bbox), { x: main.bbox.x + x0, y: main.bbox.y + y0, width: main.bbox.width, height: main.bbox.height }, W, H, main.area), group: c.group, merged: c.merged };
 }
 
@@ -1596,7 +1723,13 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
   if (refArea > 0) cands = mergeFragments(cands, refAreaAt, refBody, W, H);
   lap('split');
   if (diag) diag.blockiness = blockiness;
-  if (blocky) cands = cands.map((c) => (c.touchesBorder ? c : snapOutline(c, scored, score, th.high, noise, refBody * Math.sqrt(refAreaAt(c) / Math.max(1, refArea)), W, H) ?? c));
+  // Soft cast shadows around dark pieces in close-ups, then (JPEGs) colour bled into the table.
+  cands = cands.map((c) => {
+    if (c.touchesBorder) return c;
+    const bodyAt = refBody * Math.sqrt(refAreaAt(c) / Math.max(1, refArea));
+    const peeled = (refArea > 0 ? peelShadowHalo(c, scored, fit, noise, bodyAt, W, H) : null) ?? c;
+    return blocky ? snapOutline(peeled, scored, score, th.high, noise, bodyAt, W, H) ?? peeled : peeled;
+  });
   lap('snap');
 
   // Noise is no region: strands (seam stubs, cracks) and small weak specks (shadow or grain noise
