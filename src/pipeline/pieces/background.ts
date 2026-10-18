@@ -134,9 +134,19 @@ export function fitLocalTable(photo: RGBAImage, fit: BackgroundFit, exclude: Mas
       const p = (y * w + x) * 4;
       const lab = rgbToLab(data[p], data[p + 1], data[p + 2]);
       const u = norm(x, w), o = (j * sw + i) * 3;
-      samp[o] = lab[0] - evalPoly(k[0], u, v);
-      samp[o + 1] = lab[1] - evalPoly(k[1], u, v);
-      samp[o + 2] = lab[2] - evalPoly(k[2], u, v);
+      // Residual against the nearest table colour (a second surface is followed like a shadow).
+      let ref: readonly number[] = [evalPoly(k[0], u, v), evalPoly(k[1], u, v), evalPoly(k[2], u, v)];
+      if (fit.palette.length > 0) {
+        let best = distance(lab[0], lab[1], lab[2], ref[0], ref[1], ref[2], 1 / fit.sigma[0], 1 / fit.sigma[1], 1 / fit.sigma[2]);
+        for (let q = 0; q < fit.palette.length; q++) {
+          const c = paletteAt(fit, q, u, v), sg = fit.palette[q].sigma;
+          const d = distance(lab[0], lab[1], lab[2], c[0], c[1], c[2], 1 / sg[0], 1 / sg[1], 1 / sg[2]);
+          if (d < best) { best = d; ref = c; }
+        }
+      }
+      samp[o] = lab[0] - ref[0];
+      samp[o + 1] = lab[1] - ref[1];
+      samp[o + 2] = lab[2] - ref[2];
     }
   }
   const vals: number[][] = [[], [], []];
@@ -638,6 +648,11 @@ function paletteScore(photo: RGBAImage, model: BackgroundFit, out: GrayImage): G
       for (let j = 1; j < nc; j++) {
         const c = paletteAt(model, j - 1, u, v);
         cols[j][0] = c[0]; cols[j][1] = c[1]; cols[j][2] = c[2];
+      }
+      if (model.local) {
+        // Local shading and colour corrections apply to every table colour alike.
+        const r = localAt(model.local, Math.min(w - 1, x0 + 4), y);
+        for (let j = 0; j < nc; j++) for (let ch = 0; ch < 3; ch++) cols[j][ch] += r[ch];
       }
       for (let x = x0; x < Math.min(w, x0 + 8); x++) {
         const p = (y * w + x) << 2;

@@ -1080,7 +1080,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   let p = pass(fit);
   // Shadow zones and local lighting the smooth surface cannot follow: learn them from the table
   // around the pieces found so far (coarse grid, cells of at least two pieces) and segment again.
-  if (p.ref.refBody > 0 && fit.palette.length === 0) {
+  if (p.ref.refBody > 0) {
     // Excluded (on a 4× coarser grid): anything piece-shaped and every blob with a fair share of
     // strong pixels (pieces, and patches of weak pieces whose print is speckled with them). Smooth
     // weak blobs, which may be the shadow zone itself, stay in the estimate (a cell spans several
