@@ -31,6 +31,7 @@ import {
   foundText,
   looksLikeSeveral,
   MARK_KINDS,
+  hintKinds,
   markHint,
   markIndexForRegion,
   markInfo,
@@ -559,7 +560,7 @@ function ScanMarking({
             <div className="fb-note-head">
               <p className="small">
                 {hint.kind === 'several'
-                  ? `Looks like more than one piece – ${markInfo('merged').label}?`
+                  ? `Bigger than one piece – ${markInfo('merged').label}? If there’s no piece inside: ${markInfo('not_a_piece').label}.`
                   : 'Blue = pieces you joined: one outline around them is right. Keep this mark only if the outline itself is off.'}
               </p>
               <button type="button" className="icon-btn small" onClick={dismissHint} aria-label="Dismiss" data-testid="fb-hint-dismiss">
@@ -567,18 +568,21 @@ function ScanMarking({
               </button>
             </div>
             <div className="fb-note-actions">
-              <button
-                type="button"
-                className="btn btn-sm fb-note-kind mk-merged"
-                onClick={() => {
-                  setMarks((m) => setRegionMark(m, 'merged', hint.regionId));
-                  setHint(undefined);
-                }}
-                data-testid="fb-hint-merged"
-              >
-                <span className="mk-dot" aria-hidden="true" />
-                {hint.kind === 'several' ? `Change to ${markInfo('merged').label}` : markInfo('merged').label}
-              </button>
+              {hintKinds(hint.kind, toneOf(hint.regionId)).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  className={`btn btn-sm fb-note-kind mk-${k}`}
+                  onClick={() => {
+                    setMarks((m) => setRegionMark(m, k, hint.regionId));
+                    setHint(undefined);
+                  }}
+                  data-testid={`fb-hint-${k}`}
+                >
+                  <span className="mk-dot" aria-hidden="true" />
+                  {hint.kind === 'several' ? `Change to ${markInfo(k).label}` : markInfo(k).label}
+                </button>
+              ))}
               {hint.kind === 'assembled' && (
                 <button
                   type="button"

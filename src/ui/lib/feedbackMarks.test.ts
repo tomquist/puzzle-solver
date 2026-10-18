@@ -7,6 +7,7 @@ import {
   areaName,
   detectionTones,
   foundText,
+  hintKinds,
   looksLikeSeveral,
   markHint,
   markIndexForRegion,
@@ -138,6 +139,13 @@ describe('typical piece size and hints on a mark', () => {
       expect(markHint(kind, regions[6], 'patch', area)).toBeUndefined();
     }
     expect(markHint('bad_outline', regions[5], 'confident', undefined)).toBeUndefined();
+  });
+
+  it('offers "not a piece" with the size hint, first where the region had no usable match', () => {
+    // Real case: glare on a light table outlined at 3.5x a piece and marked "outline off".
+    expect(hintKinds('several', 'hidden')).toEqual(['not_a_piece', 'merged']);
+    expect(hintKinds('several', 'confident')).toEqual(['merged', 'not_a_piece']);
+    expect(hintKinds('assembled', 'patch')).toEqual(['merged']);
   });
 
   it('suggests "pieces stuck together" first for a "missed" tap on a large found region', () => {

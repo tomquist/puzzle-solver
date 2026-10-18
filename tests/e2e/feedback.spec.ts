@@ -408,7 +408,8 @@ test('marking help and hints: plain categories, "How to mark" remembered collaps
   await page.getByTestId('fb-mode-bad_outline').click();
   await page.getByTestId(`fb-hit-${big.id}`).click();
   await expect(hint).toHaveAttribute('data-hint', 'several');
-  await expect(hint).toContainText('Looks like more than one piece – Pieces stuck together?');
+  await expect(hint).toContainText('Bigger than one piece – Pieces stuck together? If there’s no piece inside: Not a piece.');
+  await expect(page.getByTestId('fb-hint-not_a_piece')).toHaveText('Change to Not a piece');
   await shot(page, info, '6-hint-several');
   // The hint goes with its mark; marking again brings it back (it was not dismissed).
   await page.getByTestId('fb-remove-0').click();
