@@ -1,0 +1,318 @@
+{
+  "reviewed": "2026-10-18",
+  "marks": {
+    "1": {
+      "verdict": "ok",
+      "note": "title strip LOVE: outline follows the pink letters, not the assembled strip"
+    },
+    "2": {
+      "verdict": "ok",
+      "note": "title strip LETTERS: outline follows the letters, not the strip"
+    },
+    "3": {
+      "verdict": "ok",
+      "note": "dark top band and knob left out"
+    },
+    "4": {
+      "verdict": "ok",
+      "note": "dark upper part of the assembled pair left out"
+    },
+    "5": {
+      "verdict": "ok",
+      "note": "dark-green part at the left left out"
+    },
+    "6": {
+      "verdict": "ok",
+      "note": "dark knobs at the bottom and top left out"
+    },
+    "7": {
+      "verdict": "ok",
+      "note": "outline ragged at the dark piece on the right"
+    },
+    "8": {
+      "verdict": "ok",
+      "note": "dark/olive left part left out"
+    },
+    "9": {
+      "verdict": "ok",
+      "note": "dark lower part left out"
+    },
+    "10": {
+      "verdict": "ok",
+      "note": "dark lower half left out"
+    },
+    "11": {
+      "verdict": "ok",
+      "note": "dark knob at the top left out"
+    },
+    "12": {
+      "verdict": "ok",
+      "note": "one piece of the assembled group left out"
+    },
+    "13": {
+      "verdict": "unsure",
+      "note": "outline close to the piece; at most a knob differs"
+    },
+    "14": {
+      "verdict": "ok",
+      "note": "only the pink top; dark neck and pink lower part left out (same piece as fb4 M15)"
+    },
+    "15": {
+      "verdict": "ok",
+      "note": "only the pink band; black body left out (same piece as fb4 M17)"
+    },
+    "16": {
+      "verdict": "ok",
+      "note": "only the red part of a big dark piece"
+    },
+    "17": {
+      "verdict": "ok",
+      "note": "dark upper part left out"
+    },
+    "18": {
+      "verdict": "ok",
+      "note": "dark mauve lower band left out"
+    },
+    "19": {
+      "verdict": "ok",
+      "note": "dark right part left out, wisp at the left"
+    },
+    "20": {
+      "verdict": "ok",
+      "note": "tiny outline around a pink spot of a dark piece"
+    },
+    "21": {
+      "verdict": "unsure",
+      "note": "outline close to the piece; at most a knob differs"
+    },
+    "22": {
+      "verdict": "ok",
+      "note": "three pieces in one region, parts left out"
+    },
+    "23": {
+      "verdict": "ok",
+      "note": "ragged outline inside an assembled yellow/green pair"
+    },
+    "24": {
+      "verdict": "ok",
+      "note": "real piece, not detected"
+    },
+    "25": {
+      "verdict": "ok",
+      "note": "real piece, not detected"
+    },
+    "26": {
+      "verdict": "ok",
+      "note": "real piece, not detected"
+    },
+    "27": {
+      "verdict": "ok",
+      "note": "real piece, not detected"
+    },
+    "28": {
+      "verdict": "ok",
+      "note": "real piece, not detected"
+    },
+    "29": {
+      "verdict": "ok",
+      "note": "real piece, not detected"
+    },
+    "30": {
+      "verdict": "ok",
+      "note": "real piece, not detected"
+    },
+    "31": {
+      "verdict": "ok",
+      "note": "real piece, not detected"
+    },
+    "32": {
+      "verdict": "ok",
+      "note": "real piece, not detected"
+    },
+    "33": {
+      "verdict": "ok",
+      "note": "dark left knob left out"
+    },
+    "34": {
+      "verdict": "ok",
+      "note": "tiny outline on the pink part of a dark piece"
+    },
+    "35": {
+      "verdict": "ok",
+      "note": "dark knobs left out"
+    },
+    "36": {
+      "verdict": "ok",
+      "note": "parts of two pieces in one region"
+    },
+    "37": {
+      "verdict": "ok",
+      "note": "real piece, not detected (on the olive cloth)"
+    },
+    "38": {
+      "verdict": "ok",
+      "note": "real piece, not detected (on the olive cloth)"
+    },
+    "39": {
+      "verdict": "unsure",
+      "note": "outline close to the piece; the top knob is cut"
+    },
+    "40": {
+      "verdict": "ok",
+      "note": "dark lower part and blue knob left out"
+    },
+    "41": {
+      "verdict": "ok",
+      "note": "only the left pink band"
+    },
+    "42": {
+      "verdict": "ok",
+      "note": "dark upper band left out, a bit of the neighbour taken in"
+    },
+    "43": {
+      "verdict": "ok",
+      "note": "olive/dark left part left out"
+    },
+    "44": {
+      "verdict": "ok",
+      "note": "real piece, not detected"
+    },
+    "45": {
+      "verdict": "ok",
+      "note": "real piece, not detected"
+    },
+    "46": {
+      "verdict": "ok",
+      "note": "real piece, not detected"
+    }
+  },
+  "area": {
+    "x": 1050,
+    "y": 1300,
+    "width": 750,
+    "height": 1100
+  },
+  "objects": [
+    {
+      "x": 1150,
+      "y": 1450,
+      "note": "red piece"
+    },
+    {
+      "x": 1370,
+      "y": 1335,
+      "unsure": true,
+      "note": "grey-brown piece (M24); with the blue piece below possibly an assembled pair"
+    },
+    {
+      "x": 1370,
+      "y": 1415,
+      "unsure": true,
+      "note": "blue ornament piece below M24's piece"
+    },
+    {
+      "x": 1565,
+      "y": 1410,
+      "note": "M44, dark brown with white ornament band"
+    },
+    {
+      "x": 1690,
+      "y": 1475,
+      "note": "M45, dark brown with white ornament band"
+    },
+    {
+      "x": 1435,
+      "y": 1550,
+      "note": "M25, teal ornament"
+    },
+    {
+      "x": 1320,
+      "y": 1590,
+      "note": "M26, dark/yellow with white ornament band"
+    },
+    {
+      "x": 1598,
+      "y": 1710,
+      "note": "blue/white piece (M46 tap between it and the next)"
+    },
+    {
+      "x": 1685,
+      "y": 1680,
+      "note": "pink/grey piece next to it"
+    },
+    {
+      "x": 1480,
+      "y": 1750,
+      "note": "M27, teal ornament"
+    },
+    {
+      "x": 1755,
+      "y": 1600,
+      "note": "blue/grey piece at the right edge"
+    },
+    {
+      "x": 1700,
+      "y": 1830,
+      "note": "pink/teal piece"
+    },
+    {
+      "x": 1790,
+      "y": 1810,
+      "unsure": true,
+      "note": "piece cut off by the right edge, next to the pink/teal one"
+    },
+    {
+      "x": 1780,
+      "y": 1310,
+      "unsure": true,
+      "note": "piece cut off by the right edge"
+    },
+    {
+      "x": 1190,
+      "y": 1950,
+      "note": "M29, dark"
+    },
+    {
+      "x": 1490,
+      "y": 1965,
+      "note": "M28, dark"
+    },
+    {
+      "x": 1365,
+      "y": 2065,
+      "note": "M32, dark"
+    },
+    {
+      "x": 1210,
+      "y": 2180,
+      "note": "M30, dark"
+    },
+    {
+      "x": 1570,
+      "y": 2200,
+      "note": "M31, dark slate"
+    },
+    {
+      "x": 1420,
+      "y": 2290,
+      "note": "mauve/dark piece"
+    },
+    {
+      "x": 1665,
+      "y": 2325,
+      "note": "mauve piece"
+    },
+    {
+      "x": 1275,
+      "y": 2370,
+      "unsure": true,
+      "note": "blue piece cut off by the bottom edge"
+    },
+    {
+      "x": 1770,
+      "y": 2360,
+      "unsure": true,
+      "note": "piece in the bottom-right corner, cut off"
+    }
+  ]
+}

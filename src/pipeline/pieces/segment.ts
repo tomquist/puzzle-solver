@@ -22,7 +22,7 @@ import { boxBlurGray } from '../../cv/filter';
 import { polygonPerimeter, resampleContour, simplifyPolygon, smoothContour } from '../../cv/polygon';
 import { otsuThreshold, threshold } from '../../cv/threshold';
 import type { DetectedRegion, PieceShape, QualityIssue, RegionKind } from '../../model/types';
-import { backgroundAt, fitBackground, fitLocalTable, foregroundScore, type BackgroundFit } from './background';
+import { backgroundAt, fitBackground, fitLocalTable, foregroundScore, tableChromaDistance, tableChromasAt, type BackgroundFit } from './background';
 import { assessPhoto, assessRegions } from './quality';
 import { analyzePieceShape, bodyOrientation, orientationHistogram } from './shape';
 import type { BackgroundModel, RegionDiagnostics, SegmentOptions, Segmentation, SegmentedRegion } from './types';
@@ -939,9 +939,11 @@ function maskCentroid(c: Candidate): Point {
  * Peel soft illumination effects off a region: glare halos and cast shadows change the table's
  * brightness smoothly, while a piece ends at a crisp cut edge. Region pixels reachable from outside
  * through smooth pixels (local high-pass energy of the luminance at table level) are given back to
- * the table. Kept only when it leaves piece-sized parts with clearly better outlines.
+ * the table, unless they are mostly in a colour the table cannot take under any lighting (a piece
+ * printed in one smooth colour). Kept only when it leaves piece-sized parts with clearly better
+ * outlines.
  */
-function peelSoft(c: Candidate, img: RGBAImage, ra: number, W: number, H: number): Candidate[] | null {
+function peelSoft(c: Candidate, img: RGBAImage, fit: BackgroundFit, ra: number, W: number, H: number): Candidate[] | null {
   const pad = 6;
   const x0 = Math.max(0, c.bbox.x - pad), y0 = Math.max(0, c.bbox.y - pad);
   const x1 = Math.min(W, c.bbox.x + c.bbox.width + pad), y1 = Math.min(H, c.bbox.y + c.bbox.height + pad);
@@ -983,11 +985,31 @@ function peelSoft(c: Candidate, img: RGBAImage, ra: number, W: number, H: number
       queue[tail++] = j;
     }
   }
+  const gone = createMask(w, h);
+  for (let i = 0; i < w * h; i++) if (m.data[i] && flooded[i]) gone.data[i] = 1;
+  // Glare and shadow keep the table's colour (only its brightness changes): what would be peeled
+  // off in a colour of its own is a piece printed in one smooth colour, and stays.
+  const gc = labelComponents(gone, 8);
+  const coloured = new Float64Array(gc.stats.length + 1);
+  const cache = new Map<number, ReturnType<typeof tableChromasAt>>();
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const l = gc.labels[y * w + x];
+      if (!l) continue;
+      const key = (y >> 3) * 4096 + (x >> 3);
+      let colours = cache.get(key);
+      if (!colours) cache.set(key, (colours = tableChromasAt(fit, Math.min(W - 1, x0 + (x & ~7) + 4), Math.min(H - 1, y0 + (y & ~7) + 4))));
+      const o = ((y + y0) * W + x + x0) * 4;
+      const lab = rgbToLab(img.data[o], img.data[o + 1], img.data[o + 2]);
+      if (tableChromaDistance(colours, lab[1], lab[2]) > PEEL_CHROMA) coloured[l]++;
+    }
+  }
+  const keep = new Set(gc.stats.filter((st) => coloured[st.label] >= PEEL_COLOURED_SHARE * st.area).map((st) => st.label));
   const rest = createMask(w, h);
   let removed = 0;
   for (let i = 0; i < w * h; i++) {
     if (!m.data[i]) continue;
-    if (flooded[i]) removed++;
+    if (gone.data[i] && !keep.has(gc.labels[i])) removed++;
     else rest.data[i] = 1;
   }
   if (removed < 0.08 * c.area) return null;
@@ -1246,6 +1268,10 @@ function bodyAspect(s: PieceShape): number {
 /** Largest cluster (piece areas) whose neck split may be replaced by a cut along the edges. */
 const EDGE_RECUT_MAX_PIECES = 4;
 
+/** Largest chroma distance (sigmas, see tableChromaDistance) of a pixel that may be peeled off as glare or shadow. */
+const PEEL_CHROMA = 4;
+/** Share of such coloured pixels from which a soft area is a piece rather than glare or shadow. */
+const PEEL_COLOURED_SHARE = 0.5;
 /** Largest region (piece areas) whose soft halo or shadow is peeled off. */
 const PEEL_MAX_PIECES = 8;
 /** Largest part (piece areas) of a split that is split again at wider necks. */
@@ -1481,7 +1507,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
       const ra = refAreaAt(c);
       // (Not clusters of many pieces: peeling them is slow and changes little.)
       const doubtful = !c.touchesBorder && c.area >= 0.6 * ra && c.area <= PEEL_MAX_PIECES * ra && (c.area > 1.3 * ra || !c.shape || c.shape.confidence < 0.7);
-      out.push(...((doubtful ? peelSoft(c, scored, ra, W, H) : null) ?? [c]));
+      out.push(...((doubtful ? peelSoft(c, scored, fit, ra, W, H) : null) ?? [c]));
     }
     cands = out;
   }
