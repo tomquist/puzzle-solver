@@ -1,7 +1,7 @@
 /**
  * SVG overlay on an analysed photo, drawn so the pieces themselves stay visible: thin outlines
  * without fill, a small number label just outside each outline (its tail points at its piece), an
- * optional small tick outside the outline on the side that is "up" in the puzzle, and thin
+ * optional short pink "top" bar on the edge that must end up on top in the puzzle, and thin
  * connection lines between pieces that end up next to each other. Only items with a usable match
  * are drawn (no-match regions are hidden entirely).
  *
@@ -15,7 +15,8 @@ import type { Point } from '../../cv/geometry';
 import type { Rect } from '../../cv/image';
 import type { DetectedRegion, ScanResult } from '../../model/types';
 import { itemTitle, linkedTo, type ItemLink, type ItemPlacement, type ScanItem } from '../lib/items';
-import { labelCenter, labelTail, labelWidth, outwardTick, placeLabels, supportDistance } from '../lib/labels';
+import { topBarFor, type TopBar } from '../lib/framing';
+import { labelCenter, labelTail, labelWidth, placeLabels } from '../lib/labels';
 import { connectionCurve, groupCellCenter, groupCellSize, polygonPath, regionSize, sideVector, type CurveEnd } from '../lib/overlay';
 import { upVector } from '../lib/rotation';
 
@@ -105,8 +106,8 @@ export function ScanOverlay({
     // The items' geometry only changes with the set of items (itemsKey), not with their state.
   }, [itemsKey, byId]);
 
-  // "Up" of each item as it lies (for the turn tick), and the label sides, chosen at the fitted
-  // zoom and away from the tick.
+  // "Up" of each item as it lies (for the "top" bar), and the label sides, chosen at the fitted
+  // zoom and away from that bar.
   const upOf = (o: OverlayItem) => (showTurnHints && o.placement?.rotationDeg !== undefined ? upVector(o.placement.rotationDeg) : undefined);
   const upKey = items
     .map((o) => {
@@ -128,9 +129,19 @@ export function ScanOverlay({
         { width, height },
         LABEL_GAP / placeScale,
       ),
-    // Recomputed when the items, the zoom to place for or the turn ticks change.
+    // Recomputed when the items, the zoom to place for or the top bars change.
     [geo, placeScale, width, height, upKey],
   );
+  // The "top" bar of each item (the edge that must end up on top), as in the pick-up view.
+  const topBars = useMemo(() => {
+    const m = new Map<string, TopBar>();
+    for (const o of items) {
+      const rot = o.placement?.rotationDeg;
+      if (showTurnHints && rot !== undefined) m.set(o.item.key, topBarFor(o.item, result.regions, rot, 0.45));
+    }
+    return m;
+    // Same inputs as the label sides.
+  }, [itemsKey, upKey, result.regions]);
 
   // Selection.
   const selected = selectedKey && overlayByKey.has(selectedKey) ? selectedKey : undefined;
@@ -200,13 +211,11 @@ export function ScanOverlay({
         </>
       )}
 
-      {/* Outlines, turn ticks and touch targets */}
+      {/* Outlines, "top" bars and touch targets */}
       {items.map((o) => {
         const { item, placed } = o;
         const tone = itemTone(item);
-        const up = !placed ? upOf(o) : undefined;
-        const outline = geo.get(item.key)?.outline ?? [];
-        const tick = up ? outwardTick(item.center, supportDistance(item.center, outline, up), up, 2 / scale, 6 / scale, 4.5 / scale) : undefined;
+        const bar = !placed ? topBars.get(item.key) : undefined;
         const lit = item.regionIds.some((id) => highlight.has(id));
         const sel = role(item.key);
         const cls = [
@@ -252,7 +261,12 @@ export function ScanOverlay({
                 </g>
               );
             })}
-            {tick && <polygon className="turn-tick" points={tick.map((p) => `${p.x},${p.y}`).join(' ')} />}
+            {bar && (
+              <g className="top-mark" data-testid={`top-${item.key}`}>
+                <line className="top-bar-under" x1={bar.from.x} y1={bar.from.y} x2={bar.to.x} y2={bar.to.y} />
+                <line className="top-bar" x1={bar.from.x} y1={bar.from.y} x2={bar.to.x} y2={bar.to.y} />
+              </g>
+            )}
           </g>
         );
       })}

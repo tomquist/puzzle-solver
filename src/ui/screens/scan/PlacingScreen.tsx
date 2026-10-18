@@ -2,7 +2,9 @@
  * Guided placing mode for one scan: one item at a time – assembled grids first, then sure pieces
  * in a sweep across the picture (neighbours back to back), then unsure ones. Each step shows the
  * item in the photo with its surroundings so it can be found on the table ("Pick up #4"; tap for
- * an upright close-up), one instruction line, what it joins, and where it goes: the box picture
+ * a close-up; a pink "top" bar on the edge that goes on top), how to turn it (the piece itself
+ * turning upright – TurnGuide), one instruction line in plain words with the exact angle in small
+ * print, what it joins, and where it goes: the box picture
  * around the target with a few cells of context (pinch to zoom) and an overview of the whole
  * picture. Placed ✓ records progress and moves on; Skip / Not here / swipe / arrow keys navigate.
  * The screen stays on.
@@ -14,6 +16,7 @@ import { haptic, isCoarsePointer } from '../../../platform/device';
 import { EmptyState, ErrorState, Spinner } from '../../components/Feedback';
 import { IconBack, IconCheck, IconChevron, IconScan } from '../../components/Icons';
 import { PickupView, TargetZoomView } from '../../components/ItemVisuals';
+import { TurnGuide } from '../../components/TurnGuide';
 import { itemTone } from '../../components/ScanOverlay';
 import { TopBar } from '../../components/TopBar';
 import { usePuzzle } from '../../context/PuzzleContext';
@@ -56,10 +59,10 @@ export function PlacingScreen({ scanId }: { scanId: string }) {
   return <PlacingView scan={scan.data} />;
 }
 
-/** "Turn ↻ 90° · row 5, column 12" */
+/** "Turn it a quarter to the right · row 5, column 12" */
 export function instructionLine(item: ScanItem, p: ItemPlacement, rows: number, cols: number): string {
   const where = item.kind === 'assembled' ? cellsText(p) : describeCell(p.cells[0] ?? { row: p.bounds.row0, col: p.bounds.col0 }, { rows, cols }).replace(/ \(.*\)$/, '');
-  return p.rotationDeg === undefined ? where : `${turnInstruction(p.rotationDeg).short} · ${where}`;
+  return p.rotationDeg === undefined ? where : `${turnInstruction(p.rotationDeg).text} · ${where}`;
 }
 
 function PlacingView({ scan }: { scan: ScanRecord }) {
@@ -154,6 +157,7 @@ function PlacingView({ scan }: { scan: ScanRecord }) {
   };
 
   const joins = item ? describeConnections(connectionsOf(item.key, links), (k) => byKey.get(k)?.label) : '';
+  const turn = p?.rotationDeg !== undefined ? turnInstruction(p.rotationDeg) : undefined;
   const placedNow = item ? isPlacedItem(item) : false;
   const total = sequence.length;
   const back = href.scan(puzzle.id, scan.id);
@@ -214,32 +218,47 @@ function PlacingView({ scan }: { scan: ScanRecord }) {
           </div>
         ) : item && p ? (
           <div className="place-step" onPointerDown={onPointerDown} onPointerUp={onPointerUp} data-testid={`step-${item.key}`}>
-            <div className="place-pick">
-              <PickupView
-                key={item.key}
-                item={item}
-                regions={result.regions}
-                photo={photo}
-                photoWidth={result.width}
-                photoHeight={result.height}
-                rotationDeg={p.rotationDeg}
-                size={260}
-                label={`#${item.label} in your photo`}
-              />
-              <div className="place-pick-text">
-                <span className="eyebrow">Pick up</span>
-                <div className="place-title">
-                  <span className={`num-badge st-${itemTone(item)}`}>{item.label}</span>
-                  <span data-testid="place-kind">{itemKindText(item)}</span>
-                </div>
-                {item.status === 'ambiguous' && <span className="status-chip st-ambiguous">Unsure – check the picture</span>}
-                {placedNow && <span className="status-chip st-confident">Placed</span>}
-                <span className="muted xsmall">Tap the photo to zoom in on it.</span>
-              </div>
+            <div className="place-head">
+              <span className="eyebrow">Pick up</span>
+              <span className={`num-badge st-${itemTone(item)}`}>{item.label}</span>
+              <span className="place-kind" data-testid="place-kind">
+                {itemKindText(item)}
+              </span>
+              {item.status === 'ambiguous' && <span className="status-chip st-ambiguous">Unsure – check the picture</span>}
+              {placedNow && <span className="status-chip st-confident">Placed</span>}
             </div>
-            <p className="place-line" data-testid="instruction">
-              {instructionLine(item, p, puzzle.grid.rows, puzzle.grid.cols)}
-            </p>
+            <div className="place-pick">
+              <figure className="place-fig">
+                <PickupView
+                  key={item.key}
+                  item={item}
+                  regions={result.regions}
+                  photo={photo}
+                  photoWidth={result.width}
+                  photoHeight={result.height}
+                  rotationDeg={p.rotationDeg}
+                  size={260}
+                  label={`#${item.label} in your photo`}
+                />
+                <figcaption>On the table · tap to zoom</figcaption>
+              </figure>
+              {turn && (
+                <figure className="place-fig">
+                  <TurnGuide key={`${item.key}:${p.rotationDeg}`} item={item} regions={result.regions} photo={photo} rotationDeg={p.rotationDeg!} />
+                  <figcaption>{turn.band === 'upright' ? 'No need to turn it' : 'How to turn it'}</figcaption>
+                </figure>
+              )}
+            </div>
+            <div className="place-say">
+              <p className="place-line" data-testid="instruction">
+                {instructionLine(item, p, puzzle.grid.rows, puzzle.grid.cols)}
+              </p>
+              {turn?.exact && (
+                <p className="muted small" data-testid="instruction-exact">
+                  {turn.exact}
+                </p>
+              )}
+            </div>
             {joins && (
               <p className="muted small place-next-to" data-testid="place-joins">
                 {joins}

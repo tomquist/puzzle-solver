@@ -6,7 +6,7 @@ import { IconSettings } from './Icons';
 
 const TOGGLES: { key: keyof Options; label: string; hint: string }[] = [
   { key: 'labels', label: 'Labels', hint: 'Numbers and outlines on the photo. Hold the photo to peek without them.' },
-  { key: 'turnHints', label: 'Turn hints', hint: 'Small tick at the side of each piece that goes up' },
+  { key: 'turnHints', label: 'Top marks', hint: 'A short pink bar on the edge of each piece that goes on top' },
   { key: 'connections', label: 'Connections', hint: 'Lines between pieces that go together' },
   { key: 'unsure', label: 'Unsure pieces', hint: 'Show pieces whose place is uncertain' },
   { key: 'edgesOnly', label: 'Edge pieces only', hint: 'Hide interior pieces' },

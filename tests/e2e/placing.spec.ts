@@ -2,7 +2,8 @@
  * Scan result → guided placing mode (mock pipeline): no-match pieces hidden, assembled grids and
  * connections shown, view options remembered across reloads, the screen kept on, selecting a
  * piece (its connections highlighted, everything else faded), press-and-hold for the clean photo,
- * and the placing flow from the first step to the finish card.
+ * the placing flow from the first step to the finish card, and how to turn a piece (the cut-out
+ * turning upright, the "top" bar, plain words; "now → then" frames with reduced motion).
  */
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
@@ -100,7 +101,7 @@ test('result screen: hidden no-matches, groups, connections, view options, wake 
   await expect(page.locator('[data-testid^="item-g"]')).toHaveCount(2);
   await expect(page.locator('[data-testid^="label-g"]')).toHaveCount(2);
   await expect(page.getByTestId('link').first()).toBeVisible();
-  const notches = page.locator('.turn-tick');
+  const notches = page.locator('.top-mark');
   expect(await notches.count()).toBeGreaterThan(0);
   // The list shows exactly the drawn items (hidden regions are neither drawn nor listed).
   const drawn = await page.locator('[data-testid^="item-"]').count();
@@ -111,22 +112,22 @@ test('result screen: hidden no-matches, groups, connections, view options, wake 
   // The screen is kept on while the result is visible.
   await expect.poll(async () => (await wake(page)).held).toBe(1);
 
-  // View options: turn hints and connections off, remembered across a reload.
+  // View options: top marks and connections off, remembered across a reload.
   await page.getByTestId('view-options').click();
   await shot(page, info, '02-view-options');
-  await page.getByRole('checkbox', { name: /Turn hints/ }).uncheck();
+  await page.getByRole('checkbox', { name: /Top marks/ }).uncheck();
   await page.getByRole('checkbox', { name: /Connections/ }).uncheck();
   await page.keyboard.press('Escape');
   await expect(notches).toHaveCount(0);
   await expect(page.getByTestId('link')).toHaveCount(0);
   await page.reload();
   await expect(page.locator('[data-testid^="item-"]').first()).toBeVisible();
-  await expect(page.locator('.turn-tick')).toHaveCount(0);
+  await expect(page.locator('.top-mark')).toHaveCount(0);
   await expect(page.getByTestId('link')).toHaveCount(0);
   // Unsure pieces can be hidden too.
   await page.getByTestId('view-options').click();
   await page.getByRole('checkbox', { name: /Unsure pieces/ }).uncheck();
-  await page.getByRole('checkbox', { name: /Turn hints/ }).check();
+  await page.getByRole('checkbox', { name: /Top marks/ }).check();
   await page.getByRole('checkbox', { name: /Connections/ }).check();
   await page.keyboard.press('Escape');
   await expect.poll(() => page.locator('[data-testid^="item-"]').count()).toBeLessThan(drawn);
@@ -403,7 +404,7 @@ test('guided placing: assembled grids first, Placed/Skip/Not here, finish card',
   await expect(pickup).toHaveAttribute('aria-pressed', 'false');
   await pickup.click();
   await expect(pickup).toHaveAttribute('aria-pressed', 'true');
-  await expect(pickup).toContainText(/Turned upright|Close-up/);
+  await expect(pickup).toContainText('Close-up');
   await pickup.click();
   await expect(pickup).toHaveAttribute('aria-pressed', 'false');
 
@@ -417,7 +418,8 @@ test('guided placing: assembled grids first, Placed/Skip/Not here, finish card',
   await expect(overview).toBeVisible();
   await expect(page.getByTestId('overview-marker')).toBeVisible();
   expect(await overview.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe('1px');
-  expect((await overview.boundingBox())!.width / view.width).toBeGreaterThan(0.3);
+  // At least 30 % of the view's short side (on a wide screen the view is wide and short).
+  expect((await overview.boundingBox())!.width / Math.min(view.width, view.height)).toBeGreaterThan(0.3);
   // It can be zoomed out to the whole picture and back to the spot.
   await page.getByRole('button', { name: 'Show whole picture' }).click();
   await page.getByTestId('zoom-to-start').click();
@@ -464,4 +466,109 @@ test('guided placing: assembled grids first, Placed/Skip/Not here, finish card',
   await page.getByText('Latest scan').click();
   await expect(page.getByTestId('scan-result')).toBeVisible();
   await expect(page.getByText('All placed')).toBeVisible();
+});
+
+/** A turn in plain words (never bare degrees), then where it goes. */
+const TURN_WORDS = /^(Already the right way up|Turn it (a little|half a quarter|a quarter|nearly halfway round) to the (right|left)|Turn it upside down) · /;
+/** The exact angle, only in the small print. */
+const EXACT = /^(\d{1,3}° (clockwise|counter-clockwise)|180°)$/;
+
+/** Skip through the placing steps until one whose turn guide is in `mode`; false at the end. */
+async function stepToTurn(page: Page, mode: 'animate' | 'frames' | 'upright'): Promise<boolean> {
+  for (let i = 0; i < 60; i++) {
+    if (await page.getByTestId('placing-done').isVisible()) return false;
+    const guide = page.getByTestId('turn-guide');
+    if ((await guide.count()) > 0 && (await guide.getAttribute('data-mode')) === mode) return true;
+    await act(page, 'skip');
+  }
+  return false;
+}
+
+test('guided placing: the piece turns upright on screen, a "top" bar, plain words', async ({ page }, info) => {
+  await createPuzzleAndScan(page);
+  await page.getByTestId('start-placing').click();
+  await expect(page.getByTestId('placing')).toBeVisible();
+  expect(await stepToTurn(page, 'animate'), 'a step with a piece to turn').toBe(true);
+
+  // The pick-up view shows the piece as it lies, with a "top" bar on the edge that goes on top.
+  const pickup = page.getByTestId('pickup');
+  await expect(pickup.getByTestId('top-bar').locator('.top-bar')).toHaveCount(1);
+  await expect(pickup.locator('.top-label')).toHaveText('top');
+  await expect(pickup).toHaveAttribute('aria-label', /"top" goes on top/);
+
+  const line = (await page.getByTestId('instruction').textContent())!;
+  expect(line).toMatch(TURN_WORDS);
+  expect(line).not.toMatch(/°/);
+  const exact = page.getByTestId('instruction-exact');
+  await expect(exact).toHaveText(EXACT);
+  const exactText = (await exact.textContent())!;
+
+  // The cut-out piece (one pre-drawn image, with its "top" bar) turns with a CSS animation – three
+  // loops – the short way, as the words say; the arc arrow grows with it.
+  const guide = page.getByTestId('turn-guide');
+  await expect(guide.locator('img')).toHaveAttribute('src', /^blob:/);
+  await expect(guide.locator('.turn-top .top-bar')).toHaveCount(1);
+  await expect(guide.locator('.turn-arc-grow')).toHaveCount(1);
+  await expect(guide.locator('.turn-arc-head')).toHaveCount(1);
+  expect(await guide.getAttribute('aria-label')).toContain(line.split(' · ')[0]);
+  const turn = await guide.evaluate((el) => parseFloat((el as HTMLElement).style.getPropertyValue('--turn')));
+  expect(Math.round(Math.abs(turn))).toBe(Number(exactText.match(/\d+/)![0]));
+  if (/counter/.test(exactText)) expect(turn).toBeLessThan(0);
+  else expect(turn).toBeGreaterThan(0);
+  if (/to the right/.test(line)) expect(turn).toBeGreaterThan(0);
+  if (/to the left/.test(line)) expect(turn).toBeLessThan(0);
+  const spin = () =>
+    guide.evaluate((el) => {
+      const a = el.querySelector('.turn-spin')!.getAnimations()[0] as CSSAnimation | undefined;
+      return a ? { name: a.animationName, iterations: a.effect?.getTiming().iterations, state: a.playState, t: Number(a.currentTime) } : undefined;
+    });
+  expect(await spin()).toMatchObject({ name: 'piece-turn', iterations: 3, state: 'running' });
+  await shot(page, info, '06-turn-animated');
+
+  // A tap replays it from the start.
+  await page.waitForTimeout(900);
+  const before = (await spin())!.t;
+  await guide.click();
+  const after = await spin();
+  expect(after?.state).toBe('running');
+  expect(after!.t).toBeLessThan(before);
+
+  // Already upright (when the scan has such a piece): no animation, a "right way up" mark.
+  if (await stepToTurn(page, 'upright')) {
+    await expect(page.getByTestId('instruction')).toHaveText(/^Already the right way up · /);
+    await expect(guide.locator('.turn-ok')).toHaveText('✓ right way up');
+    expect(await guide.evaluate((el) => el.getAnimations({ subtree: true }).length)).toBe(0);
+  }
+});
+
+test('guided placing with reduced motion: "now → then" side by side, nothing moves', async ({ page }, info) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await createPuzzleAndScan(page);
+  await page.getByTestId('start-placing').click();
+  await expect(page.getByTestId('placing')).toBeVisible();
+
+  let frames = 0;
+  for (let i = 0; i < 60 && !(await page.getByTestId('placing-done').isVisible()); i++) {
+    const guide = page.getByTestId('turn-guide');
+    const line = (await page.getByTestId('instruction').textContent())!;
+    if ((await guide.count()) > 0) {
+      expect(line).toMatch(TURN_WORDS);
+      const mode = await guide.getAttribute('data-mode');
+      expect(mode).not.toBe('animate');
+      if (mode === 'frames') {
+        await expect(guide.locator('.turn-frame-cap')).toHaveText(['Now', 'Then']);
+        await expect(guide.locator('.turn-frame img')).toHaveCount(2);
+        await expect(guide.locator('.turn-arc-icon')).toBeVisible();
+        expect(await guide.evaluate((el) => el.getAnimations({ subtree: true }).length)).toBe(0);
+        if (frames++ === 0) await shot(page, info, '07-turn-reduced-motion');
+      } else {
+        await expect(guide.locator('.turn-ok')).toBeVisible();
+      }
+    } else {
+      // Unknown turn (a group whose pieces disagree): just where it goes.
+      expect(line).not.toMatch(/^(Turn|Already)/);
+    }
+    await act(page, 'skip');
+  }
+  expect(frames).toBeGreaterThan(0);
 });

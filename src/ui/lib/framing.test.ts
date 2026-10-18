@@ -12,6 +12,8 @@ import {
   pickupRect,
   shiftInside,
   targetContext,
+  topBarFor,
+  topLabelSpot,
 } from './framing';
 import type { ScanItem } from './items';
 
@@ -48,6 +50,33 @@ describe('pick-up crop', () => {
     const patch = { id: 2, kind: 'patch', bbox: { x: 0, y: 0, width: 80, height: 40 }, contour: [], area: 3200 } as unknown as DetectedRegion;
     const group = { key: 'g1', kind: 'assembled', regionIds: [2], pieceCount: 2, bbox: patch.bbox } as unknown as ScanItem;
     expect(itemPieceSize(group, [patch])).toBe(40);
+  });
+
+  it('puts the "top" bar on the edge that must end up on top, the word just outside', () => {
+    const contour = [{ x: 100, y: 100 }, { x: 160, y: 100 }, { x: 160, y: 160 }, { x: 100, y: 160 }];
+    const piece = { id: 1, kind: 'piece', bbox: { x: 100, y: 100, width: 60, height: 60 }, contour, area: 3600, shape: { bodySize: 50, center: { x: 130, y: 130 } } } as unknown as DetectedRegion;
+    const item = { key: 'r1', kind: 'piece', regionIds: [1], pieceCount: 1, bbox: piece.bbox, center: { x: 130, y: 130 } } as unknown as ScanItem;
+    // Needs a clockwise quarter turn: the top edge is on the left now, at the body edge (x = 105).
+    const b = topBarFor(item, [piece], 90);
+    expect(b.from.x).toBeCloseTo(105);
+    expect(b.to.x).toBeCloseTo(105);
+    expect(Math.abs(b.from.y - b.to.y)).toBeCloseTo(30);
+    // The word goes just outside the outline (x = 100), to the left.
+    expect(b.edge.x).toBeCloseTo(100);
+    expect(b.edge.y).toBeCloseTo(130);
+    expect(b.up.x).toBeCloseTo(-1);
+  });
+
+  it('puts the word "top" outside the outline, or inside the bar when the view has no room', () => {
+    const bar = { from: { x: 105, y: 115 }, to: { x: 105, y: 145 }, edge: { x: 100, y: 130 }, up: { x: -1, y: 0 } };
+    // Room on the left: outside, moved further left.
+    const wide = topLabelSpot(bar, { x: 0, y: 0, width: 200, height: 200 });
+    expect(wide).toEqual({ x: 50, y: 65, dir: { x: -1, y: 0 } });
+    // A close-up starting at x = 90: the word would leave the view, so it goes inside the bar.
+    const tight = topLabelSpot(bar, { x: 90, y: 80, width: 100, height: 100 });
+    expect(tight.x).toBeCloseTo(15);
+    expect(tight.y).toBeCloseTo(50);
+    expect(tight.dir).toEqual({ x: 1, y: 0 });
   });
 
   it('makes a close-up square that holds the item at any rotation', () => {

@@ -18,7 +18,7 @@ export interface LabelSubject {
   outline: Point[];
   /** Label radius (half its width) in photo px at the zoom the placement is computed for. */
   radius: number;
-  /** A direction to keep free (e.g. where the item's turn tick is drawn). */
+  /** A direction to keep free (e.g. where the item's "top" bar is drawn). */
   avoid?: Point;
 }
 
@@ -80,7 +80,7 @@ export function placeLabels(subjects: LabelSubject[], bounds: { width: number; h
     const r = p.s.radius;
     const c = labelCenter(p.s.center, { dir: LABEL_DIRECTIONS[k], reach: p.reach[k] }, r, gap);
     let total = k * 0.08;
-    // The side kept free for the turn tick.
+    // The side kept free for the "top" bar.
     const av = p.s.avoid;
     if (av && LABEL_DIRECTIONS[k].x * av.x + LABEL_DIRECTIONS[k].y * av.y > 0.7) total += 1.5;
     // Outside the photo.
@@ -147,19 +147,6 @@ export function labelTail(center: Point, spot: LabelSpot, r: number, gap: number
   const base = { x: c.x - dir.x * r * 0.6, y: c.y - dir.y * r * 0.6 };
   const n = { x: -dir.y, y: dir.x };
   return [tip, { x: base.x + n.x * halfWidth, y: base.y + n.y * halfWidth }, { x: base.x - n.x * halfWidth, y: base.y - n.y * halfWidth }];
-}
-
-/**
- * Small triangle just outside an outline, pointing outward along unit vector `dir` – e.g. at the
- * side of a piece that is "up" in the finished puzzle (a subtle turn hint that covers nothing).
- * `reach` is the outline's extent in that direction, `gap` the space to the outline.
- */
-export function outwardTick(center: Point, reach: number, dir: Point, gap: number, length: number, halfWidth: number): [Point, Point, Point] {
-  const b = reach + gap;
-  const t = b + length;
-  const n = { x: -dir.y, y: dir.x };
-  const base = { x: center.x + dir.x * b, y: center.y + dir.y * b };
-  return [{ x: center.x + dir.x * t, y: center.y + dir.y * t }, { x: base.x + n.x * halfWidth, y: base.y + n.y * halfWidth }, { x: base.x - n.x * halfWidth, y: base.y - n.y * halfWidth }];
 }
 
 /** Width of a number label: a circle for up to two characters, a pill for more (screen px). */

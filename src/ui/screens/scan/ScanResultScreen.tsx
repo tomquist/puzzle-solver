@@ -47,7 +47,7 @@ import {
 import { paddedBox, unionRect } from '../../lib/overlay';
 import { confidencePercent } from '../../lib/pieces';
 import { placeCells, unplaceCells } from '../../lib/progress';
-import { turnInstruction } from '../../lib/rotation';
+import { turnBadge, turnInstruction } from '../../lib/rotation';
 import { href } from '../../lib/routes';
 import { Legend } from './Legend';
 import { useScanModel } from './useScanModel';
@@ -378,6 +378,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
               const p = placementOf(item);
               const placed = isPlacedItem(item);
               const tone = itemTone(item);
+              const badge = p?.rotationDeg !== undefined && !placed ? turnBadge(p.rotationDeg) : '';
               return (
                 <li key={item.key}>
                   <button
@@ -394,6 +395,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
                         {itemKindText(item)}
                         {item.status === 'ambiguous' ? ' · unsure' : ''}
                         {p && item.status === 'ambiguous' ? ` · ${confidencePercent(p.confidence)}%` : ''}
+                        {badge ? ` · ${badge}` : ''}
                         {placed ? ' · placed' : ''}
                       </span>
                     </span>
@@ -549,7 +551,7 @@ function SelectionBar({
   onClear: () => void;
 }) {
   const where = placement ? cellsText(placement) : 'No place left';
-  const turn = placement?.rotationDeg !== undefined ? turnInstruction(placement.rotationDeg).short : undefined;
+  const turn = placement?.rotationDeg !== undefined ? turnInstruction(placement.rotationDeg).text : undefined;
   return (
     <div className={variant === 'bar' ? 'action-bar selection-bar' : 'selection-bar overlay'} data-testid="selection-bar" role="region" aria-label={`Selected: ${itemTitle(item)}`}>
       <div className="action-bar-inner">

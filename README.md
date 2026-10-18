@@ -20,8 +20,8 @@ puzzles are stored in the browser (IndexedDB).
 4. **Scan pieces.** Spread 10–40 pieces on a plain background that contrasts with them, not touching,
    and take one photo from directly above. Already assembled patches can be in the photo too.
 5. **Read the result.** Every piece gets a thin outline and a small number next to it (so the piece
-   itself stays visible): green = confident, amber = unsure, blue = assembled grid; a small tick
-   marks the side that goes up, and lines connect pieces that go together. Tap a piece to select
+   itself stays visible): green = confident, amber = unsure, blue = assembled grid; a short pink
+   bar marks the edge that goes on top, and lines connect pieces that go together. Tap a piece to select
    it: its connection lines turn thick and bright, the pieces it joins are outlined, the rest of the
    photo darkens, and a bar at the bottom says where it goes and what it joins ("Joins #9 on its
    right side, #14 below" – tap a number to jump there); *Details* compares it with the box picture
@@ -29,8 +29,10 @@ puzzles are stored in the browser (IndexedDB).
    opens the photo (or the box picture) in full screen; pinch to zoom, one finger pans. On the page,
    a one-finger drag on a picture scrolls the page until you zoom in.
 6. **Place them.** *Start placing* walks through the pieces one by one: the piece in your photo
-   with its surroundings (tap for an upright close-up), how to turn it, and where it goes – the
-   box picture around the spot (pinch to zoom) with an overview of the whole picture.
+   with its surroundings as it lies on the table (tap for a close-up; the pink "top" bar marks the
+   edge that goes on top), how to turn it – the piece itself turns upright on screen, with plain
+   words like "Turn it a quarter to the right" and the exact angle in small print – and where it
+   goes: the box picture around the spot (pinch to zoom) with an overview of the whole picture.
 7. **Come back any time.** Puzzles, scans and progress stay in your browser. Use *Settings → Export*
    to back up or move a puzzle to another device.
 

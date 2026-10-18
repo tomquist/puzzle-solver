@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Point } from '../../cv/geometry';
-import { LABEL_DIRECTIONS, labelCenter, labelTail, labelWidth, outwardTick, placeLabels, supportDistance, type LabelSubject } from './labels';
+import { LABEL_DIRECTIONS, labelCenter, labelTail, labelWidth, placeLabels, supportDistance, type LabelSubject } from './labels';
 
 const square = (cx: number, cy: number, half: number): Point[] => [
   { x: cx - half, y: cy - half },
@@ -72,7 +72,7 @@ describe('label placement', () => {
     }
   });
 
-  it('keeps the turn-tick side free', () => {
+  it('keeps the top-bar side free', () => {
     const s = { ...subject('a', 200, 200), avoid: { x: 0, y: -1 } };
     // Up-right would be first choice but lies within 45° of "up"; so would "up" itself.
     const dir = placeLabels([s], { width: 400, height: 400 }).get('a')!.dir;
@@ -80,16 +80,13 @@ describe('label placement', () => {
     expect(dir).toEqual({ x: 1, y: 0 });
   });
 
-  it('draws a tail from the label to the outline and a tick outside the outline', () => {
+  it('draws a tail from the label to the outline', () => {
     const spot = { dir: { x: 1, y: 0 }, reach: 20 };
     const [tip, b1, b2] = labelTail({ x: 0, y: 0 }, spot, 10, 5, 3);
     // Label centre at 20 + 10 + 5 = 35; the tip almost touches the outline at x = 20.
     expect(tip.x).toBeCloseTo(20.75);
     expect(b1.x).toBeCloseTo(29);
     expect(Math.abs(b1.y - b2.y)).toBeCloseTo(6);
-    const tick = outwardTick({ x: 0, y: 0 }, 20, { x: 0, y: -1 }, 2, 6, 4);
-    expect(tick[0]).toEqual({ x: 0, y: -28 });
-    expect(tick[1].y).toBeCloseTo(-22);
   });
 
   it('sizes labels: circles for short numbers, pills for long ones', () => {

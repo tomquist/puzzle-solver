@@ -1,18 +1,18 @@
 /**
  * Visual building blocks shared by the item detail sheet and the guided placing mode:
  * - PickupView: the item in the scan photo with a few pieces of surroundings (to find it on the
- *   table), framed by corner marks that don't cover it; tap for an upright close-up
+ *   table), framed by corner marks that don't cover it, its "top" edge marked; tap for a close-up
  * - TargetZoomView / TargetContext: the box picture around the target (about 7 × 7 cells, upright
  *   like the puzzle on the table), the target outlined thinly and the rest slightly dimmed, plus an
  *   overview of the whole picture with a crosshair on the spot. The zoom view can be pinched.
- * - TurnInstruction / ConfidenceBar
+ * - ConfidenceBar
+ * (How to turn the item: TurnGuide.)
  */
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import type { CellRef, DetectedRegion, GridSpec } from '../../model/types';
-import { blockRect, cellsOutlinePath, closeupSquare, cornerBrackets, insetCorner, itemPieceSize, outsideMaskPath, overviewMarker, pickupRect, shiftInside, targetContext } from '../lib/framing';
+import { blockRect, cellsOutlinePath, closeupSquare, cornerBrackets, insetCorner, itemPieceSize, outsideMaskPath, overviewMarker, pickupRect, shiftInside, targetContext, topBarFor, topLabelSpot, type TopBar } from '../lib/framing';
 import type { CellBounds, ItemPlacement, ScanItem } from '../lib/items';
 import { confidencePercent } from '../lib/pieces';
-import { turnInstruction } from '../lib/rotation';
 import { CropCanvas } from './CropCanvas';
 import { IconZoom } from './Icons';
 import { ZoomPanView } from './ZoomPanView';
@@ -36,9 +36,10 @@ export function ConfidenceBar({ value }: { value: number }) {
 }
 
 /**
- * The item in the scan photo with about 3–4 piece sizes of surroundings, corner marks around it.
- * Tapping toggles a close-up of just the item, turned upright (`rotationDeg`) like it will lie in
- * the puzzle. Give it a `key` per item so a new item starts with the surroundings.
+ * The item in the scan photo, as it lies on the table: about 3–4 piece sizes of surroundings with
+ * corner marks around it, or (tap) a close-up of just the item. A "top" bar marks the edge that
+ * must end up on top (when the turn is known), so it can be found on the real piece. Give it a
+ * `key` per item so a new item starts with the surroundings.
  */
 export function PickupView({
   item,
@@ -61,31 +62,50 @@ export function PickupView({
 }) {
   const [closeup, setCloseup] = useState(false);
   const piece = itemPieceSize(item, regions);
-  const rect = pickupRect(item.bbox, piece, photoWidth, photoHeight);
+  const near = closeupSquare(item.bbox);
+  const rect = closeup ? { x: near.cx - near.side / 2, y: near.cy - near.side / 2, width: near.side, height: near.side } : pickupRect(item.bbox, piece, photoWidth, photoHeight);
   const marks = cornerBrackets(item.bbox, piece * 0.4, piece * 0.12);
-  const upright = rotationDeg !== undefined;
+  const top = rotationDeg !== undefined ? topBarFor(item, regions, rotationDeg) : undefined;
+  // The word "top" next to the bar (the CSS moves it by its own size along --ux/--uy).
+  const labelAt = (t: TopBar) => {
+    const s = topLabelSpot(t, rect);
+    return { '--x': `${s.x}%`, '--y': `${s.y}%`, '--ux': s.dir.x.toFixed(3), '--uy': s.dir.y.toFixed(3) } as CSSProperties;
+  };
   return (
     <button
       type="button"
       className={`pickup${closeup ? ' closeup' : ''}`}
       onClick={() => setCloseup((c) => !c)}
       aria-pressed={closeup}
-      aria-label={closeup ? `${label}: close-up${upright ? ', turned upright' : ''}. Tap to show its surroundings.` : `${label}. Tap for a close-up.`}
+      aria-label={`${label}${top ? ', the edge marked "top" goes on top' : ''}. ${closeup ? 'Tap to show its surroundings.' : 'Tap for a close-up.'}`}
       data-testid="pickup"
     >
       {closeup ? (
-        <CropCanvas source={photo} rotated={{ ...closeupSquare(item.bbox), rotationDeg: rotationDeg ?? 0 }} size={size} label={`${label}, close-up`} />
+        <CropCanvas source={photo} rotated={{ ...near, rotationDeg: 0 }} size={size} label={`${label}, close-up`} />
       ) : (
-        <>
-          <CropCanvas source={photo} rect={rect} size={size} label={label} />
-          <svg className="crop-overlay" viewBox={`${rect.x} ${rect.y} ${rect.width} ${rect.height}`} preserveAspectRatio="none" aria-hidden="true">
+        <CropCanvas source={photo} rect={rect} size={size} label={label} />
+      )}
+      <svg className="crop-overlay" viewBox={`${rect.x} ${rect.y} ${rect.width} ${rect.height}`} preserveAspectRatio="none" aria-hidden="true">
+        {!closeup && (
+          <>
             <path className="pick-marks-under" d={marks} vectorEffect="non-scaling-stroke" />
             <path className="pick-marks" d={marks} vectorEffect="non-scaling-stroke" />
-          </svg>
-        </>
+          </>
+        )}
+        {top && (
+          <g data-testid="top-bar">
+            <line className="top-bar-under" x1={top.from.x} y1={top.from.y} x2={top.to.x} y2={top.to.y} vectorEffect="non-scaling-stroke" />
+            <line className="top-bar" x1={top.from.x} y1={top.from.y} x2={top.to.x} y2={top.to.y} vectorEffect="non-scaling-stroke" />
+          </g>
+        )}
+      </svg>
+      {top && (
+        <span className="top-label" style={labelAt(top)} aria-hidden="true">
+          top
+        </span>
       )}
       <span className="pickup-chip" aria-hidden="true">
-        {closeup ? (upright ? 'Turned upright' : 'Close-up') : <IconZoom size={18} />}
+        {closeup ? 'Close-up' : <IconZoom size={18} />}
       </span>
     </button>
   );
@@ -165,18 +185,6 @@ export function TargetContext({ placement, grid, reference, size = 360, label }:
         <TargetMarks cells={targetCells(placement)} grid={grid} width={W} height={H} />
       </svg>
       <Overview reference={reference} grid={grid} bounds={placement.bounds} className={`overview-inset ${corner}`} />
-    </div>
-  );
-}
-
-/** "Turn ↻ 90°" with the exact angle underneath (or "Already upright"). */
-export function TurnInstruction({ rotationDeg, compact = false }: { rotationDeg: number | undefined; compact?: boolean }) {
-  if (rotationDeg === undefined) return null;
-  const t = turnInstruction(rotationDeg);
-  return (
-    <div className={compact ? 'turn compact' : 'turn'}>
-      <div className="turn-main">{t.short}</div>
-      {t.exact && !compact && <div className="muted small">{t.exact}</div>}
     </div>
   );
 }
