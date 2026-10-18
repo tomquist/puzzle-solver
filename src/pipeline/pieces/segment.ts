@@ -682,60 +682,6 @@ function watershed(mask: Mask, grad: Uint8Array, labels: Int32Array): void {
 }
 
 /**
- * k centres of a set of pixel positions (indices into a `w`-wide grid): Lloyd iterations from
- * farthest-point starts at the deepest point (`depth`) and at the four extreme points; the solution
- * with the least squared distance wins. (A single start flips with slight changes of the set.)
- */
-function kMeansCentres(pts: readonly number[], w: number, k: number, depth: ArrayLike<number>): { cx: number[]; cy: number[] } {
-  const n = pts.length;
-  const xs = Float64Array.from(pts, (i) => i % w), ys = Float64Array.from(pts, (i) => Math.floor(i / w));
-  let deep = 0, minX = 0, maxX = 0, minY = 0, maxY = 0;
-  for (let j = 1; j < n; j++) {
-    if (depth[pts[j]] > depth[pts[deep]]) deep = j;
-    if (xs[j] < xs[minX]) minX = j;
-    if (xs[j] > xs[maxX]) maxX = j;
-    if (ys[j] < ys[minY]) minY = j;
-    if (ys[j] > ys[maxY]) maxY = j;
-  }
-  const starts = [...new Set([deep, minX, maxX, minY, maxY])];
-  let best = { cx: [xs[deep]], cy: [ys[deep]] }, bestCost = Infinity;
-  const nearest = new Float64Array(n);
-  for (const s of starts) {
-    const cx = [xs[s]], cy = [ys[s]];
-    nearest.fill(Infinity);
-    while (cx.length < k) {
-      const m = cx.length - 1;
-      let bi = 0, bd = -1;
-      for (let j = 0; j < n; j++) {
-        const d = (xs[j] - cx[m]) ** 2 + (ys[j] - cy[m]) ** 2;
-        if (d < nearest[j]) nearest[j] = d;
-        if (nearest[j] > bd) { bd = nearest[j]; bi = j; }
-      }
-      cx.push(xs[bi]);
-      cy.push(ys[bi]);
-    }
-    let cost = 0;
-    for (let iter = 0; iter < 10; iter++) {
-      const sx = new Float64Array(k), sy = new Float64Array(k), cnt = new Float64Array(k);
-      cost = 0;
-      for (let j = 0; j < n; j++) {
-        let bm = 0, bd = Infinity;
-        for (let m = 0; m < k; m++) {
-          const d = (xs[j] - cx[m]) ** 2 + (ys[j] - cy[m]) ** 2;
-          if (d < bd) { bd = d; bm = m; }
-        }
-        sx[bm] += xs[j]; sy[bm] += ys[j]; cnt[bm]++;
-        cost += bd;
-      }
-      for (let m = 0; m < k; m++) if (cnt[m] > 0) { cx[m] = sx[m] / cnt[m]; cy[m] = sy[m] / cnt[m]; }
-    }
-    // (A clearly better solution only: near ties keep the earlier start.)
-    if (cost < 0.98 * bestCost) { bestCost = cost; best = { cx, cy }; }
-  }
-  return best;
-}
-
-/**
  * Split a cluster of touching or slightly overlapping loose pieces along the edges between them.
  * Markers come from the foreground before closing (pieces 1–3 px apart are separate there) or,
  * failing that, from k-means of the interior (k = area / piece area). A watershed on the colour
@@ -792,13 +738,39 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
       for (let i = 0; i < labels.length; i++) if (comps.labels[i] === st.label) labels[i] = n + 1;
     });
   } else {
-    // Markers 2: k-means of interior pixel positions.
+    // Markers 2: k-means of interior pixel positions (farthest-point start).
     const dt = distanceTransform(c.mask).data;
     const pts: number[] = [];
     const stride = Math.max(1, Math.round(Math.sqrt(c.area / 40000)));
     for (let y = 0; y < h; y += stride) for (let x = 0; x < w; x += stride) if (dt[y * w + x] >= 0.12 * body) pts.push(y * w + x);
     if (pts.length < 10 * k) return null;
-    const { cx, cy } = kMeansCentres(pts, w, k, dt);
+    const cx: number[] = [], cy: number[] = [];
+    let far = pts[0], farD = -1;
+    for (const i of pts) if (dt[i] > farD) { farD = dt[i]; far = i; }
+    cx.push(far % w); cy.push(Math.floor(far / w));
+    while (cx.length < k) {
+      let bi = pts[0], bd = -1;
+      for (const i of pts) {
+        const x = i % w, y = (i - x) / w;
+        let d = Infinity;
+        for (let m = 0; m < cx.length; m++) d = Math.min(d, (x - cx[m]) ** 2 + (y - cy[m]) ** 2);
+        if (d > bd) { bd = d; bi = i; }
+      }
+      cx.push(bi % w); cy.push(Math.floor(bi / w));
+    }
+    for (let iter = 0; iter < 10; iter++) {
+      const sx = new Float64Array(k), sy = new Float64Array(k), n = new Float64Array(k);
+      for (const i of pts) {
+        const x = i % w, y = (i - x) / w;
+        let best = 0, bd = Infinity;
+        for (let m = 0; m < k; m++) {
+          const d = (x - cx[m]) ** 2 + (y - cy[m]) ** 2;
+          if (d < bd) { bd = d; best = m; }
+        }
+        sx[best] += x; sy[best] += y; n[best]++;
+      }
+      for (let m = 0; m < k; m++) if (n[m] > 0) { cx[m] = sx[m] / n[m]; cy[m] = sy[m] / n[m]; }
+    }
     const r2 = (0.15 * body) ** 2;
     pts.forEach((i) => {
       const x = i % w, y = (i - x) / w;
@@ -900,7 +872,7 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
     if (!pa || !pb) continue;
     const ca = pa.shape?.confidence ?? 0, cb = pb.shape?.confidence ?? 0;
     const crease = median(v);
-    const evidence = (crease >= CREASE_MIN && mixed) || viaGap || viaValley || (Math.max(ca, cb) >= 0.7 && (Math.min(ca, cb) >= UNCERTAIN_CONFIDENCE || c.secondPeak > TOUCHING_SECOND_PEAK));
+    const evidence = ((crease >= CREASE_MIN || viaValley) && mixed) || viaGap || (Math.max(ca, cb) >= 0.7 && (Math.min(ca, cb) >= UNCERTAIN_CONFIDENCE || c.secondPeak > TOUCHING_SECOND_PEAK));
     // A part with a faint outline wrapped around its neighbour is that piece's glare halo or shadow.
     const wrap = v.length / Math.max(1, Math.min(polygonPerimeter(pa.contour), polygonPerimeter(pb.contour)));
     const halo = wrap >= HALO_WRAP && Math.min(edgeScore[a], edgeScore[b]) < high;
@@ -1194,8 +1166,8 @@ function snapOutline(c: Candidate, img: RGBAImage, score: GrayImage, high: numbe
 
 /** Width (body sizes) of the outer band searched for a soft cast shadow around a dark piece. */
 const SHADOW_BAND = 0.1;
-/** Narrowest such band (px): thinner shadow halos are left to the outline snapping. */
-const SHADOW_BAND_MIN = 8;
+/** Narrowest such band (px): only close-ups (pieces ≥ 120 px) show halos the outline snapping misses. */
+const SHADOW_BAND_MIN = 12;
 /** Deepest shadow colour, as a multiple of the table's chroma (soft shadow on warm wood deepens it). */
 const SHADOW_CHROMA_SCALE = 2.5;
 
@@ -1285,7 +1257,10 @@ function peelShadowHalo(c: Candidate, img: RGBAImage, fit: BackgroundFit, noise:
   if (stats.length === 0) return null;
   const main = stats.reduce((a, b) => (b.area > a.area ? b : a));
   if (main.area < 0.6 * c.area) return null;
-  return { ...makeCandidate(componentMask(labels, w, main.label, main.bbox), { x: main.bbox.x + x0, y: main.bbox.y + y0, width: main.bbox.width, height: main.bbox.height }, W, H, main.area), group: c.group, merged: c.merged };
+  const peeled = makeCandidate(componentMask(labels, w, main.label, main.bbox), { x: main.bbox.x + x0, y: main.bbox.y + y0, width: main.bbox.width, height: main.bbox.height }, W, H, main.area);
+  // A piece outline must not get worse (a shadow halo only rounds it off).
+  if ((peeled.shape?.confidence ?? 0) < (c.shape?.confidence ?? 0) - 0.05) return null;
+  return { ...peeled, group: c.group, merged: c.merged };
 }
 
 /**

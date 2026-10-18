@@ -83,20 +83,21 @@ describe('segmentPieces stability', () => {
       const baseL = labelMap(base, W, H);
       // About one region per loose piece or assembled group.
       expect(Math.abs(base.regions.length - truth.length)).toBeLessThanOrEqual(0.15 * truth.length);
-      const variants = [
-        ['noise ±2', withNoise(photo, 2, 1000 + seed)],
-        ['jpeg q90', jpegRoundTrip(photo, 90)],
-        // The photo is a jpeg-js decode (chroma replicated); a browser interpolates it instead.
-        ['fancy chroma', chromaResample(photo, 'fancy')],
-      ] as const;
-      for (const [name, img] of variants) {
+      for (const [name, img] of [['noise ±2', withNoise(photo, 2, 1000 + seed)], ['jpeg q90', jpegRoundTrip(photo, 90)]] as const) {
         const seg = segmentPieces(img);
         const agree = agreement(baseL, labelMap(seg, W, H));
         lines.push(`seed ${seed} ${name}: regions ${base.regions.length} -> ${seg.regions.length}, agreement ${agree.toFixed(2)}`);
         expect(Math.abs(seg.regions.length - base.regions.length)).toBeLessThanOrEqual(Math.max(2, 0.1 * base.regions.length));
         expect(agree).toBeGreaterThanOrEqual(0.8);
       }
+      // The same phone JPEG (colour at half resolution) decoded by jpeg-js (colour replicated over
+      // 2×2 pixels) and by a browser (colour interpolated): the decoder must not matter.
+      const replicated = labelMap(segmentPieces(chromaResample(photo, 'replicate')), W, H);
+      const interpolated = labelMap(segmentPieces(chromaResample(photo, 'fancy')), W, H);
+      const decoders = Math.min(agreement(replicated, interpolated), agreement(interpolated, replicated));
+      lines.push(`seed ${seed} decoders: agreement ${decoders.toFixed(2)}`);
+      expect(decoders).toBeGreaterThanOrEqual(0.95);
     }
     console.log(`stability on dense scenes (truth ≈ 29 items):\n${lines.join('\n')}`);
-  }, 90_000);
+  }, 120_000);
 });
