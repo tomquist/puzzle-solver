@@ -19,6 +19,7 @@ import { PNG } from 'pngjs';
 import type { Point } from '../../src/cv/geometry';
 import { createRGBA, type Mask, type Rect, type RGBAImage } from '../../src/cv/image';
 import { labToRgba } from '../../src/cv/color';
+import type { FeedbackBundle } from '../../src/feedback/format';
 import type { DetectedRegion, QualityReport, RegionMatch, ScanResult } from '../../src/model/types';
 import { backgroundAt } from '../../src/pipeline/pieces';
 import { COLORS, fillRect, heat, hstack, View, vstack, withHeader, type Color, type HeaderLines } from './draw';
@@ -211,14 +212,14 @@ export function writeInspection(r: FeedbackReplay, outDir: string): { summary: s
   const d = r.diagnostics;
 
   if (r.photo && r.original && r.current) {
-    const date = new Date(b.createdAt).toISOString().slice(0, 16).replace('T', ' ');
+    const date = minute(b.scan?.analysedAt ?? b.createdAt);
     // 1) What the app showed, with the user's marks.
     let v = new View(r.photo, { maxSide: MAX_SIDE });
     drawRegions(v, r.original, s);
     for (const p of r.placements) drawPlacement(v, p, false);
     for (const j of r.marks) drawMark(v, j, size, r.original, s, false);
     save('1-original.png', v.render([
-      [[`APP RESULT FROM THE FILE (APP ${b.app.version}, ${date}): ${r.original.regions.length} REGIONS, ${b.marks.length} MARKS, ${b.scan!.placements.length} PLACEMENTS`, COLORS.white]],
+      [[`APP RESULT FROM THE FILE (ANALYSED BY ${analysisVersion(b)}, ${date}): ${r.original.regions.length} REGIONS, ${b.marks.length} MARKS, ${b.scan!.placements.length} PLACEMENTS`, COLORS.white]],
       OUTLINE_LEGEND,
       [...MARK_LEGEND, ['P = PLACED BY THE USER', COLORS.white]],
     ]));
@@ -367,6 +368,16 @@ export function writeInspection(r: FeedbackReplay, outDir: string): { summary: s
   return { summary, files };
 }
 
+/**
+ * Build that produced the stored result: recorded with the scan since files carry it, otherwise
+ * unknown: at most the version that wrote the file (the app may have updated after the scan).
+ */
+export function analysisVersion(b: FeedbackBundle): string {
+  return b.scan?.appVersion ?? `unknown (${b.app.version} or older)`;
+}
+
+const minute = (t: number) => new Date(t).toISOString().slice(0, 16).replace('T', ' ');
+
 function pad(t: string, n: number): string {
   return t.length >= n ? t.slice(0, n - 2) + '… ' : t + ' '.repeat(n - t.length);
 }
@@ -375,10 +386,11 @@ function pad(t: string, n: number): string {
 export function formatSummary(r: FeedbackReplay): string {
   const b = r.bundle;
   const lines: string[] = [];
-  const date = new Date(b.createdAt).toISOString().slice(0, 16).replace('T', ' ');
+  const date = minute(b.createdAt);
   lines.push(`${r.name}  app ${b.app.version}  ${date}  ${b.puzzle.pieceCount} pieces (${b.puzzle.grid.rows}x${b.puzzle.grid.cols}, ${b.puzzle.cut})${b.comment ? `  "${b.comment}"` : ''}`);
   if (r.photo && r.original && r.current) {
-    lines.push(`scan ${r.photo.width}x${r.photo.height}: regions app ${r.original.regions.length} -> now ${r.current.regions.length}${r.matched ? '' : ' (segmentation only: no reference in the file)'}`);
+    lines.push(`scan ${r.photo.width}x${r.photo.height} analysed by ${analysisVersion(b)}${b.scan?.analysedAt ? ` at ${minute(b.scan.analysedAt)}` : ''}`);
+    lines.push(`  regions app ${r.original.regions.length} -> now ${r.current.regions.length}${r.matched ? '' : ' (segmentation only: no reference in the file)'}`);
     lines.push(`  quality app: ${issuesText(r.original.quality)}`);
     lines.push(`  quality now: ${issuesText(r.current.quality)}`);
   } else lines.push('no scan in the file');

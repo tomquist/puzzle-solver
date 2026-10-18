@@ -4,6 +4,7 @@
  * ScanRecord → open its result.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { APP_VERSION } from '../../appVersion';
 import type { ProgressRecord, PuzzleRecord, ScanRecord } from '../../model/types';
 import { blobToRGBA, isQuotaError, rgbaToBlob } from '../../platform/imageio';
 import { newId, type PuzzleRepository } from '../../storage/types';
@@ -86,6 +87,7 @@ export function useScanJob(deps: ScanJobDeps): { job: ScanJob | undefined; start
           width: resp.result.width,
           height: resp.result.height,
           result: resp.result,
+          appVersion: APP_VERSION,
         };
         await repo.saveScan(scan);
         scansChanged();

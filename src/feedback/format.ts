@@ -43,7 +43,7 @@ export interface FeedbackBundle {
   /** Epoch milliseconds. */
   createdAt: number;
   app: {
-    /** Build identifier (git commit) of the app that produced the file. */
+    /** Build identifier (git commit) of the app that produced the file (see `scan.appVersion` for the analysis). */
     version: string;
     userAgent: string;
     viewport: { width: number; height: number; dpr: number };
@@ -64,6 +64,13 @@ export interface FeedbackBundle {
     photo: FeedbackImage;
     /** What the app computed for this photo. */
     result: ScanResult;
+    /**
+     * Build (git commit) of the app that computed `result`. It can be older than `app.version` when
+     * the app updated between the scan and the feedback; missing in files from before it was recorded.
+     */
+    appVersion?: string;
+    /** When the photo was analysed (epoch milliseconds). */
+    analysedAt?: number;
     /** Placements the user confirmed with "Placed" (ground truth for matching). */
     placements: { regionId: number; cells: CellRef[] }[];
   };
