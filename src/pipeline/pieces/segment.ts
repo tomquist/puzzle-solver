@@ -452,7 +452,6 @@ function chooseThreshold(score: GrayImage): { high: number; low: number; separab
   g.data.set(vals);
   const o = otsuThreshold(g);
   const t = Math.expm1(o.threshold);
-  if (globalThis.process?.env?.THDBG) globalThis.console.log('THDBG otsu', t.toFixed(2), 'sep', o.separability.toFixed(3));
   const high = Math.max(4.5, Math.min(14, t));
   return { high, low: Math.max(3.2, 0.55 * high), separability: o.separability };
 }
@@ -822,32 +821,24 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
   // Median colour score along each part's stretch of the cluster outline (3 px in).
   const edgeScore = new Float64Array(n + 1);
   {
-    const inner = erode(c.mask, 3);
+    const inner = erode(c.mask, 3).data;
     const vals: number[][] = Array.from({ length: n + 1 }, () => []);
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const i = y * w + x, l = labels[i];
-        if (l <= 0 || !inner.data[i]) continue;
-        let edge = false;
-        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-          const xx = x + dx, yy = y + dy;
-          if (xx < 0 || yy < 0 || xx >= w || yy >= h || !inner.data[yy * w + xx]) edge = true;
-        }
+        if (l <= 0 || !inner[i]) continue;
+        const edge = x === 0 || y === 0 || x === w - 1 || y === h - 1 || !inner[i - 1] || !inner[i + 1] || !inner[i - w] || !inner[i + w];
         if (edge) vals[l].push(score.data[(y + by) * W + x + bx]);
       }
     }
     for (const l of live) edgeScore[l] = vals[l].length ? median(vals[l]) : Infinity;
   }
-  let creases = 0, cuts = 0;
   for (const [key, v] of stats) {
     const a = Math.floor(key / 64), b = key % 64;
     const pa = parts.get(a), pb = parts.get(b);
     if (!pa || !pb) continue;
     const ca = pa.shape?.confidence ?? 0, cb = pb.shape?.confidence ?? 0;
     const crease = median(v);
-    if (globalThis.process?.env?.SPLITDBG) globalThis.console.log('  pair', a, b, 'crease', crease.toFixed(1), 'q25', [...v].sort((x, y) => x - y)[Math.floor(0.25 * (v.length - 1))].toFixed(1), 'q10', [...v].sort((x, y) => x - y)[Math.floor(0.1 * (v.length - 1))].toFixed(1), 'len', v.length, 'conf', ca.toFixed(2), cb.toFixed(2), 'grid', onOneGrid(pa, pb, c, body));
-    cuts++;
-    if (crease >= CREASE_MIN) creases++;
     const evidence = (crease >= CREASE_MIN && mixed) || viaGap || (Math.max(ca, cb) >= 0.7 && (Math.min(ca, cb) >= UNCERTAIN_CONFIDENCE || c.secondPeak > TOUCHING_SECOND_PEAK));
     // A part with a faint outline wrapped around its neighbour is that piece's glare halo or shadow.
     const wrap = v.length / Math.max(1, Math.min(polygonPerimeter(pa.contour), polygonPerimeter(pb.contour)));
@@ -856,9 +847,6 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
     const halves = !viaGap && area[a] < HALF_PART * ra && area[b] < HALF_PART * ra && area[a] + area[b] <= 1.35 * ra;
     if (!evidence || halves || halo || onOneGrid(pa, pb, c, body)) root[find(a)] = find(b);
   }
-  if (globalThis.process?.env?.SPLITDBG) { const iv: number[] = []; for (let i = 0; i < w * h; i++) if (c.mask.data[i]) iv.push(th[i]); iv.sort((a, b) => a - b); globalThis.console.log('THQ', [0.5, 0.75, 0.9, 0.95].map((q) => iv[Math.floor(q * (iv.length - 1))].toFixed(1)).join(',')); }
-  if (globalThis.process?.env?.SPLITDBG) globalThis.console.log('EDGEDBG', JSON.stringify(c.bbox), 'k', k, 'viaGap', viaGap, 'parts', live.map((l) => (area[l] / ra).toFixed(2)).join(','), 'creased', creases, '/', cuts, 'second', c.secondPeak.toFixed(2), 'mixed', mixed, aligned, '/', outer.length);
-  if (globalThis.process?.env?.SPLITDBG) globalThis.console.log('  outer angles', live.map((l) => { const pc = parts.get(l); return pc ? `${outerAngle(pc, c)?.toFixed(0) ?? 'n'}/${pc.orientation.toFixed(0)}` : '-'; }).join(','), 'cluster', c.orientation.toFixed(0));
   const groups = new Map<number, number[]>();
   for (const l of live) {
     const r = find(l);
@@ -1002,7 +990,6 @@ function peelSoft(c: Candidate, img: RGBAImage, ra: number, W: number, H: number
     if (flooded[i]) removed++;
     else rest.data[i] = 1;
   }
-  if (globalThis.process?.env?.PEELDBG) globalThis.console.log('PEEL', JSON.stringify(c.bbox), (c.area / ra).toFixed(2), 'removed', (removed / c.area).toFixed(2));
   if (removed < 0.08 * c.area) return null;
   const cleaned = fillHoles(open(rest, 1));
   const { labels, stats } = labelComponents(cleaned, 8);
@@ -1414,7 +1401,6 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
         refArea = unit > 0 ? unit : others.length > 0 ? median(others.map((c) => c.area)) : 0;
         refBody = Math.sqrt(refArea);
       }
-      if (globalThis.process?.env?.REFDBG) globalThis.console.log('REFDBG', cands.filter((c) => c.shape && !c.touchesBorder).map((c) => `${Math.round(c.area)}/${c.shape!.bodySize.toFixed(0)}/${c.shape!.confidence.toFixed(2)}${singles.includes(c) ? '*' : ''}`).join(' '), 'unit', unit.toFixed(0), '=>', refArea.toFixed(0), refBody.toFixed(0));
       return { singles, refArea, refBody, noReference: singles.length === 0 && others.length < 3 };
     };
     let ref = references();
@@ -1426,7 +1412,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
       for (const c of cands) {
         // Weak pixels (between the thresholds) far from any strong one: shading bands, the edge of
         // a second surface, shadows that only hysteresis tied to a piece.
-        const anchored = globalThis.process?.env?.NODROP ? null : dropFarWeak(c, score, th.high, texOnly, Math.max(2, WEAK_REACH * ref.refBody), Math.max(minArea, ANCHOR_MIN * ref.refArea), ref.refArea, minArea, W, H);
+        const anchored = dropFarWeak(c, score, th.high, texOnly, Math.max(2, WEAK_REACH * ref.refBody), Math.max(minArea, ANCHOR_MIN * ref.refArea), ref.refArea, minArea, W, H);
         if (anchored) changed = true;
         for (const a of anchored ?? [c]) {
           const parts = removeThin(a, ref.refBody, ref.refArea, minArea, W, H);
@@ -1512,7 +1498,6 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
         // Every part at least half a piece: the opening only cuts contacts clearly narrower than a
         // piece body (pieces of an assembled patch touch along whole sides).
         const parts = splitAtNecks(c, Math.max(2, NECK_RADII[k] * bodyAt), 0.3 * ra, 0.5 * ra);
-        if (globalThis.process?.env?.SPLITDBG && parts) globalThis.console.log('NECK', JSON.stringify(c.bbox), 'r', NECK_RADII[k], (c.area / ra).toFixed(2), 'parts', parts.map((p) => (maskArea(p.mask) / ra).toFixed(2)).join(','));
         if (!parts) continue;
         const out: Candidate[] = [];
         for (const p of parts) {

@@ -26,9 +26,11 @@ export function offsetPoints(pts: readonly Point[], dx: number, dy: number): Poi
 }
 
 /**
- * Chroma of a (2r+1)² box neighbourhood with each pixel's own luminance: colour noise (and a
- * decoder's chroma upsampling, phone JPEGs store colour at half resolution anyway) is averaged
- * away while brightness edges stay sharp.
+ * Colour of a (2r+1)² box neighbourhood with each pixel's own brightness, split like a JPEG: luma
+ * (Y = 0.299 R + 0.587 G + 0.114 B) per pixel, the colour differences B − Y and R − Y box-averaged
+ * (separable running sums, replicated borders), then back to RGB. Colour noise and a decoder's
+ * chroma upsampling (phone JPEGs store colour at half resolution anyway) are averaged away while
+ * brightness edges stay sharp.
  */
 export function smoothChroma(img: RGBAImage, r: number): RGBAImage {
   if (r < 1) return img;

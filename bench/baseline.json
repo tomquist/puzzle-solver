@@ -184,7 +184,7 @@
       },
       "starry-grids-light": {
         "segRecall": 1,
-        "segPrecision": 0.917,
+        "segPrecision": 1,
         "shapeRate": 1,
         "kindAccuracy": 1,
         "top1": 1,
@@ -193,7 +193,7 @@
         "confidentPrecision": 1,
         "fitPrecision": 1,
         "fitRecall": 1,
-        "warnings": 1,
+        "warnings": 0,
         "assembledRecall": 1,
         "assembledPrecision": 1,
         "neighborPrecision": 1,
@@ -345,9 +345,9 @@
         "hiddenRate": 0
       },
       "wave-gingham": {
-        "segRecall": 0.9,
+        "segRecall": 0.95,
         "segPrecision": 1,
-        "shapeRate": 0.75,
+        "shapeRate": 0.8,
         "kindAccuracy": 1,
         "top1": 0.85,
         "top3": 0.85,
@@ -360,7 +360,7 @@
         "assembledPrecision": 1,
         "neighborPrecision": 1,
         "neighborRecall": 1,
-        "hiddenRate": 0.1
+        "hiddenRate": 0.05
       },
       "starry-dots": {
         "segRecall": 1,
@@ -383,9 +383,9 @@
       "wave-jpeg-vignette": {
         "segRecall": 1,
         "segPrecision": 1,
-        "shapeRate": 0.85,
-        "kindAccuracy": 0.941,
-        "top1": 0.85,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 0.9,
         "top3": 0.9,
         "rotationOk": 1,
         "confidentPrecision": 1,
@@ -491,13 +491,13 @@
       "wave-dark-wood-pieces": {
         "segRecall": 1,
         "segPrecision": 1,
-        "shapeRate": 0.8,
-        "kindAccuracy": 0.938,
-        "top1": 0.8,
-        "top3": 0.85,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 0.9,
+        "top3": 0.95,
         "rotationOk": 1,
-        "confidentPrecision": 0.938,
-        "fitPrecision": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 0.667,
         "fitRecall": 1,
         "warnings": 1,
         "assembledRecall": 1,
@@ -507,22 +507,40 @@
         "hiddenRate": 0
       },
       "starry-wood-tiles-real": {
-        "segRecall": 0.813,
-        "segPrecision": 0.813,
-        "shapeRate": 0.571,
-        "kindAccuracy": 1,
-        "top1": 0.563,
-        "top3": 0.571,
+        "segRecall": 0.875,
+        "segPrecision": 0.875,
+        "shapeRate": 0.714,
+        "kindAccuracy": 0.9,
+        "top1": 0.688,
+        "top3": 0.714,
         "rotationOk": 1,
-        "confidentPrecision": 0.889,
+        "confidentPrecision": 1,
         "fitPrecision": 1,
         "fitRecall": 1,
-        "warnings": 4,
+        "warnings": 3,
         "assembledRecall": 0.5,
-        "assembledPrecision": 0.25,
+        "assembledPrecision": 0.333,
         "neighborPrecision": 1,
         "neighborRecall": 1,
-        "hiddenRate": 0.188
+        "hiddenRate": 0.125
+      },
+      "starry-dense-touching": {
+        "segRecall": 0.911,
+        "segPrecision": 0.932,
+        "shapeRate": 0.909,
+        "kindAccuracy": 0.975,
+        "top1": 0.911,
+        "top3": 0.932,
+        "rotationOk": 1,
+        "confidentPrecision": 0.953,
+        "fitPrecision": 1,
+        "fitRecall": 0.786,
+        "warnings": 2,
+        "assembledRecall": 1,
+        "assembledPrecision": 0.5,
+        "neighborPrecision": 1,
+        "neighborRecall": 0.643,
+        "hiddenRate": 0.089
       }
     },
     "box": {
@@ -548,8 +566,27 @@
       }
     },
     "feedback": {
+      "2026-10-18-dense-table-frame-1500pc.json": {
+        "mergedSplit": 0.7,
+        "mergedExact": 0.5
+      },
+      "2026-10-18-spread-stone-table-1500pc.json": {
+        "falseRemoved": 1,
+        "objectRecall": 1,
+        "objectClean": 1,
+        "objectPrecision": 1
+      },
+      "2026-10-18-two-surfaces-grey-pieces-1500pc.json": {
+        "missedFound": 0.786,
+        "objectRecall": 1,
+        "objectClean": 0.688,
+        "objectPrecision": 1
+      },
       "2026-10-18-wood-planks-1500pc.json": {
-        "missedFound": 1
+        "missedFound": 1,
+        "objectRecall": 1,
+        "objectClean": 1,
+        "objectPrecision": 0.947
       }
     }
   }
