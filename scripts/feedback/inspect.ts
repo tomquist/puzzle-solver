@@ -23,7 +23,7 @@ import type { FeedbackBundle } from '../../src/feedback/format';
 import type { DetectedRegion, QualityReport, RegionMatch, ScanResult } from '../../src/model/types';
 import { backgroundAt } from '../../src/pipeline/pieces';
 import { COLORS, fillRect, heat, hstack, View, vstack, withHeader, type Color, type HeaderLines } from './draw';
-import { feedbackMetrics, type FeedbackReplay, type MarkJudgement, type PlacementJudgement } from './replay';
+import { feedbackMetrics, type FeedbackReplay, type MarkJudgement, type ObjectScore, type PlacementJudgement } from './replay';
 import { formatCells } from './regions';
 
 const MAX_SIDE = 1400;
@@ -391,6 +391,10 @@ export function formatSummary(r: FeedbackReplay): string {
   if (r.photo && r.original && r.current) {
     lines.push(`scan ${r.photo.width}x${r.photo.height} analysed by ${analysisVersion(b)}${b.scan?.analysedAt ? ` at ${minute(b.scan.analysedAt)}` : ''}`);
     lines.push(`  regions app ${r.original.regions.length} -> now ${r.current.regions.length}${r.matched ? '' : ' (segmentation only: no reference in the file)'}`);
+    if (r.objects) {
+      const t = (o: ObjectScore) => `found ${o.found}/${o.objects}, alone ${o.clean}/${o.objects}, false regions ${o.regions - o.real}/${o.regions}`;
+      lines.push(`  answer key (${r.objects.current.objects} objects): app ${t(r.objects.original)} -> now ${t(r.objects.current)}`);
+    }
     lines.push(`  quality app: ${issuesText(r.original.quality)}`);
     lines.push(`  quality now: ${issuesText(r.current.quality)}`);
   } else lines.push('no scan in the file');

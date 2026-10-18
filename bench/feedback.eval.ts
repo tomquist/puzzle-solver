@@ -6,6 +6,9 @@
  *   falseRemoved    'not_a_piece' regions no longer detected as piece / patch
  *   mergedSplit     'merged' regions now split into several regions
  *   mergedExact     'merged' regions now split into exactly the reviewed number of parts
+ *   objectRecall    answer-key objects (review.objects) inside a piece / patch region
+ *   objectClean     answer-key objects alone in their region (not merged with another)
+ *   objectPrecision piece / patch regions holding an answer-key object (the rest are false)
  *   wrongFixed      'wrong_place' marks with a known cell now placed there (top-1)
  *   placementsTop1  confirmed placements still top-1
  *   boxError        largest corner error of detectBox vs. the user's quad (fraction of the diagonal)
@@ -25,7 +28,7 @@ import { compareToBaseline, report, saveBaselineSuite, UPDATE_BASELINE, yieldToE
 
 const DIR = resolve(REPO_ROOT, 'test-corpus/feedback');
 const files = existsSync(DIR) ? readdirSync(DIR).filter((f) => f.toLowerCase().endsWith('.json') && !isReviewFile(f)).sort() : [];
-const COLUMNS = ['items', 'regions', 'missedFound', 'falseRemoved', 'mergedSplit', 'mergedExact', 'wrongFixed', 'placementsTop1', 'boxError', 'ms'];
+const COLUMNS = ['items', 'regions', 'missedFound', 'falseRemoved', 'mergedSplit', 'mergedExact', 'objectRecall', 'objectClean', 'objectPrecision', 'wrongFixed', 'placementsTop1', 'boxError', 'ms'];
 const results: Record<string, MetricRecord> = {};
 
 describe('feedback replay', () => {

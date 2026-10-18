@@ -453,7 +453,7 @@ function chooseThreshold(score: GrayImage): { high: number; low: number; separab
   const o = otsuThreshold(g);
   const t = Math.expm1(o.threshold);
   if (globalThis.process?.env?.THDBG) globalThis.console.log('THDBG otsu', t.toFixed(2), 'sep', o.separability.toFixed(3));
-  const high = globalThis.process?.env?.THFIX ? Number(globalThis.process.env.THFIX) : Math.max(4.5, Math.min(14, t));
+  const high = Math.max(4.5, Math.min(14, t));
   return { high, low: Math.max(3.2, 0.55 * high), separability: o.separability };
 }
 
@@ -589,6 +589,8 @@ const LOOSE_SECOND_PEAK = 0.15;
 const OUTER_GRID_DEG = 12;
 /** Offset tolerance (body sizes) of neighbours on one assembled grid. */
 const GRID_TOLERANCE = 0.3;
+/** Parts of an edge split below this (piece areas) on both sides of a cut may be halves of one piece. */
+const HALF_PART = 0.65;
 /** Most pieces a cluster is split into along edges. */
 const MAX_EDGE_SPLIT = 12;
 
@@ -826,7 +828,9 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
     cuts++;
     if (crease >= CREASE_MIN) creases++;
     const evidence = (crease >= CREASE_MIN && mixed) || viaGap || (Math.max(ca, cb) >= 0.7 && (Math.min(ca, cb) >= UNCERTAIN_CONFIDENCE || c.secondPeak > TOUCHING_SECOND_PEAK));
-    if (!evidence || onOneGrid(pa, pb, c, body)) root[find(a)] = find(b);
+    // Two neighbours both well below a piece that make one together: one piece given two markers.
+    const halves = !viaGap && area[a] < HALF_PART * ra && area[b] < HALF_PART * ra && area[a] + area[b] <= 1.35 * ra;
+    if (!evidence || halves || onOneGrid(pa, pb, c, body)) root[find(a)] = find(b);
   }
   if (globalThis.process?.env?.SPLITDBG) { const iv: number[] = []; for (let i = 0; i < w * h; i++) if (c.mask.data[i]) iv.push(th[i]); iv.sort((a, b) => a - b); globalThis.console.log('THQ', [0.5, 0.75, 0.9, 0.95].map((q) => iv[Math.floor(q * (iv.length - 1))].toFixed(1)).join(',')); }
   if (globalThis.process?.env?.SPLITDBG) globalThis.console.log('EDGEDBG', JSON.stringify(c.bbox), 'k', k, 'viaGap', viaGap, 'parts', live.map((l) => (area[l] / ra).toFixed(2)).join(','), 'creased', creases, '/', cuts, 'second', c.secondPeak.toFixed(2), 'mixed', mixed, aligned, '/', outer.length);
@@ -925,7 +929,7 @@ function maskCentroid(c: Candidate): Point {
  * through smooth pixels (local high-pass energy of the luminance at table level) are given back to
  * the table. Kept only when it leaves piece-sized parts with clearly better outlines.
  */
-function peelSoft(c: Candidate, img: RGBAImage, ra: number, W: number, H: number): Candidate[] | null {
+function peelSoft(c: Candidate, img: RGBAImage, score: GrayImage, high: number, ra: number, W: number, H: number): Candidate[] | null {
   const pad = 6;
   const x0 = Math.max(0, c.bbox.x - pad), y0 = Math.max(0, c.bbox.y - pad);
   const x1 = Math.min(W, c.bbox.x + c.bbox.width + pad), y1 = Math.min(H, c.bbox.y + c.bbox.height + pad);
@@ -968,11 +972,14 @@ function peelSoft(c: Candidate, img: RGBAImage, ra: number, W: number, H: number
     }
   }
   const rest = createMask(w, h);
-  let removed = 0;
+  let removed = 0, removedWeak = 0;
   for (let i = 0; i < w * h; i++) {
     if (!m.data[i]) continue;
-    if (flooded[i]) removed++;
-    else rest.data[i] = 1;
+    if (flooded[i]) {
+      removed++;
+      const x = i % w, y = (i - x) / w;
+      if (score.data[(y + y0) * W + x + x0] < high) removedWeak++;
+    } else rest.data[i] = 1;
   }
   if (globalThis.process?.env?.PEELDBG) globalThis.console.log('PEEL', JSON.stringify(c.bbox), (c.area / ra).toFixed(2), 'removed', (removed / c.area).toFixed(2));
   if (removed < 0.08 * c.area) return null;
@@ -986,8 +993,10 @@ function peelSoft(c: Candidate, img: RGBAImage, ra: number, W: number, H: number
   // piece on a busy table may look soft all over.)
   if (parts.length === 0) return removed >= SOFT_ONLY * c.area && c.area >= SOFT_MIN_PIECES * ra ? [] : null;
   const before = c.shape?.confidence ?? 0;
-  const ok = Math.max(...parts.map((p) => p.shape?.confidence ?? 0)) >= Math.max(0.6, before + 0.2);
-  if (globalThis.process?.env?.PEELDBG) globalThis.console.log('  PEEL parts', parts.map((p) => (p.area / ra).toFixed(2) + '/' + (p.shape?.confidence ?? 0).toFixed(2)).join(','), 'before', before.toFixed(2), ok);
+  // Kept when it gives a clearly better piece outline, or when what it takes away is weak table-like
+  // colour as well as soft (a lit or shaded patch of table hanging on to pieces).
+  const ok = Math.max(...parts.map((p) => p.shape?.confidence ?? 0)) >= Math.max(0.6, before + 0.2) || removedWeak >= PEEL_WEAK_SHARE * removed;
+  if (globalThis.process?.env?.PEELDBG) globalThis.console.log('  PEEL parts', parts.map((p) => (p.area / ra).toFixed(2) + '/' + (p.shape?.confidence ?? 0).toFixed(2)).join(','), 'before', before.toFixed(2), ok, 'weak', (removedWeak / Math.max(1, removed)).toFixed(2));
   return ok ? parts : null;
 }
 
@@ -1237,6 +1246,8 @@ const EDGE_RECUT_MAX_PIECES = 4;
 
 /** Share of a region peeled off as soft from which, with no piece-sized rest, it is dropped. */
 const SOFT_ONLY = 0.75;
+/** Share of weak pixels (below the high threshold) in a peeled-off area from which the peel is kept as table. */
+const PEEL_WEAK_SHARE = Number(globalThis.process?.env?.PWS ?? 0.8);
 /** Smallest region (piece areas) dropped as all soft. */
 const SOFT_MIN_PIECES = 1.5;
 /** Largest region (piece areas) whose soft halo or shadow is peeled off. */
@@ -1338,11 +1349,10 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   const diag = opts.diagnostics;
 
   /** Score → threshold → texture → morphology → candidates → reference size → strands removed. */
-  const pass = (model: BackgroundFit, prev?: { high: number; low: number; separability: number }) => {
+  const pass = (model: BackgroundFit) => {
     const score = foregroundScore(scored, model);
     lap('score');
-    const th0 = chooseThreshold(score);
-    const th = prev && globalThis.process?.env?.THKEEP ? prev : th0;
+    const th = chooseThreshold(score);
     let fg = hysteresis(score, th.high, th.low);
     lap('threshold');
     if (diag) Object.assign(diag, { score, high: th.high, low: th.low, colour: cloneMask(fg), minArea });
@@ -1427,7 +1437,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   let p = pass(fit);
   // Shadow zones and local lighting the smooth surface cannot follow: learn them from the table
   // around the pieces found so far (coarse grid, cells of at least two pieces) and segment again.
-  if (p.ref.refBody > 0 && (fit.palette.length === 0 || globalThis.process?.env?.LOCALPAL)) {
+  if (p.ref.refBody > 0 && fit.palette.length === 0) {
     // Excluded (on a 4× coarser grid): anything piece-shaped and every blob with a fair share of
     // strong pixels (pieces, and patches of weak pieces whose print is speckled with them). Smooth
     // weak blobs, which may be the shadow zone itself, stay in the estimate (a cell spans several
@@ -1444,10 +1454,9 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
       }
       const pieceLike = c.area >= 0.5 * p.ref.refArea && c.shape !== null && c.shape.confidence >= MIN_SHAPE_CONFIDENCE;
       if (!pieceLike && strong < LOCAL_STRONG_SHARE * c.area) continue;
-      const strongOnly = globalThis.process?.env?.LOCALBIG && c.area > Number(globalThis.process.env.LOCALBIG) * p.ref.refArea;
       for (let y = 0; y < bh; y++) {
         const crow = (((y + by) / f) | 0) * cw;
-        for (let x = 0; x < bw; x++) if (c.mask.data[y * bw + x] && (!strongOnly || sd[(y + by) * W + x + bx] >= high)) whole.data[crow + (((x + bx) / f) | 0)] = 1;
+        for (let x = 0; x < bw; x++) if (c.mask.data[y * bw + x]) whole.data[crow + (((x + bx) / f) | 0)] = 1;
       }
     }
     const exclude = dilate(whole, Math.max(1, Math.round((0.25 * p.ref.refBody) / f)));
@@ -1455,7 +1464,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     lap('local');
     if (local) {
       fit = { ...fit, local };
-      p = pass(fit, p.th);
+      p = pass(fit);
     }
   }
   const { score, th, texOnly, preClose, ref } = p;
@@ -1477,7 +1486,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
       const ra = refAreaAt(c);
       // (Not clusters of many pieces: peeling them is slow and changes little.)
       const doubtful = !c.touchesBorder && c.area >= 0.6 * ra && c.area <= PEEL_MAX_PIECES * ra && (c.area > 1.3 * ra || !c.shape || c.shape.confidence < 0.7);
-      const peeled = doubtful ? peelSoft(c, scored, ra, W, H) : null;
+      const peeled = doubtful ? peelSoft(c, scored, score, th.high, ra, W, H) : null;
       if (peeled && peeled.length === 0 && globalThis.process?.env?.PEELDBG) {
         let strong = 0;
         const { x: bx, y: by, width: bw, height: bh } = c.bbox;
@@ -1501,6 +1510,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
         // Every part at least half a piece: the opening only cuts contacts clearly narrower than a
         // piece body (pieces of an assembled patch touch along whole sides).
         const parts = splitAtNecks(c, Math.max(2, NECK_RADII[k] * bodyAt), 0.3 * ra, 0.5 * ra);
+        if (globalThis.process?.env?.SPLITDBG && parts) globalThis.console.log('NECK', JSON.stringify(c.bbox), 'r', NECK_RADII[k], (c.area / ra).toFixed(2), 'parts', parts.map((p) => (maskArea(p.mask) / ra).toFixed(2)).join(','));
         if (!parts) continue;
         const out: Candidate[] = [];
         for (const p of parts) {
@@ -1518,7 +1528,10 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
         return out;
       }
       // Pieces touching along a whole side or slightly overlapping: cut along the edges between them.
-      return splitAtEdges(c, ra, bodyAt, preClose, scored, W, H);
+      const cut = splitAtEdges(c, ra, bodyAt, preClose, scored, W, H);
+      // Parts still clearly larger than a piece (a blob of pieces lying close together, a part whose
+      // overlapping pieces the area under-counted) are split in turn.
+      return cut?.flatMap((p) => (p.area > 1.4 * ra ? splitTouching(p, 0) : null) ?? [p]) ?? null;
     };
     const out: Candidate[] = [];
     for (const c of cands) {

@@ -10,6 +10,11 @@
  * right), 'wrong' (the user's mistake), 'unsure'. Once a file has a review only its 'ok' marks
  * count in the metrics. `parts` (merged marks): how many regions the marked region really holds,
  * counting loose pieces and assembled groups (which stay one region each).
+ *
+ * `objects` (optional) is a complete answer key for the photo: one point (photo pixels, well inside)
+ * for every loose piece and every assembled group, found by checking the photo by eye, not taken
+ * from any result. It scores the whole result, including mistakes nobody marked. `unsure` objects
+ * count neither way.
  */
 import { existsSync, readFileSync } from 'node:fs';
 
@@ -21,10 +26,19 @@ export interface MarkReview {
   note?: string;
 }
 
+export interface ReviewObject {
+  x: number;
+  y: number;
+  unsure?: boolean;
+  note?: string;
+}
+
 export interface FeedbackReview {
   /** Date of the review (YYYY-MM-DD). */
   reviewed: string;
   marks: Record<string, MarkReview>;
+  /** Every piece and assembled group in the photo, when the reviewer listed them all. */
+  objects?: ReviewObject[];
 }
 
 export const isReviewFile = (path: string): boolean => /\.review\.json$/i.test(path);
@@ -41,5 +55,6 @@ export function readReview(feedbackPath: string): FeedbackReview | undefined {
   for (const [key, m] of Object.entries(review.marks ?? {})) {
     if (!/^\d+$/.test(key) || !['ok', 'wrong', 'unsure'].includes(m.verdict)) throw new Error(`${path}: bad review entry "${key}"`);
   }
+  for (const o of review.objects ?? []) if (!Number.isFinite(o.x) || !Number.isFinite(o.y)) throw new Error(`${path}: bad object ${JSON.stringify(o)}`);
   return review;
 }

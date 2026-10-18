@@ -19,7 +19,7 @@ import { buildReferenceIndex } from '../../src/pipeline/match';
 import { segmentPieces, type BackgroundModel, type SegmentDiagnostics } from '../../src/pipeline/pieces';
 import { basename } from 'node:path';
 import { decodeFeedbackImage, readFeedbackFile } from './io';
-import { readReview, type FeedbackReview, type MarkReview } from './review';
+import { readReview, type FeedbackReview, type MarkReview, type ReviewObject } from './review';
 import { cellJaccard, cellKey, centroidOf, containsPoint, correspondent, distanceToRect, formatCells, overlaps, rasterizeRegions, regionAtTap, type RasterRegion } from './regions';
 
 /** Outcome of one user mark under the current pipeline. */
@@ -67,6 +67,35 @@ export interface BoxJudgement {
   ms: number;
 }
 
+/** A result scored against the review's answer key (counts; unsure objects excluded). */
+export interface ObjectScore {
+  /** Objects in the key. */
+  objects: number;
+  /** Objects inside a piece / patch region. */
+  found: number;
+  /** Objects alone in their region (found and not merged with another object). */
+  clean: number;
+  /** Piece / patch regions, and those holding at least one object (the rest are false). */
+  regions: number;
+  real: number;
+}
+
+/** Score piece / patch regions against an answer key of object points. */
+export function scoreObjects(objects: ReviewObject[], regions: RasterRegion[]): ObjectScore {
+  const shown = regions.filter((r) => r.region.kind !== 'unknown');
+  const hits = objects.map((o) => shown.find((r) => containsPoint(r, o)));
+  const perRegion = new Map<RasterRegion, number>();
+  for (const h of hits) if (h) perRegion.set(h, (perRegion.get(h) ?? 0) + 1);
+  const counted = objects.map((o, i) => ({ o, h: hits[i] })).filter(({ o }) => !o.unsure);
+  return {
+    objects: counted.length,
+    found: counted.filter(({ h }) => h).length,
+    clean: counted.filter(({ h }) => h && perRegion.get(h) === 1).length,
+    regions: shown.length,
+    real: shown.filter((r) => perRegion.has(r)).length,
+  };
+}
+
 export interface FeedbackReplay {
   name: string;
   bundle: FeedbackBundle;
@@ -82,6 +111,8 @@ export interface FeedbackReplay {
   marks: MarkJudgement[];
   /** True when the marks were reviewed: then only marks reviewed 'ok' count in the metrics. */
   reviewed?: boolean;
+  /** Stored and current result scored against the review's answer key, when it has one. */
+  objects?: { original: ObjectScore; current: ObjectScore };
   placements: PlacementJudgement[];
   boxPhoto: RGBAImage | null;
   box: BoxJudgement | null;
@@ -340,6 +371,7 @@ export function replayFeedback(bundle: FeedbackBundle, name: string, opts: Repla
     });
   }
   if (opts.review) for (const j of out.marks) j.review = opts.review.marks[String(j.index)];
+  if (opts.review?.objects?.length) out.objects = { original: scoreObjects(opts.review.objects, origR), current: scoreObjects(opts.review.objects, curR) };
   out.reviewed = !!opts.review;
   return out;
 }
@@ -386,7 +418,9 @@ export type FeedbackMetrics = Record<string, number>;
  * Per-file metrics (rates 0..1; keys without any applicable mark are left out so they are neither
  * gated nor averaged): missedFound, falseRemoved, mergedSplit, wrongFixed, placementsTop1, boxError.
  * With a review only marks reviewed 'ok' count; mergedExact is the share of merged marks with a
- * reviewed part count that now come out as exactly that many regions.
+ * reviewed part count that now come out as exactly that many regions. With an answer key:
+ * objectRecall (objects found), objectClean (found alone in their region) and objectPrecision
+ * (regions holding an object).
  */
 export function feedbackMetrics(r: FeedbackReplay): FeedbackMetrics {
   const m: FeedbackMetrics = {};
@@ -401,6 +435,12 @@ export function feedbackMetrics(r: FeedbackReplay): FeedbackMetrics {
   const exact = r.marks.filter((j) => j.mark.kind === 'merged' && counts(j) && j.review?.parts);
   if (exact.length > 0) m.mergedExact = exact.filter((j) => j.currentIds.length === j.review!.parts).length / exact.length;
   rate('wrongFixed', 'wrong_place');
+  if (r.objects && r.objects.current.objects > 0) {
+    const o = r.objects.current;
+    m.objectRecall = o.found / o.objects;
+    m.objectClean = o.clean / o.objects;
+    m.objectPrecision = o.regions > 0 ? o.real / o.regions : 1;
+  }
   if (r.placements.length > 0 && r.matched) m.placementsTop1 = r.placements.filter((p) => p.ok).length / r.placements.length;
   if (r.box) m.boxError = r.box.error;
   m.items = r.marks.length + r.placements.length;
