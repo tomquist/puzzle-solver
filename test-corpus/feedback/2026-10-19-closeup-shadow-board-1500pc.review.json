@@ -1,0 +1,140 @@
+{
+  "reviewed": "2026-10-19",
+  "marks": {
+    "1": {
+      "verdict": "ok",
+      "note": "fragment (dark knob + part) of the centre two-piece group"
+    },
+    "2": {
+      "verdict": "ok",
+      "note": "fragment of the centre two-piece group"
+    },
+    "3": {
+      "verdict": "ok",
+      "note": "fragment of the centre two-piece group"
+    },
+    "4": {
+      "verdict": "ok",
+      "note": "fragment of the centre two-piece group"
+    },
+    "5": {
+      "verdict": "ok",
+      "note": "lower half of the centre two-piece group only"
+    },
+    "6": {
+      "verdict": "ok",
+      "note": "fragment of the centre two-piece group"
+    },
+    "7": {
+      "verdict": "ok"
+    },
+    "8": {
+      "verdict": "ok"
+    },
+    "9": {
+      "verdict": "ok",
+      "note": "cat patch: outline cuts through it, misses most of its outline"
+    },
+    "10": {
+      "verdict": "ok",
+      "note": "top-right piece of the cat patch only"
+    },
+    "11": {
+      "verdict": "ok",
+      "note": "bottom-left patch: only its red pieces"
+    },
+    "12": {
+      "verdict": "ok"
+    },
+    "13": {
+      "verdict": "ok",
+      "note": "left tab of the orange/white piece at the cat patch"
+    },
+    "14": {
+      "verdict": "ok"
+    },
+    "15": {
+      "verdict": "ok"
+    },
+    "16": {
+      "verdict": "ok"
+    },
+    "17": {
+      "verdict": "ok"
+    },
+    "18": {
+      "verdict": "ok"
+    },
+    "19": {
+      "verdict": "ok"
+    },
+    "20": {
+      "verdict": "ok"
+    },
+    "21": {
+      "verdict": "ok"
+    },
+    "22": {
+      "verdict": "wrong",
+      "note": "piece cut off by the left photo edge: the outline follows its visible knob"
+    },
+    "23": {
+      "verdict": "wrong",
+      "note": "piece cut off by the left photo edge: the outline follows its visible knob"
+    },
+    "24": {
+      "verdict": "ok",
+      "note": "a daisy centre inside the bottom-left patch taken for a piece"
+    },
+    "25": {
+      "verdict": "ok"
+    },
+    "26": {
+      "verdict": "ok"
+    },
+    "27": {
+      "verdict": "ok"
+    }
+  },
+  "objects": [
+    {
+      "x": 790,
+      "y": 860,
+      "note": "two assembled pieces in the centre (dark knob on top)"
+    },
+    {
+      "x": 1480,
+      "y": 1660,
+      "note": "big assembled patch on the right: cat, everything joined to it up to the pink-tab piece at the top right"
+    },
+    {
+      "x": 277,
+      "y": 1846,
+      "note": "assembled patch at the bottom left (red pieces, daisies), cut off by the photo edges"
+    },
+    {
+      "x": 997,
+      "y": 1846,
+      "unsure": true,
+      "note": "orange/white piece against the cat patch: joined or only lying next to it"
+    },
+    {
+      "x": 18,
+      "y": 618,
+      "unsure": true,
+      "note": "piece cut off by the left edge (only its knob)"
+    },
+    {
+      "x": 15,
+      "y": 950,
+      "unsure": true,
+      "note": "piece cut off by the left edge (only its knob)"
+    },
+    {
+      "x": 868,
+      "y": 6,
+      "unsure": true,
+      "note": "piece cut off by the top edge"
+    }
+  ]
+}
