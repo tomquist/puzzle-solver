@@ -259,6 +259,8 @@ export function buildGroups(regions: DetectedRegion[], matches: RegionMatch[], f
   const inAssembled = new Set<number>();
   /** Members of each assembled group, by member (an assembled group links to neighbours as one unit). */
   const assembledMembers = new Map<number, number[]>();
+  /** Cells of each assembled group, by its first member. */
+  const assembledCells = new Map<number, CellRef[]>();
   const makeGroup = (kind: RegionGroup['kind'], members: number[], confidence: number, rotations: boolean): RegionGroup | null => {
     const cells: CellRef[] = [];
     const seen = new Set<string>();
@@ -305,6 +307,7 @@ export function buildGroups(regions: DetectedRegion[], matches: RegionMatch[], f
     const g = makeGroup('assembled', members, anchor * (0.85 + 0.15 * layout), true);
     if (!g) continue;
     groups.push(g);
+    assembledCells.set(members[0], g.cells);
     members.forEach((i) => {
       inAssembled.add(i);
       assembledMembers.set(i, members);
@@ -323,10 +326,14 @@ export function buildGroups(regions: DetectedRegion[], matches: RegionMatch[], f
   const nParent = nodes.map((_, i) => i);
   const nFind = (i: number): number => (nParent[i] === i ? i : (nParent[i] = nFind(nParent[i])));
   const edgeConf = new Map<number, number[]>();
+  const unitCells = (u: number) => assembledCells.get(u) ?? cellsOf(nodes[u]);
+  const touchCells = (p: CellRef[], q: CellRef[]) => p.some((c) => q.some((d) => Math.abs(c.row - d.row) + Math.abs(c.col - d.col) === 1));
   for (const h of fits) {
     if (h.reason === 'shape' || h.confidence < NEIGHBOR_HINT) continue;
     const a = unitOf(idx.get(h.a)), b = unitOf(idx.get(h.b));
     if (a === undefined || b === undefined || a === b) continue;
+    // Hints come from the regions' own placements; a group may have moved a weak member since.
+    if (!touchCells(unitCells(a), unitCells(b))) continue;
     nParent[nFind(a)] = nFind(b);
     for (const k of [a, b]) edgeConf.set(k, [...(edgeConf.get(k) ?? []), h.confidence]);
   }

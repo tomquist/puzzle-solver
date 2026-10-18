@@ -150,7 +150,11 @@ export interface ScanMetrics {
   assembledRecall: number;
   /** 'assembled' groups that match a truth patch (cells Jaccard ≥ 0.8). */
   assembledPrecision: number;
-  /** Adjacent member pairs of 'neighbors' groups whose truth cells are adjacent. */
+  /**
+   * Linked unit pairs of 'neighbors' groups (a unit: a loose piece, or a whole assembled group)
+   * whose placed cells touch and whose truth cells touch too. Pairs with a region that matches no
+   * truth item (a false or mis-outlined region, already counted in segPrecision) are not judged.
+   */
   neighborPrecision: number;
   /** Truth-adjacent pairs of loose single pieces found in one 'neighbors' group. */
   neighborRecall: number;
@@ -304,26 +308,41 @@ export function evaluateScan(result: ScanResult, truth: PieceTruth[], cut: Jigsa
   }
   const assembled = groups.filter((g) => g.kind === 'assembled');
   const assembledOk = assembled.filter((g) => truthPatches.some(({ t }) => jaccard(g.cells, cellsOf(t)) >= 0.8)).length;
-  // Neighbours: adjacent pairs inside 'neighbors' groups vs. truth-adjacent loose single pieces.
-  const cellOfRegion = (id: number): CellRef | null => {
-    const c = matchById.get(id)?.candidates[0];
-    return c ? { row: c.row, col: c.col } : null;
-  };
+  // Neighbours: linked units (a loose piece, or a whole assembled group) inside 'neighbors' groups
+  // vs. truth; recall over truth-adjacent loose single pieces.
   const isAdj = (a: CellRef, b: CellRef) => Math.abs(a.row - b.row) + Math.abs(a.col - b.col) === 1;
+  const touch = (a: CellRef[], b: CellRef[]) => a.some((p) => b.some((q) => isAdj(p, q)));
+  const assembledOf = new Map<number, (typeof groups)[number]>();
+  for (const g of assembled) for (const id of g.regionIds) assembledOf.set(id, g);
+  const placedCells = (id: number): CellRef[] => {
+    const m = matchById.get(id);
+    const c = m?.candidates[0];
+    if (!c) return [];
+    return m.coveredCells && m.coveredCells.length > 0 ? m.coveredCells : [{ row: c.row, col: c.col }];
+  };
   let nbPairs = 0, nbOk = 0;
   const nbFound = new Set<string>();
   for (const g of groups.filter((x) => x.kind === 'neighbors')) {
-    for (let a = 0; a < g.regionIds.length; a++) {
-      for (let b = a + 1; b < g.regionIds.length; b++) {
-        const ca = cellOfRegion(g.regionIds[a]), cb = cellOfRegion(g.regionIds[b]);
-        if (!ca || !cb || !isAdj(ca, cb)) continue;
+    // Units: an assembled group's regions count once, with the group's cells.
+    const units = new Map<string, { ids: number[]; cells: CellRef[] }>();
+    for (const id of g.regionIds) {
+      const a = assembledOf.get(id);
+      const key = a ? `g${a.id}` : `r${id}`;
+      if (!units.has(key)) units.set(key, { ids: a ? a.regionIds : [id], cells: a ? a.cells : placedCells(id) });
+    }
+    const list = [...units.values()];
+    for (let a = 0; a < list.length; a++) {
+      for (let b = a + 1; b < list.length; b++) {
+        if (!touch(list[a].cells, list[b].cells)) continue;
+        const truthOf = (ids: number[]) => [...new Set(ids.map((id) => regionToTruth.get(id)).filter((t): t is number => t !== undefined))];
+        const ta = truthOf(list[a].ids), tb = truthOf(list[b].ids);
+        if (ta.length === 0 || tb.length === 0) continue;
         nbPairs++;
-        const ta = regionToTruth.get(g.regionIds[a]), tb = regionToTruth.get(g.regionIds[b]);
-        if (ta === undefined || tb === undefined) continue;
-        const A = truth[ta], B = truth[tb];
-        if (A.pieces.length === 1 && B.pieces.length === 1 && isAdj({ row: A.row, col: A.col }, { row: B.row, col: B.col })) {
-          nbOk++;
-          nbFound.add(ta < tb ? `${ta}-${tb}` : `${tb}-${ta}`);
+        if (ta.some((t) => tb.includes(t))) continue;
+        if (!touch(ta.flatMap((t) => cellsOf(truth[t])), tb.flatMap((t) => cellsOf(truth[t])))) continue;
+        nbOk++;
+        if (ta.length === 1 && tb.length === 1 && truth[ta[0]].pieces.length === 1 && truth[tb[0]].pieces.length === 1) {
+          nbFound.add(ta[0] < tb[0] ? `${ta[0]}-${tb[0]}` : `${tb[0]}-${ta[0]}`);
         }
       }
     }
