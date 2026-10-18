@@ -1,7 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const DEV_PORT = 5173;
-const PREVIEW_PORT = 4173;
+// Overridable so parallel runs (e.g. two worktrees) never share – or silently reuse – a server.
+const DEV_PORT = Number(process.env.E2E_DEV_PORT ?? 5173);
+const PREVIEW_PORT = Number(process.env.E2E_PREVIEW_PORT ?? 4173);
 /** The production build is previewed under a sub-path, like GitHub Pages serves it. */
 const PREVIEW_BASE = '/puzzle-solver/';
 
