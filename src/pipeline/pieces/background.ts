@@ -453,11 +453,87 @@ function lightFactor(fit: BackgroundFit, u: number, v: number, ref: number): num
   return Math.max(0.2, (evalPoly(fit.coefficients[0], u, v) + 16) / (ref + 16));
 }
 
+/** Own lighting of a palette colour at (u, v) relative to the main surface's (factor on L* + 16). */
+function ownLight(p: PaletteColour, u: number, v: number): number {
+  return Math.exp(p.light[0] + p.light[1] * u + p.light[2] * v);
+}
+
 /** A palette colour under the lighting at (u, v). */
 function paletteAt(fit: BackgroundFit, k: number, u: number, v: number): [number, number, number] {
   const p = fit.palette[k];
-  const f = lightFactor(fit, u, v, p.refL);
+  const f = lightFactor(fit, u, v, p.refL) * ownLight(p, u, v);
   return [f * (p.color[0] + 16) - 16, f * p.color[1], f * p.color[2]];
+}
+
+/** Range of (L* + 16) ratios to the main-lit colour within which a sample may show a second surface. */
+const OWN_LIGHT_RANGE: [number, number] = [0.6, 1.6];
+/** Ridge weight (per sample) that keeps a palette colour's own lighting near the main surface's. */
+const OWN_LIGHT_RIDGE = 0.05;
+
+/**
+ * Own lighting of a further table colour: a second surface (another table, a board, the floor
+ * beyond the table edge) faces the light differently from the main one, so its brightness follows
+ * a gradient of its own. Fitted as a plane of log (L* + 16) ratios over the samples `idx` that show
+ * the colour under some brightness (chroma scaled alike, ratio within OWN_LIGHT_RANGE), with robust
+ * refits and a ridge towards the main surface's lighting; zero (the main lighting) with too few
+ * samples.
+ */
+function fitOwnLight(s: Samples, fit: BackgroundFit, idx: readonly number[], p: PaletteColour): [number, number, number] {
+  const us: number[] = [], vs: number[] = [], ys: number[] = [];
+  const ta = 3 * Math.max(1.5, p.sigma[1]), tb = 3 * Math.max(1.5, p.sigma[2]);
+  for (const i of idx) {
+    const u = s.u[i], v = s.v[i];
+    const f = lightFactor(fit, u, v, p.refL);
+    const L = s.lab[i * 3], a = s.lab[i * 3 + 1], b = s.lab[i * 3 + 2];
+    const rho = (L + 16) / (f * (p.color[0] + 16));
+    if (!(rho >= OWN_LIGHT_RANGE[0] && rho <= OWN_LIGHT_RANGE[1])) continue;
+    if (Math.abs(a - rho * f * p.color[1]) > ta || Math.abs(b - rho * f * p.color[2]) > tb) continue;
+    us.push(u);
+    vs.push(v);
+    ys.push(Math.log(rho));
+  }
+  const n = ys.length;
+  if (n < 20) return [0, 0, 0];
+  let g: number[] = [0, 0, 0];
+  const w = new Float64Array(n).fill(1);
+  for (let iter = 0; iter < 4; iter++) {
+    const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], r = [0, 0, 0];
+    let total = 0;
+    for (let j = 0; j < n; j++) {
+      const f = [1, us[j], vs[j]];
+      for (let a = 0; a < 3; a++) {
+        r[a] += w[j] * f[a] * ys[j];
+        for (let b = 0; b < 3; b++) A[a][b] += w[j] * f[a] * f[b];
+      }
+      total += w[j];
+    }
+    for (let a = 0; a < 3; a++) A[a][a] += OWN_LIGHT_RIDGE * total;
+    const sol = solveLinear(A, r);
+    if (!sol) break;
+    g = sol;
+    const res = ys.map((y, j) => Math.abs(y - g[0] - g[1] * us[j] - g[2] * vs[j]));
+    const c = 4.685 * Math.max(0.02, 1.4826 * median(res));
+    for (let j = 0; j < n; j++) {
+      const t = res[j] / c;
+      w[j] = t < 1 ? (1 - t * t) ** 2 : 0;
+    }
+  }
+  return [g[0], g[1], g[2]];
+}
+
+/** Noise and texture of a set of samples: robust spread of the differences between neighbouring members. */
+function localSpread(s: Samples, idx: readonly number[]): [number, number, number] {
+  const member = new Uint8Array(s.n);
+  for (const i of idx) member[i] = 1;
+  const d: number[][] = [[], [], []];
+  for (const i of idx) {
+    const gx = i % s.gw;
+    for (const j of [gx + 1 < s.gw ? i + 1 : -1, i + s.gw < s.n ? i + s.gw : -1]) {
+      if (j < 0 || !member[j]) continue;
+      for (let ch = 0; ch < 3; ch++) d[ch].push(Math.abs(s.lab[i * 3 + ch] - s.lab[j * 3 + ch]));
+    }
+  }
+  return [0, 1, 2].map((ch) => (d[ch].length >= 20 ? (1.4826 * median(d[ch])) / Math.SQRT2 : Infinity)) as [number, number, number];
 }
 
 /**
@@ -522,6 +598,11 @@ function findPalette(s: Samples, fit: BackgroundFit): void {
     const f = lightFactor(fit, s.u[i], s.v[i], ref);
     return [(s.lab[i * 3] + 16) / f - 16, s.lab[i * 3 + 1] / f, s.lab[i * 3 + 2] / f];
   };
+  // Lab of a sample as if lit like a palette colour's reference (main and own lighting compensated).
+  const lit = (i: number, p: PaletteColour): [number, number, number] => {
+    const f = lightFactor(fit, s.u[i], s.v[i], p.refL) * ownLight(p, s.u[i], s.v[i]);
+    return [(s.lab[i * 3] + 16) / f - 16, s.lab[i * 3 + 1] / f, s.lab[i * 3 + 2] / f];
+  };
   const mainSigma: [number, number, number] = [fit.sigma[0], fit.sigma[1], fit.sigma[2]];
   for (let round = 0; round < 2; round++) {
     const out = band.filter((i) => sampleDistance(s, i, fit) >= 3.5);
@@ -565,35 +646,31 @@ function findPalette(s: Samples, fit: BackgroundFit): void {
     let refL = 0;
     for (const i of members) refL += evalPoly(fit.coefficients[0], s.u[i], s.v[i]);
     refL /= members.length;
-    const color: [number, number, number] = [0, 0, 0], sigma: [number, number, number] = [0, 0, 0];
-    const vals = new Float32Array(members.length);
-    for (let ch = 0; ch < 3; ch++) {
-      members.forEach((i, j) => { vals[j] = comp(i, refL)[ch]; });
-      color[ch] = median(vals);
-      members.forEach((i, j) => { vals[j] = Math.abs(comp(i, refL)[ch] - color[ch]); });
-      // Spread of the paint itself: the MAD again over the core, without the blends at pattern edges.
-      const mad = median(vals);
-      const core = Array.from(vals).filter((v) => v <= 2.5 * mad);
-      sigma[ch] = Math.max(SIGMA_FLOOR[ch], 1.2 * 1.4826 * (core.length >= 10 ? median(core) : mad));
-    }
-    // Local spread: differences between neighbouring member samples (a lighting gradient over the
-    // surface adds nothing; pieces' print does).
-    const isMember = new Uint8Array(s.n);
-    for (const i of members) isMember[i] = 1;
-    const ld: number[][] = [[], [], []];
-    for (const i of members) {
-      const gx = i % s.gw;
-      for (const j of [gx + 1 < s.gw ? i + 1 : -1, i + s.gw < s.n ? i + s.gw : -1]) {
-        if (j < 0 || !isMember[j]) continue;
-        for (let ch = 0; ch < 3; ch++) ld[ch].push(Math.abs(s.lab[i * 3 + ch] - s.lab[j * 3 + ch]));
+    const colour: PaletteColour = { color: [0, 0, 0], sigma: [0, 0, 0], refL, light: [0, 0, 0], interior: 0 };
+    const estimate = (idx: readonly number[]) => {
+      const vals = new Float32Array(idx.length);
+      for (let ch = 0; ch < 3; ch++) {
+        idx.forEach((i, j) => { vals[j] = lit(i, colour)[ch]; });
+        colour.color[ch] = median(vals);
+        idx.forEach((i, j) => { vals[j] = Math.abs(lit(i, colour)[ch] - colour.color[ch]); });
+        // Spread of the paint itself: the MAD again over the core, without the blends at pattern edges.
+        const mad = median(vals);
+        const core = Array.from(vals).filter((v) => v <= 2.5 * mad);
+        colour.sigma[ch] = Math.max(SIGMA_FLOOR[ch], 1.2 * 1.4826 * (core.length >= 10 ? median(core) : mad));
       }
-    }
-    const localSigma = ld.map((v) => (v.length >= 20 ? (1.4826 * median(v)) / Math.SQRT2 : Infinity));
-    if (globalThis.process?.env?.PALDBG) globalThis.console.log('PALDBG local', localSigma.map((v) => v.toFixed(2)).join(','), 'pairs', ld[0].length);
-    // Plain paint is about as uniform as a plain table.
-    if (globalThis.process?.env?.PALDBG) globalThis.console.log('PALDBG sigma', sigma.map((v) => v.toFixed(2)).join(','), 'main', mainSigma.map((v) => v.toFixed(2)).join(','), 'color', color.map((v) => v.toFixed(1)).join(','));
-    if (sigma[1] > 3 * mainSigma[1] + 2 || sigma[2] > 3 * mainSigma[2] + 2 || sigma[0] > 2 * mainSigma[0] + 2.5) break;
-    fit.palette.push({ color, sigma, refL, interior: 0 });
+    };
+    estimate(members);
+    // A second surface is lit in its own way: with that lighting, its members are all the samples
+    // showing it (not only those lit like the mode), and colour and spread come from them.
+    colour.light = fitOwnLight(s, fit, out, colour);
+    const litMembers = out.filter((i) => within(colour.color, lit(i, colour), 8));
+    if (litMembers.length >= members.length) estimate(litMembers);
+    // Plain paint is about as uniform as a plain table: judged by the differences between
+    // neighbouring samples showing it (a lighting gradient adds nothing to them, print does).
+    const localSigma = localSpread(s, litMembers.length >= members.length ? litMembers : members);
+    if (globalThis.process?.env?.PALDBG) globalThis.console.log('PALDBG local', localSigma.map((v) => v.toFixed(2)).join(','), 'sigma', colour.sigma.map((v) => v.toFixed(2)).join(','), 'main', mainSigma.map((v) => v.toFixed(2)).join(','), 'color', colour.color.map((v) => v.toFixed(1)).join(','), 'light', colour.light.map((v) => v.toFixed(3)).join(','), 'members', members.length, litMembers.length);
+    if (localSigma[1] > 2 * mainSigma[1] + 1 || localSigma[2] > 2 * mainSigma[2] + 1 || localSigma[0] > 2 * mainSigma[0] + 1.5) break;
+    fit.palette.push(colour);
   }
   if (fit.palette.length === 0) return;
   // With the other colours known, the main surface's own spread (a fine pattern inflates it).
