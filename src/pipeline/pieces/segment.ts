@@ -822,12 +822,13 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
     if (!pa || !pb) continue;
     const ca = pa.shape?.confidence ?? 0, cb = pb.shape?.confidence ?? 0;
     const crease = median(v);
-    if (globalThis.process?.env?.SPLITDBG) globalThis.console.log('  pair', a, b, 'crease', crease.toFixed(1), 'conf', ca.toFixed(2), cb.toFixed(2), 'grid', onOneGrid(pa, pb, c, body));
+    if (globalThis.process?.env?.SPLITDBG) globalThis.console.log('  pair', a, b, 'crease', crease.toFixed(1), 'q25', [...v].sort((x, y) => x - y)[Math.floor(0.25 * (v.length - 1))].toFixed(1), 'q10', [...v].sort((x, y) => x - y)[Math.floor(0.1 * (v.length - 1))].toFixed(1), 'len', v.length, 'conf', ca.toFixed(2), cb.toFixed(2), 'grid', onOneGrid(pa, pb, c, body));
     cuts++;
     if (crease >= CREASE_MIN) creases++;
     const evidence = (crease >= CREASE_MIN && mixed) || viaGap || (Math.max(ca, cb) >= 0.7 && (Math.min(ca, cb) >= UNCERTAIN_CONFIDENCE || c.secondPeak > TOUCHING_SECOND_PEAK));
     if (!evidence || onOneGrid(pa, pb, c, body)) root[find(a)] = find(b);
   }
+  if (globalThis.process?.env?.SPLITDBG) { const iv: number[] = []; for (let i = 0; i < w * h; i++) if (c.mask.data[i]) iv.push(th[i]); iv.sort((a, b) => a - b); globalThis.console.log('THQ', [0.5, 0.75, 0.9, 0.95].map((q) => iv[Math.floor(q * (iv.length - 1))].toFixed(1)).join(',')); }
   if (globalThis.process?.env?.SPLITDBG) globalThis.console.log('EDGEDBG', JSON.stringify(c.bbox), 'k', k, 'viaGap', viaGap, 'parts', live.map((l) => (area[l] / ra).toFixed(2)).join(','), 'creased', creases, '/', cuts, 'second', c.secondPeak.toFixed(2), 'mixed', mixed, aligned, '/', outer.length);
   if (globalThis.process?.env?.SPLITDBG) globalThis.console.log('  outer angles', live.map((l) => { const pc = parts.get(l); return pc ? `${outerAngle(pc, c)?.toFixed(0) ?? 'n'}/${pc.orientation.toFixed(0)}` : '-'; }).join(','), 'cluster', c.orientation.toFixed(0));
   const groups = new Map<number, number[]>();
@@ -973,15 +974,20 @@ function peelSoft(c: Candidate, img: RGBAImage, ra: number, W: number, H: number
     if (flooded[i]) removed++;
     else rest.data[i] = 1;
   }
+  if (globalThis.process?.env?.PEELDBG) globalThis.console.log('PEEL', JSON.stringify(c.bbox), (c.area / ra).toFixed(2), 'removed', (removed / c.area).toFixed(2));
   if (removed < 0.08 * c.area) return null;
   const cleaned = fillHoles(open(rest, 1));
   const { labels, stats } = labelComponents(cleaned, 8);
   const parts = stats
     .filter((st) => st.area >= 0.5 * ra)
-    .map((st) => makeCandidate(componentMask(labels, w, st.label, st.bbox), { x: st.bbox.x + x0, y: st.bbox.y + y0, width: st.bbox.width, height: st.bbox.height }, W, H, st.area));
-  if (parts.length === 0) return null;
+    .map((st) => makeCandidate(componentMask(labels, w, st.label, st.bbox), { x: st.bbox.x + x0, y: st.bbox.y + y0, width: st.bbox.width, height: st.bbox.height }, W, H, st.area, SHAPE_MAX_PIECES * ra));
+  // Larger than a piece, nearly all of it soft and nothing piece-sized left: a glare halo or a
+  // shadow (with at most a piece as featureless as the light on it), not a region. (A single
+  // piece on a busy table may look soft all over.)
+  if (parts.length === 0) return removed >= SOFT_ONLY * c.area && c.area >= SOFT_MIN_PIECES * ra ? [] : null;
   const before = c.shape?.confidence ?? 0;
   const ok = Math.max(...parts.map((p) => p.shape?.confidence ?? 0)) >= Math.max(0.6, before + 0.2);
+  if (globalThis.process?.env?.PEELDBG) globalThis.console.log('  PEEL parts', parts.map((p) => (p.area / ra).toFixed(2) + '/' + (p.shape?.confidence ?? 0).toFixed(2)).join(','), 'before', before.toFixed(2), ok);
   return ok ? parts : null;
 }
 
@@ -1226,17 +1232,15 @@ function bodyAspect(s: PieceShape): number {
   return Math.max(a, b) / Math.max(1e-6, Math.min(a, b));
 }
 
-/** Largest share of a split part's area its holes may take (a ring around a piece is a halo). */
-const MAX_PART_HOLE = 0.3;
+/** Largest cluster (piece areas) whose neck split may be replaced by a cut along the edges. */
+const EDGE_RECUT_MAX_PIECES = 4;
 
-/** Area of a mask's holes relative to the mask's own area. */
-function holeShare(m: Mask): number {
-  const a = maskArea(m);
-  return a > 0 ? (maskArea(fillHoles(m)) - a) / a : 0;
-}
-
+/** Share of a region peeled off as soft from which, with no piece-sized rest, it is dropped. */
+const SOFT_ONLY = 0.75;
+/** Smallest region (piece areas) dropped as all soft. */
+const SOFT_MIN_PIECES = 1.5;
 /** Largest region (piece areas) whose soft halo or shadow is peeled off. */
-const PEEL_MAX_PIECES = 4;
+const PEEL_MAX_PIECES = 8;
 /** Largest part (piece areas) of a split that is split again at wider necks. */
 const RESPLIT_MAX_PIECES = 20;
 /** Largest candidate (piece areas) whose outline is analysed as a single piece. */
@@ -1471,7 +1475,14 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
       const ra = refAreaAt(c);
       // (Not clusters of many pieces: peeling them is slow and changes little.)
       const doubtful = !c.touchesBorder && c.area >= 0.6 * ra && c.area <= PEEL_MAX_PIECES * ra && (c.area > 1.3 * ra || !c.shape || c.shape.confidence < 0.7);
-      out.push(...((doubtful ? peelSoft(c, scored, ra, W, H) : null) ?? [c]));
+      const peeled = doubtful ? peelSoft(c, scored, ra, W, H) : null;
+      if (peeled && peeled.length === 0 && globalThis.process?.env?.PEELDBG) {
+        let strong = 0;
+        const { x: bx, y: by, width: bw, height: bh } = c.bbox;
+        for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) if (c.mask.data[y * bw + x] && score.data[(y + by) * W + x + bx] >= th.high) strong++;
+        globalThis.console.log('SOFTDROP', JSON.stringify(c.bbox), (c.area / ra).toFixed(2), 'strong', (strong / c.area).toFixed(2));
+      }
+      out.push(...(peeled ?? [c]));
     }
     cands = out;
   }
@@ -1488,14 +1499,19 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
         // Every part at least half a piece: the opening only cuts contacts clearly narrower than a
         // piece body (pieces of an assembled patch touch along whole sides).
         const parts = splitAtNecks(c, Math.max(2, NECK_RADII[k] * bodyAt), 0.3 * ra, 0.5 * ra);
-        if (globalThis.process?.env?.SPLITDBG && parts) globalThis.console.log('NECK', JSON.stringify(c.bbox), 'r', NECK_RADII[k], 'parts', parts.map((p) => `${(maskArea(p.mask) / ra).toFixed(2)}h${holeShare(p.mask).toFixed(2)}`).join(','));
-        // A part around a hole is a halo (glare, shadow) the piece was cut out of, not a piece.
-        if (!parts || parts.some((p) => holeShare(p.mask) > MAX_PART_HOLE)) continue;
+        if (!parts) continue;
         const out: Candidate[] = [];
         for (const p of parts) {
           const pc = makeCandidate(p.mask, p.bbox, W, H, undefined, SHAPE_MAX_PIECES * ra);
           // Parts of many pieces (an assembled frame) are not cut further.
           out.push(...((pc.area <= RESPLIT_MAX_PIECES * ra ? splitTouching(pc, k) : null) ?? [pc]));
+        }
+        // A cut through a contact zone may spoil every outline; where the edges between a few
+        // pieces give as many parts with a convincing outline, those are taken.
+        const convincing = (ps: Candidate[]) => ps.some((p) => (p.shape?.confidence ?? 0) >= REFERENCE_CONFIDENCE);
+        if (c.area <= EDGE_RECUT_MAX_PIECES * ra && !convincing(out)) {
+          const edges = splitAtEdges(c, ra, bodyAt, preClose, scored, W, H);
+          if (edges && edges.length === out.length && convincing(edges)) return edges;
         }
         return out;
       }
