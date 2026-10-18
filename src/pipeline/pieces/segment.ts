@@ -863,7 +863,50 @@ const CLUTTER_ELONGATION = 3;
 function isPlausibleSingle(c: Candidate): boolean {
   if (!c.shape || c.touchesBorder || c.shape.confidence < REFERENCE_CONFIDENCE) return false;
   const r = c.area / (c.shape.bodySize * c.shape.bodySize);
-  return r > 0.6 && r < 1.6;
+  return r > 0.6 && r < 1.6 && bodyAspect(c.shape) <= SINGLE_MAX_ASPECT;
+}
+
+/** Weight (in single pieces) of the unit area of all objects against the clean single outlines. */
+const UNIT_WEIGHT = 2;
+
+/**
+ * The area of one piece that best explains a set of object areas (loose pieces, pairs, clusters of
+ * touching pieces) as whole multiples of it: objects close to one unit count fully, multiples less
+ * (several counts fit them), and objects well below a unit count against it. Robust where few
+ * objects are clean single pieces (dense layouts). 0 without objects.
+ */
+function unitArea(areas: number[], weights: number[]): number {
+  if (areas.length === 0) return 0;
+  const lo = Math.min(...areas) / 1.6, hi = Math.max(...areas) * 1.1;
+  let best = 0, bestScore = -Infinity;
+  for (let A = lo; A <= hi; A *= 1.02) {
+    let score = 0;
+    for (let i = 0; i < areas.length; i++) {
+      const x = areas[i] / A;
+      if (x < 0.7) {
+        score -= 0.5 * weights[i];
+        continue;
+      }
+      const k = Math.max(1, Math.round(x));
+      const e = (x - k) / (0.18 * Math.sqrt(k));
+      score += (weights[i] * Math.exp(-0.5 * e * e)) / k;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = A;
+    }
+  }
+  return best;
+}
+
+/** Largest body aspect ratio of a single piece (two pieces side by side make 2). */
+const SINGLE_MAX_ASPECT = 1.35;
+
+/** Aspect ratio (≥ 1) of a shape's body quadrilateral: mean of opposite sides, longer / shorter. */
+function bodyAspect(s: PieceShape): number {
+  const d = (i: number) => Math.hypot(s.corners[(i + 1) % 4].x - s.corners[i].x, s.corners[(i + 1) % 4].y - s.corners[i].y);
+  const a = d(0) + d(2), b = d(1) + d(3);
+  return Math.max(a, b) / Math.max(1e-6, Math.min(a, b));
 }
 
 /** Largest hole that is filled, in typical object areas (see typicalObjectArea). */
@@ -995,10 +1038,23 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     lap('shapes');
     // Single-piece reference size.
     const references = () => {
-      const singles = referenceSingles(cands, MIN_REFERENCE_SHARE * W * H);
+      const minRef = MIN_REFERENCE_SHARE * W * H;
       const others = cands.filter((c) => !c.touchesBorder);
-      const refArea = singles.length > 0 ? median(singles.map((c) => c.area)) : others.length > 0 ? median(others.map((c) => c.area)) : 0;
-      const refBody = singles.length > 0 ? median(singles.map((c) => c.shape!.bodySize)) : Math.sqrt(refArea);
+      // Unit area from every object (loose pieces, pairs, clusters of touching pieces); the clean
+      // single-piece outlines that agree with it refine it.
+      const objects = others.filter((c) => c.area >= minRef);
+      const unit = unitArea(objects.map((c) => c.area), objects.map((c) => (isPlausibleSingle(c) ? 1 + 2 * c.shape!.confidence : 1)));
+      const singles = referenceSingles(cands, minRef).filter((c) => unit <= 0 || (c.area >= 0.65 * unit && c.area <= 1.55 * unit));
+      let refArea: number, refBody: number;
+      if (singles.length > 0) {
+        const ms = median(singles.map((c) => c.area));
+        refArea = unit > 0 ? Math.exp((singles.length * Math.log(ms) + UNIT_WEIGHT * Math.log(unit)) / (singles.length + UNIT_WEIGHT)) : ms;
+        refBody = median(singles.map((c) => c.shape!.bodySize)) * Math.sqrt(refArea / ms);
+      } else {
+        refArea = unit > 0 ? unit : others.length > 0 ? median(others.map((c) => c.area)) : 0;
+        refBody = Math.sqrt(refArea);
+      }
+      if (globalThis.process?.env?.REFDBG) globalThis.console.log('REFDBG', cands.filter((c) => c.shape && !c.touchesBorder).map((c) => `${Math.round(c.area)}/${c.shape!.bodySize.toFixed(0)}/${c.shape!.confidence.toFixed(2)}${singles.includes(c) ? '*' : ''}`).join(' '), 'unit', unit.toFixed(0), '=>', refArea.toFixed(0), refBody.toFixed(0));
       return { singles, refArea, refBody, noReference: singles.length === 0 && others.length < 3 };
     };
     let ref = references();

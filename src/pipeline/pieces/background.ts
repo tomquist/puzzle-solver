@@ -554,6 +554,7 @@ function findPalette(s: Samples, fit: BackgroundFit): void {
       const m = [(evalPoly(k[0], s.u[i], s.v[i]) + 16) / f - 16, evalPoly(k[1], s.u[i], s.v[i]) / f, evalPoly(k[2], s.u[i], s.v[i]) / f];
       if (mixDistance(q[0], q[1], q[2], m, med, is[0], is[1], is[2]) < 3.5) footprint++;
     });
+    if (globalThis.process?.env?.PALDBG) globalThis.console.log('PALDBG round', round, 'band', band.length, 'out', out.length, 'members', members.length, 'med', med.map((v) => v.toFixed(1)).join(','), 'footprint', footprint, 'need', (PALETTE_MIN_SHARE * band.length).toFixed(0));
     if (footprint < PALETTE_MIN_SHARE * band.length) break;
     // Colour and spread under the lighting at the members' mean.
     let refL = 0;
@@ -571,7 +572,8 @@ function findPalette(s: Samples, fit: BackgroundFit): void {
       sigma[ch] = Math.max(SIGMA_FLOOR[ch], 1.2 * 1.4826 * (core.length >= 10 ? median(core) : mad));
     }
     // Plain paint is about as uniform as a plain table.
-    if (sigma[1] > 3 * mainSigma[1] + 2 || sigma[2] > 3 * mainSigma[2] + 2 || sigma[0] > 3 * mainSigma[0] + 8) break;
+    if (globalThis.process?.env?.PALDBG) globalThis.console.log('PALDBG sigma', sigma.map((v) => v.toFixed(2)).join(','), 'main', mainSigma.map((v) => v.toFixed(2)).join(','), 'color', color.map((v) => v.toFixed(1)).join(','));
+    if (sigma[1] > 3 * mainSigma[1] + 2 || sigma[2] > 3 * mainSigma[2] + 2 || sigma[0] > 2 * mainSigma[0] + 2.5) break;
     fit.palette.push({ color, sigma, refL, interior: 0 });
   }
   if (fit.palette.length === 0) return;
