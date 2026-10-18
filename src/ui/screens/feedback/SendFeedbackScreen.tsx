@@ -21,6 +21,7 @@ import { usePuzzle, type ReferenceImage } from '../../context/PuzzleContext';
 import { useRepo } from '../../context/RepositoryContext';
 import { useAsync } from '../../hooks/useAsync';
 import { useObjectUrl, useStoredBlob, useStoredBlobUrl } from '../../hooks/useObjectUrl';
+import { usePrefs } from '../../hooks/usePrefs';
 import { formatBytes, formatDate, plural } from '../../lib/format';
 import {
   addMissed,
@@ -28,20 +29,30 @@ import {
   areaName,
   detectionTones,
   foundText,
+  looksLikeSeveral,
   MARK_KINDS,
+  markHint,
+  markIndexForRegion,
   markInfo,
   regionAt,
   removeMark,
   setCorrectCell,
   setRegionMark,
   toggleRegionMark,
+  typicalPieceArea,
   type DetectionTone,
+  type MarkHint,
 } from '../../lib/feedbackMarks';
 import { cellAt, regionCenter } from '../../lib/overlay';
+import { setDismissed } from '../../lib/prefs';
 import { href } from '../../lib/routes';
 import { FeedbackOverlay } from './FeedbackOverlay';
+import { MarkPictogram } from './MarkPictogram';
 
 export const PRIVACY_NOTE = 'The file contains your photos. Nothing is sent automatically – you choose where to send it.';
+
+/** Prefs key: the "How to mark" help was seen (it then starts collapsed). */
+const HOW_TO_KEY = 'feedback-how-to';
 
 export function SendFeedbackScreen({ scanId }: { scanId?: string }) {
   const repo = useRepo();
@@ -360,14 +371,39 @@ function ScanMarking({
   const tones = useMemo(() => detectionTones(result, puzzle.grid), [result, puzzle.grid]);
   const toneOf = (id: number): DetectionTone => tones.get(id) ?? 'hidden';
   const regions = useMemo(() => new Map(result.regions.map((r) => [r.id, r])), [result]);
-  // A "missed piece" tap inside a region the app did find: ask before adding it.
+  const pieceArea = useMemo(() => typicalPieceArea(result), [result]);
+
+  // "How to mark": open on the first visit; once closed (or once marks were placed with it open)
+  // it starts collapsed, one tap away.
+  const [prefs, updatePrefs] = usePrefs();
+  const [howTo, setHowTo] = useState(() => !prefs.dismissed.includes(HOW_TO_KEY));
+  const rememberHowToSeen = () => {
+    if (!prefs.dismissed.includes(HOW_TO_KEY)) updatePrefs((p) => setDismissed(p, HOW_TO_KEY, true));
+  };
+  const closeHowTo = () => {
+    setHowTo(false);
+    rememberHowToSeen();
+  };
+  const hasMarks = marks.length > 0;
+  useEffect(() => {
+    if (hasMarks) rememberHowToSeen();
+  }, [hasMarks]); // only when the first mark appears
+
+  // A "Piece not found" tap inside a region the app did find: ask before adding it.
   const [pending, setPending] = useState<{ regionId: number; x: number; y: number }>();
+  // A second opinion on the region mark just added (see markHint); a hint the user dismissed is not
+  // offered again on this visit, the one about joined pieces only once.
+  const [hintFor, setHint] = useState<{ regionId: number; kind: MarkHint }>();
+  // Hidden once its mark is gone (e.g. removed in the list below).
+  const hint = hintFor && markIndexForRegion(marks, hintFor.regionId) >= 0 ? hintFor : undefined;
+  const quietHints = useRef(new Set<MarkHint>());
   const note = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (pending) note.current?.scrollIntoView({ block: 'nearest' });
-  }, [pending]);
+    if (pending || hint) note.current?.scrollIntoView({ block: 'nearest' });
+  }, [pending, hint]);
   const chooseMode = (m: FeedbackMarkKind) => {
     setPending(undefined);
+    setHint(undefined);
     setMode(m);
   };
   const tapPoint = (x: number, y: number) => {
@@ -378,6 +414,24 @@ function ScanMarking({
       setMarks((m) => addMissed(m, x, y));
     }
   };
+  const tapRegion = (id: number) => {
+    if (mode === 'missed') return;
+    const i = markIndexForRegion(marks, id);
+    // Tapping the same kind again removes the mark; no hint then.
+    const added = i < 0 || marks[i].kind !== mode;
+    setMarks((m) => toggleRegionMark(m, mode, id));
+    const reg = regions.get(id);
+    const kind = added && reg ? markHint(mode, reg, toneOf(id), pieceArea) : undefined;
+    setHint(kind && !quietHints.current.has(kind) ? { regionId: id, kind } : undefined);
+    if (kind === 'assembled') quietHints.current.add(kind);
+  };
+  const dismissHint = () => {
+    if (hint) quietHints.current.add(hint.kind);
+    setHint(undefined);
+  };
+  const pendingRegion = pending && regions.get(pending.regionId);
+  const pendingAlternatives = pending ? alternativesFor(toneOf(pending.regionId), !!pendingRegion && looksLikeSeveral(pendingRegion, pieceArea)) : [];
+  const info = markInfo(mode);
 
   const describe = (m: FeedbackMark): string => {
     if (m.kind === 'missed') return areaName(m.x, m.y, result.width, result.height);
@@ -390,10 +444,26 @@ function ScanMarking({
 
   return (
     <>
-      <p className="muted small">Mark what the app got wrong – every mark helps improve piece detection. All optional.</p>
-
       <section className="stack-sm">
-        <div className="fb-modes" role="radiogroup" aria-label="What’s wrong?">
+        <div className="fb-modes-head">
+          <h2 className="h3" id="fb-modes-title">
+            What’s wrong?
+          </h2>
+          <button
+            type="button"
+            className={`btn btn-sm btn-quiet fb-howto-toggle${howTo ? ' active' : ''}`}
+            aria-expanded={howTo}
+            aria-controls="fb-howto"
+            onClick={() => (howTo ? closeHowTo() : setHowTo(true))}
+            data-testid="fb-howto-toggle"
+          >
+            <IconInfo size={18} />
+            How to mark
+          </button>
+        </div>
+        <p className="muted small">Mark what the app got wrong – as many or as few as you like. Every mark helps improve piece detection.</p>
+        {howTo && <HowToMark onClose={closeHowTo} />}
+        <div className="fb-modes" role="radiogroup" aria-labelledby="fb-modes-title">
           {MARK_KINDS.map((k) => (
             <button
               key={k.kind}
@@ -404,16 +474,13 @@ function ScanMarking({
               onClick={() => chooseMode(k.kind)}
               data-testid={`fb-mode-${k.kind}`}
             >
-              <span className="mk-dot" aria-hidden="true" />
+              <MarkPictogram kind={k.kind} />
               <span className="fb-mode-label">{k.label}</span>
             </button>
           ))}
         </div>
-        <p className="small fb-help" aria-live="polite">
-          {markInfo(mode).help}
-        </p>
-        <p className="xsmall fb-photo-hint" data-testid="fb-photo-hint">
-          Coloured = found by the app. Tap Missed piece and then any piece without colour.
+        <p className={`small fb-help mk-${mode}`} aria-live="polite" data-testid="fb-help">
+          {info.what} <strong>{info.how}</strong>
         </p>
         <div className="viewer-frame tall fb-viewer" style={{ aspectRatio: `${result.width} / ${result.height}` }}>
           {photoUrl ? (
@@ -428,9 +495,7 @@ function ScanMarking({
                     mode={mode}
                     pendingRegionId={pending?.regionId}
                     scale={scale}
-                    onRegion={(id) => {
-                      if (mode !== 'missed') setMarks((m) => toggleRegionMark(m, mode, id));
-                    }}
+                    onRegion={tapRegion}
                     onPoint={(p) => tapPoint(p.x, p.y)}
                     onRemove={(i) => {
                       setPending(undefined);
@@ -445,11 +510,11 @@ function ScanMarking({
           )}
         </div>
         {pending && (
-          <div className="fb-found-note" ref={note} role="status" data-testid="fb-found-note">
-            <div className="fb-found-head">
+          <div className="fb-note" ref={note} role="status" data-testid="fb-found-note">
+            <div className="fb-note-head">
               <p className="small">
                 This piece was {foundText(toneOf(pending.regionId))} – use{' '}
-                {alternativesFor(toneOf(pending.regionId))
+                {pendingAlternatives
                   .slice(0, 2)
                   .map((k) => markInfo(k).label)
                   .join(' or ')}{' '}
@@ -459,12 +524,12 @@ function ScanMarking({
                 <IconClose size={16} />
               </button>
             </div>
-            <div className="fb-found-actions">
-              {alternativesFor(toneOf(pending.regionId)).map((k) => (
+            <div className="fb-note-actions">
+              {pendingAlternatives.map((k) => (
                 <button
                   key={k}
                   type="button"
-                  className={`btn btn-sm fb-found-kind mk-${k}`}
+                  className={`btn btn-sm fb-note-kind mk-${k}`}
                   onClick={() => {
                     setMarks((m) => setRegionMark(m, k, pending.regionId));
                     setPending(undefined);
@@ -484,8 +549,52 @@ function ScanMarking({
                 }}
                 data-testid="fb-found-missed"
               >
-                Add as missed anyway
+                Mark as not found anyway
               </button>
+            </div>
+          </div>
+        )}
+        {hint && (
+          <div className="fb-note is-hint" ref={note} role="status" data-testid="fb-hint" data-hint={hint.kind}>
+            <div className="fb-note-head">
+              <p className="small">
+                {hint.kind === 'several'
+                  ? `Looks like more than one piece – ${markInfo('merged').label}?`
+                  : 'Blue = pieces you joined: one outline around them is right. Keep this mark only if the outline itself is off.'}
+              </p>
+              <button type="button" className="icon-btn small" onClick={dismissHint} aria-label="Dismiss" data-testid="fb-hint-dismiss">
+                <IconClose size={16} />
+              </button>
+            </div>
+            <div className="fb-note-actions">
+              <button
+                type="button"
+                className="btn btn-sm fb-note-kind mk-merged"
+                onClick={() => {
+                  setMarks((m) => setRegionMark(m, 'merged', hint.regionId));
+                  setHint(undefined);
+                }}
+                data-testid="fb-hint-merged"
+              >
+                <span className="mk-dot" aria-hidden="true" />
+                {hint.kind === 'several' ? `Change to ${markInfo('merged').label}` : markInfo('merged').label}
+              </button>
+              {hint.kind === 'assembled' && (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-quiet"
+                  onClick={() => {
+                    setMarks((m) => {
+                      const i = markIndexForRegion(m, hint.regionId);
+                      return i < 0 ? m : removeMark(m, i);
+                    });
+                    setHint(undefined);
+                  }}
+                  data-testid="fb-hint-remove"
+                >
+                  Remove mark
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -500,7 +609,7 @@ function ScanMarking({
           </span>
           <span className="fb-key-item">
             <span className="fb-swatch st-patch" aria-hidden="true" />
-            Assembled
+            Assembled (pieces you joined)
           </span>
           <span className="fb-key-item">
             <span className="fb-swatch is-hidden" aria-hidden="true" />
@@ -544,6 +653,45 @@ function ScanMarking({
         )}
       </section>
     </>
+  );
+}
+
+/** Which mark to choose when several seem to fit, and how to place marks. */
+function HowToMark({ onClose }: { onClose: () => void }) {
+  const name = (k: FeedbackMarkKind) => <strong>{markInfo(k).label}</strong>;
+  return (
+    <div className="fb-howto" id="fb-howto" data-testid="fb-howto">
+      <h3 className="fb-howto-title">Which one? Look inside the outline</h3>
+      <ul className="fb-rules" data-testid="fb-rules">
+        <li>
+          <MarkPictogram kind="not_a_piece" />
+          <span>No piece inside → {name('not_a_piece')}, even if the outline is odd.</span>
+        </li>
+        <li>
+          <MarkPictogram kind="merged" />
+          <span>Two or more loose pieces inside → {name('merged')}, even if the outline is off too.</span>
+        </li>
+        <li>
+          <MarkPictogram kind="bad_outline" />
+          <span>One piece, but the outline is off → {name('bad_outline')}.</span>
+        </li>
+        <li>
+          <MarkPictogram kind="assembled" />
+          <span>
+            <strong>Blue</strong> = pieces you’ve already joined: one outline around them is right. Mark it only if they are really loose or the outline is off.
+          </span>
+        </li>
+      </ul>
+      <h3 className="fb-howto-title">How to place</h3>
+      <ul className="fb-steps">
+        <li>Zoom with two fingers or the + / − buttons.</li>
+        <li>Tap inside the outline – for {name('missed')}, on the middle of the piece.</li>
+        <li>Tap a mark again to remove it.</li>
+      </ul>
+      <button type="button" className="btn btn-sm fb-howto-close" onClick={onClose} data-testid="fb-howto-close">
+        Got it
+      </button>
+    </div>
   );
 }
 

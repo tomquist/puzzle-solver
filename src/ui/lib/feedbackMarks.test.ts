@@ -7,13 +7,17 @@ import {
   areaName,
   detectionTones,
   foundText,
+  looksLikeSeveral,
+  markHint,
   markIndexForRegion,
   MARK_KINDS,
   regionAt,
   removeMark,
   setCorrectCell,
   setRegionMark,
+  SEVERAL_PIECES_AREA,
   toggleRegionMark,
+  typicalPieceArea,
 } from './feedbackMarks';
 
 function square(id: number, x: number, y: number, size: number, kind: DetectedRegion['kind'] = 'piece'): DetectedRegion {
@@ -82,9 +86,64 @@ describe('feedback marks', () => {
     expect(areaName(-5, 299, 300, 300)).toBe('bottom left');
   });
 
-  it('has a label and help text for every kind', () => {
+  it('has a label, a meaning and how to place it for every kind', () => {
     expect(MARK_KINDS.map((k) => k.kind)).toEqual(['missed', 'not_a_piece', 'merged', 'bad_outline', 'wrong_place']);
-    for (const k of MARK_KINDS) expect(k.label && k.help).toBeTruthy();
+    for (const k of MARK_KINDS) expect(k.label && k.what && k.how).toBeTruthy();
+    // Labels are told apart in hints and notes.
+    expect(new Set(MARK_KINDS.map((k) => k.label)).size).toBe(MARK_KINDS.length);
+  });
+});
+
+describe('typical piece size and hints on a mark', () => {
+  // Single pieces of about 100 × 100 (one cut off at the photo border), a two-piece blob the app
+  // took for one piece, an assembled pair and a speck.
+  const regions = [
+    square(1, 0, 0, 100),
+    square(2, 200, 0, 100),
+    square(3, 400, 0, 110),
+    square(4, 600, 0, 95),
+    { ...square(5, 900, 0, 40), touchesBorder: true },
+    { ...square(6, 0, 200, 100), area: 2.1 * 100 * 100 },
+    square(7, 200, 200, 150, 'patch'),
+    square(8, 400, 200, 10, 'unknown'),
+  ];
+  const result = scan({ regions });
+
+  it('takes the median single piece, leaving out cut-off pieces, patches and specks', () => {
+    // Single pieces: 95², 100², 100², 110², 2.1 × 100² → median 100².
+    expect(typicalPieceArea(result)).toBe(10_000);
+    expect(typicalPieceArea(scan({ regions: [square(1, 0, 0, 100), square(2, 200, 0, 120)] }))).toBeUndefined();
+    expect(typicalPieceArea(scan({ regions: [square(1, 0, 0, 100), square(2, 200, 0, 120), square(3, 400, 0, 90), square(4, 600, 0, 110)] }))).toBe((100 * 100 + 110 * 110) / 2);
+  });
+
+  it('calls a region "several pieces" only when clearly larger than one piece', () => {
+    const area = typicalPieceArea(result);
+    expect(looksLikeSeveral(regions[5], area)).toBe(true);
+    expect(looksLikeSeveral(regions[2], area)).toBe(false); // 1.21× – a big single piece
+    expect(looksLikeSeveral({ ...regions[0], area: SEVERAL_PIECES_AREA * 10_000 }, area)).toBe(true);
+    expect(looksLikeSeveral({ ...regions[0], area: SEVERAL_PIECES_AREA * 10_000 - 1 }, area)).toBe(false);
+    expect(looksLikeSeveral(regions[5], undefined)).toBe(false);
+  });
+
+  it('hints only on "outline off": joined pieces, or a region clearly holding several', () => {
+    const area = typicalPieceArea(result);
+    expect(markHint('bad_outline', regions[5], 'confident', area)).toBe('several');
+    expect(markHint('bad_outline', regions[5], 'hidden', area)).toBe('several');
+    expect(markHint('bad_outline', regions[0], 'confident', area)).toBeUndefined();
+    // Assembled groups are several pieces by design: the hint is about joined pieces instead.
+    expect(markHint('bad_outline', regions[6], 'patch', area)).toBe('assembled');
+    // Other marks never get a hint; without a typical size there is no "several" hint.
+    for (const kind of ['not_a_piece', 'merged', 'wrong_place'] as const) {
+      expect(markHint(kind, regions[5], 'confident', area)).toBeUndefined();
+      expect(markHint(kind, regions[6], 'patch', area)).toBeUndefined();
+    }
+    expect(markHint('bad_outline', regions[5], 'confident', undefined)).toBeUndefined();
+  });
+
+  it('suggests "pieces stuck together" first for a "missed" tap on a large found region', () => {
+    expect(alternativesFor('confident', true)).toEqual(['merged', 'bad_outline', 'wrong_place']);
+    expect(alternativesFor('hidden', true)).toEqual(['merged', 'bad_outline']);
+    expect(alternativesFor('confident')).toEqual(['wrong_place', 'bad_outline', 'merged']);
   });
 });
 

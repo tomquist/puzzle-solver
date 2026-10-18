@@ -11,18 +11,20 @@ export type RegionMarkKind = Exclude<FeedbackMarkKind, 'missed'>;
 
 export interface MarkKindInfo {
   kind: FeedbackMarkKind;
-  /** Mode selector label. */
+  /** Mode selector label: the problem in plain words. */
   label: string;
-  /** One-line instruction while the mode is active. */
-  help: string;
+  /** What the problem looks like on the photo (shown while the mode is active). */
+  what: string;
+  /** How to place the mark. */
+  how: string;
 }
 
 export const MARK_KINDS: MarkKindInfo[] = [
-  { kind: 'missed', label: 'Missed piece', help: 'Tap each piece the app didn’t find.' },
-  { kind: 'not_a_piece', label: 'Not a piece', help: 'Tap an outline around something that isn’t a piece (shadow, glare, table).' },
-  { kind: 'merged', label: 'Several pieces', help: 'Tap an outline that covers more than one piece.' },
-  { kind: 'bad_outline', label: 'Wrong outline', help: 'Tap a piece whose outline doesn’t follow its edge.' },
-  { kind: 'wrong_place', label: 'Wrong place', help: 'Tap a piece that was shown in the wrong place.' },
+  { kind: 'missed', label: 'Piece not found', what: 'A piece without a coloured outline.', how: 'Tap the middle of the piece.' },
+  { kind: 'not_a_piece', label: 'Not a piece', what: 'An outline with no piece inside – table, shadow, glare or a gap.', how: 'Tap inside the outline.' },
+  { kind: 'merged', label: 'Pieces stuck together', what: 'One outline around two or more loose pieces.', how: 'Tap inside the outline.' },
+  { kind: 'bad_outline', label: 'Outline off', what: 'One piece, but its outline cuts part of it off or takes in table.', how: 'Tap inside the outline.' },
+  { kind: 'wrong_place', label: 'Wrong place', what: 'The piece is shown in the wrong spot of the puzzle.', how: 'Tap the piece; you can then show the right spot.' },
 ];
 
 export function markInfo(kind: FeedbackMarkKind): MarkKindInfo {
@@ -123,8 +125,55 @@ export function foundText(tone: DetectionTone): string {
   }
 }
 
-/** Better marks than "missed" for a piece the app did find (a found-but-hidden piece has no place to be wrong). */
-export function alternativesFor(tone: DetectionTone): RegionMarkKind[] {
+/**
+ * Better marks than "missed" for a piece the app did find, most likely first (a found-but-hidden
+ * piece has no place to be wrong). On a region clearly larger than one piece, the "missed" piece is
+ * most likely stuck together with another one.
+ */
+export function alternativesFor(tone: DetectionTone, several = false): RegionMarkKind[] {
+  if (several) return tone === 'hidden' ? ['merged', 'bad_outline'] : ['merged', 'bad_outline', 'wrong_place'];
   return tone === 'hidden' ? ['bad_outline', 'merged'] : ['wrong_place', 'bad_outline', 'merged'];
+}
+
+/** Fewest single-piece regions a typical piece size is taken from. */
+const MIN_PIECES_FOR_SIZE = 3;
+
+/**
+ * Area of a typical single piece in this scan: the median area of the regions the app took for one
+ * piece (cut off ones at the photo border left out; the median ignores the odd merged one), or
+ * undefined when there are too few to tell.
+ */
+export function typicalPieceArea(result: ScanResult): number | undefined {
+  const areas = result.regions
+    .filter((r) => r.kind === 'piece' && !r.touchesBorder && r.area > 0)
+    .map((r) => r.area)
+    .sort((a, b) => a - b);
+  if (areas.length < MIN_PIECES_FOR_SIZE) return undefined;
+  const mid = areas.length >> 1;
+  return areas.length % 2 ? areas[mid] : (areas[mid - 1] + areas[mid]) / 2;
+}
+
+/**
+ * Area (× a typical piece) from which a region clearly holds more than one piece. Single pieces
+ * vary by about ±25 % (tabs vs. blanks, perspective), two pieces are about 2×.
+ */
+export const SEVERAL_PIECES_AREA = 1.8;
+
+/** True when a region is clearly larger than one piece of this scan. */
+export function looksLikeSeveral(region: DetectedRegion, pieceArea: number | undefined): boolean {
+  return pieceArea !== undefined && pieceArea > 0 && region.area >= SEVERAL_PIECES_AREA * pieceArea;
+}
+
+/**
+ * A gentle second opinion right after a region mark was added – only where it is clear:
+ * - 'assembled': "Outline off" on pieces the user joined (one outline around them is right);
+ * - 'several': "Outline off" on a region clearly larger than one piece (likely pieces stuck together).
+ */
+export type MarkHint = 'assembled' | 'several';
+
+export function markHint(kind: RegionMarkKind, region: DetectedRegion, tone: DetectionTone, pieceArea: number | undefined): MarkHint | undefined {
+  if (kind !== 'bad_outline') return undefined;
+  if (tone === 'patch') return 'assembled';
+  return looksLikeSeveral(region, pieceArea) ? 'several' : undefined;
 }
 

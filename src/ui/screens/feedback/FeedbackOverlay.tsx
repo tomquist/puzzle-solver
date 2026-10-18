@@ -1,8 +1,8 @@
 /**
  * SVG overlay of the feedback screen: every detected region filled in its result-screen colour
  * (sure green, unsure amber, assembled blue; found-but-hidden grey hatched), so pieces the app did
- * not find are the ones left untouched, and the user's marks as numbered dots on top. In "missed
- * piece" mode a tap anywhere reports the point (a tap on a point removes it); in the other modes a
+ * not find are the ones left untouched, and the user's marks as numbered dots on top. In "Piece not
+ * found" mode a tap anywhere reports the point (a tap on a point removes it); in the other modes a
  * tap on a region marks it.
  */
 import { useId } from 'react';

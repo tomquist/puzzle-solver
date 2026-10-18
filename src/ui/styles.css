@@ -2814,57 +2814,180 @@ body:has(.action-bar) .snackbar {
   border-radius: 50%;
   background: var(--mk);
 }
-/* Mode palette: one compact row of five; labels wrap onto two lines on phones. */
+/* "What's wrong?" heading with the "How to mark" toggle. */
+.fb-modes-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.fb-howto-toggle {
+  padding: 0 10px;
+  gap: 6px;
+}
+.fb-howto-toggle.active {
+  background: var(--accent-soft);
+}
+/* Which mark to choose, and how to place it (open on the first visit). */
+.fb-howto {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.fb-howto-title {
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+.fb-howto-title + .fb-rules,
+.fb-howto-title + .fb-steps {
+  margin-top: -2px;
+}
+.fb-rules {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.fb-rules li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 0.875rem;
+  color: var(--text-2);
+}
+.fb-rules strong,
+.fb-steps strong {
+  color: var(--text);
+  font-weight: 650;
+}
+.fb-steps {
+  padding-left: 20px;
+  font-size: 0.875rem;
+  color: var(--text-2);
+}
+.fb-steps li + li {
+  margin-top: 2px;
+}
+.fb-howto-close {
+  margin-top: 2px;
+}
+/* Pictograms: grey piece silhouettes, the outline in the mark's colour (as marked regions look). */
+.fb-picto {
+  flex: none;
+  display: block;
+}
+.fb-picto.st-patch {
+  --mk: var(--st-patch);
+}
+.fb-picto .pc {
+  fill: var(--text-3);
+}
+.fb-picto .ol {
+  fill: color-mix(in srgb, var(--mk) 14%, transparent);
+  stroke: var(--mk);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.fb-picto .seam {
+  fill: none;
+  stroke: var(--surface);
+  stroke-width: 1;
+}
+.fb-picto .dot {
+  fill: var(--mk);
+  stroke: #fff;
+  stroke-width: 1.2;
+}
+.fb-picto .ring,
+.fb-picto .spot {
+  fill: none;
+  stroke: var(--mk);
+  stroke-width: 1.6;
+  stroke-dasharray: 3 2;
+}
+.fb-picto .arrow {
+  fill: none;
+  stroke: var(--mk);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* Mode picker: two columns of pictogram + label on phones (the odd last one full width), one row
+   of five on wider screens. */
 .fb-modes {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 3px;
-  padding: 3px;
-  border-radius: 12px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
 }
 .fb-mode {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
+  gap: 8px;
   min-height: 52px;
   min-width: 0;
-  padding: 6px 2px;
-  border: none;
-  border-radius: 9px;
-  background: transparent;
+  padding: 6px 10px 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
   color: var(--text-2);
-  font-size: 0.78rem;
+  font-size: 0.875rem;
   font-weight: 600;
   line-height: 1.2;
-  text-align: center;
+  text-align: left;
   cursor: pointer;
 }
+.fb-mode:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
 .fb-mode-label {
-  text-wrap: balance;
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 .fb-mode:hover {
   color: var(--text);
+  border-color: var(--border-strong);
 }
 .fb-mode.active {
-  background: var(--surface);
+  border-color: var(--mk);
+  background: color-mix(in srgb, var(--mk) 10%, var(--surface));
+  box-shadow: inset 0 0 0 1px var(--mk);
   color: var(--text);
-  box-shadow: var(--shadow-sm), inset 0 -3px 0 var(--mk);
 }
 @media (min-width: 600px) {
+  .fb-modes {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+  .fb-mode:last-child:nth-child(odd) {
+    grid-column: auto;
+  }
   .fb-mode {
-    flex-direction: row;
-    gap: 6px;
-    font-size: 0.85rem;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    padding: 8px 6px;
+    text-align: center;
+  }
+  .fb-mode-label {
+    text-wrap: balance;
   }
 }
+/* The one instruction for the chosen mode: what it means, then how to place it. */
 .fb-help {
   margin: 0;
+  padding: 6px 0 6px 10px;
+  border-left: 3px solid var(--mk);
   color: var(--text-2);
+}
+.fb-help strong {
+  color: var(--text);
+  font-weight: 650;
 }
 .fb-key {
   display: flex;
@@ -2889,12 +3012,8 @@ body:has(.action-bar) .snackbar {
   border: 2px dashed #9ca3af;
   background: repeating-linear-gradient(45deg, #9ca3af 0 2px, transparent 2px 5px);
 }
-.fb-photo-hint {
-  margin: 0;
-  color: var(--text-2);
-  font-weight: 600;
-}
-.fb-found-note {
+/* Notes under the photo: "this piece was found" (nothing added yet) and hints on a mark just added. */
+.fb-note {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -2902,22 +3021,28 @@ body:has(.action-bar) .snackbar {
   border-radius: var(--radius-sm);
   border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
   background: var(--warn-soft);
+  /* Scrolled into view above the action bar. */
+  scroll-margin-bottom: calc(84px + env(safe-area-inset-bottom));
 }
-.fb-found-head {
+.fb-note.is-hint {
+  border-color: color-mix(in srgb, var(--info) 40%, var(--border));
+  background: var(--info-soft);
+}
+.fb-note-head {
   display: flex;
   align-items: flex-start;
   gap: 8px;
 }
-.fb-found-head p {
+.fb-note-head p {
   flex: 1 1 auto;
   margin: 10px 0 0;
 }
-.fb-found-actions {
+.fb-note-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
-.fb-found-kind {
+.fb-note-kind {
   gap: 6px;
   padding: 0 12px;
 }
