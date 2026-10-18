@@ -24,11 +24,17 @@ const RHO_MIN = 0.8;
 /** Cost (in sigmas) of explaining a pixel as the deepest accepted shadow; shallower shadows cost less. */
 const SHADOW_PENALTY = 2.5;
 /**
- * Further cost (sigmas per unit of ρ) of darkening beyond RHO_MIN: cast shadows next to pieces
+ * Darkening beyond this (L* + 16) ratio (≈ 65 % less light) costs extra: cast shadows next to pieces
  * hardly get that deep (large shadow zones are left to the local table model), dark pieces do.
  */
-const DEEP_SHADOW_SLOPE = Number(globalThis.process?.env?.DSS ?? 25);
-const RHO_DEEP = Number(globalThis.process?.env?.RDK ?? 0.8);
+const RHO_DEEP = 0.7;
+/** Extra cost (sigmas per unit of ρ) of darkening beyond RHO_DEEP, so dark pieces stay strong. */
+const DEEP_SHADOW_SLOPE = 25;
+/**
+ * Table lightness (L*) from which that extra cost applies: on a dark table, what is darker still is
+ * mostly shadow and dark cardboard rims in the gaps between pieces lying close together.
+ */
+const DEEP_MIN_TABLE_L = 40;
 /** Modelled table lightness from which saturated pixels are compared by lightness only (over-exposure). */
 const CLIP_TABLE_L = 85;
 /** Floors for the per-channel noise sigma (Lab units), so noise-free backgrounds stay sane. */
@@ -114,29 +120,46 @@ export function fitLocalTable(photo: RGBAImage, fit: BackgroundFit, exclude: Mas
   const res = new Float32Array(cols * rows * 3);
   const valid = new Uint8Array(cols * rows);
   const k = fit.coefficients;
+  // Residuals of the table samples on one regular grid (NaN = excluded), shared by the overlapping
+  // windows.
+  const sw = Math.ceil(w / step), sh = Math.ceil(h / step);
+  const samp = new Float32Array(sw * sh * 3).fill(NaN);
+  const ew = exclude.width, eh = exclude.height;
+  for (let j = 0; j < sh; j++) {
+    const y = Math.min(h - 1, j * step + (step >> 1));
+    const v = norm(y, h), erow = (((y * eh) / h) | 0) * ew;
+    for (let i = 0; i < sw; i++) {
+      const x = Math.min(w - 1, i * step + (step >> 1));
+      if (exclude.data[erow + (((x * ew) / w) | 0)]) continue;
+      const p = (y * w + x) * 4;
+      const lab = rgbToLab(data[p], data[p + 1], data[p + 2]);
+      const u = norm(x, w), o = (j * sw + i) * 3;
+      samp[o] = lab[0] - evalPoly(k[0], u, v);
+      samp[o + 1] = lab[1] - evalPoly(k[1], u, v);
+      samp[o + 2] = lab[2] - evalPoly(k[2], u, v);
+    }
+  }
   const vals: number[][] = [[], [], []];
-  for (let i = 0; i < rows; i++) {
-    for (let j = 0; j < cols; j++) {
+  const first = (lo: number) => Math.max(0, Math.ceil((lo - (step >> 1)) / step - 1e-9));
+  const last = (hi: number, n: number) => Math.min(n - 1, Math.floor((hi - (step >> 1)) / step - 1e-9));
+  for (let r = 0; r < rows; r++) {
+    const cy = r * cellH, j0 = first(cy - cell / 2), j1 = last(cy + cell / 2, sh);
+    for (let c = 0; c < cols; c++) {
+      const cx = c * cellW, i0 = first(cx - cell / 2), i1 = last(cx + cell / 2, sw);
       vals[0].length = vals[1].length = vals[2].length = 0;
-      const cx = j * cellW, cy = i * cellH;
-      const x0 = Math.max(0, Math.round(cx - cell / 2)), x1 = Math.min(w, Math.round(cx + cell / 2));
-      const y0 = Math.max(0, Math.round(cy - cell / 2)), y1 = Math.min(h, Math.round(cy + cell / 2));
-      let n = 0;
-      for (let y = y0 + (step >> 1); y < y1; y += step) {
-        for (let x = x0 + (step >> 1); x < x1; x += step) {
-          n++;
-          if (exclude.data[((y * exclude.height) / h | 0) * exclude.width + ((x * exclude.width) / w | 0)]) continue;
-          const p = (y * w + x) * 4;
-          const lab = rgbToLab(data[p], data[p + 1], data[p + 2]);
-          const u = norm(x, w), v = norm(y, h);
-          vals[0].push(lab[0] - evalPoly(k[0], u, v));
-          vals[1].push(lab[1] - evalPoly(k[1], u, v));
-          vals[2].push(lab[2] - evalPoly(k[2], u, v));
+      for (let j = j0; j <= j1; j++) {
+        for (let i = i0; i <= i1; i++) {
+          const o = (j * sw + i) * 3;
+          if (Number.isNaN(samp[o])) continue;
+          vals[0].push(samp[o]);
+          vals[1].push(samp[o + 1]);
+          vals[2].push(samp[o + 2]);
         }
       }
+      const n = Math.max(0, (j1 - j0 + 1) * (i1 - i0 + 1));
       if (vals[0].length < Math.max(20, 0.25 * n)) continue;
-      valid[i * cols + j] = 1;
-      for (let c = 0; c < 3; c++) res[(i * cols + j) * 3 + c] = median(vals[c]);
+      valid[r * cols + c] = 1;
+      for (let ch = 0; ch < 3; ch++) res[(r * cols + c) * 3 + ch] = median(vals[ch]);
     }
   }
   // Fill cells without enough table from their neighbours (repeated averaging).
@@ -188,20 +211,20 @@ export function lightingRatio(model: Pick<BackgroundModel, 'coefficients'>): num
 
 /**
  * Noise-normalised colour distance of a Lab pixel to the background colour (bL, ba, bb), tolerant
- * to cast shadows. `is*` are inverse sigmas. Shared by the model fit and the per-pixel score; the
- * fit leaves out the cost of darkening beyond RHO_MIN (`deep` = 0), so shadow zones stay table
- * there and are left to the local model rather than becoming a further table colour.
+ * to cast shadows. `is*` are inverse sigmas. Used by the model fit and the palette score; unlike
+ * the main per-pixel score ({@link foregroundScore}) it adds no extra cost for darkening beyond
+ * RHO_DEEP, so deep shadow zones stay table for the fit (and are left to the local model) rather
+ * than becoming a further table colour.
  */
-function distance(L: number, a: number, b: number, bL: number, ba: number, bb: number, isL: number, isa: number, isb: number, deep = 0): number {
+function distance(L: number, a: number, b: number, bL: number, ba: number, bb: number, isL: number, isa: number, isb: number): number {
   const dL = (L - bL) * isL, da = (a - ba) * isa, db = (b - bb) * isb;
   let d2 = W_L * dL * dL + da * da + db * db;
   if (L < bL) {
     // Shadow hypothesis: Lab of an RGB-scaled colour ≈ (ρ(bL + 16) − 16, ρ·ba, ρ·bb).
     const ref = bL + 16;
-    const raw = ref > 1 ? (L + 16) / ref : 1;
-    const rho = Math.max(RHO_MIN, raw);
+    const rho = ref > 1 ? Math.max(RHO_MIN, (L + 16) / ref) : 1;
     const sL = (L + 16 - rho * ref) * isL, sa = (a - rho * ba) * isa, sb = (b - rho * bb) * isb;
-    const pen = (SHADOW_PENALTY * (1 - rho)) / (1 - RHO_MIN) + (raw < RHO_DEEP ? deep * (RHO_DEEP - raw) : 0);
+    const pen = (SHADOW_PENALTY * (1 - rho)) / (1 - RHO_MIN);
     const s2 = W_L * sL * sL + sa * sa + sb * sb + pen * pen;
     if (s2 < d2) d2 = s2;
   }
@@ -646,8 +669,10 @@ function paletteScore(photo: RGBAImage, model: BackgroundFit, out: GrayImage): G
 }
 
 /**
- * Per-pixel foreground score of a photo: colour distance to the background model in sigma units,
- * tolerant to cast shadows (same formula as used for the fit; Lab via lookup tables).
+ * Per-pixel foreground score of a photo: colour distance to the background model (plus the local
+ * corrections, when present) in sigma units, tolerant to cast shadows (the fit's formula, plus an
+ * extra cost for darkening beyond RHO_DEEP so dark table-coloured pieces stay strong; Lab via
+ * lookup tables).
  */
 export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayImage {
   const { width: w, height: h, data: d } = photo;
@@ -709,7 +734,7 @@ export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayIma
         const raw = ref > 1 ? (L + 16) / ref : 1;
         const rho = raw < rhoMin ? rhoMin : raw;
         const sL = (L + 16 - rho * ref) * isL, sa = (A - rho * ba) * isa, sb = (B - rho * bb) * isb;
-        const pen = pen0 * (1 - rho) + (raw < rhoDeep ? deep * (rhoDeep - raw) : 0);
+        const pen = pen0 * (1 - rho) + (raw < rhoDeep && bL >= DEEP_MIN_TABLE_L ? deep * (rhoDeep - raw) : 0);
         const s2 = wl * sL * sL + sa * sa + sb * sb + pen * pen;
         if (s2 < d2) d2 = s2;
       }

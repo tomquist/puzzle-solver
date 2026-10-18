@@ -277,10 +277,14 @@ function medianScore(score: GrayImage, c: Candidate): number {
   return v.length > 0 ? median(v) : 0;
 }
 
+/** Share of strong pixels (score above the high threshold) from which a blob is no table for the local model. */
+const LOCAL_STRONG_SHARE = 0.2;
 /** Width (fraction of the piece body size) below which a long structure counts as thin (seam, crack, cable). */
 const THIN_WIDTH = 0.3;
 /** Length (fraction of the body size) from which a thin structure is removed (shorter ones: corners, necks, knobs). */
 const THIN_LENGTH = 0.7;
+/** Share of a long loose part the opening removed from which it is thin as a whole (gap networks). */
+const THIN_REMOVED = 0.75;
 /** Length² / area from which a small region counts as elongated (a disc: 1.27; a 3:1 bar: 3). */
 const THIN_ELONGATION = 2.5;
 
@@ -312,11 +316,15 @@ function removeThin(c: Candidate, body: number, refArea: number, minArea: number
   }
   if (any === 0) return null;
   const { labels, stats } = labelComponents(loose, 8);
+  // Pixels of each loose part the opening removed (thin everywhere) versus kept (crumbs, bulges).
+  const removed = new Float64Array(stats.length + 1);
+  for (let i = 0; i < m.data.length; i++) if (labels[i] > 0 && !kept.data[i]) removed[labels[i]]++;
   const thin = new Set<number>();
   for (const st of stats) {
     const len = Math.max(st.bbox.width, st.bbox.height);
-    // Long, and thin on average (a compact blob far from any piece is a crumb, not a strand).
-    if (len >= THIN_LENGTH * body && st.area / len < THIN_WIDTH * body) thin.add(st.label);
+    // Long, and thin: on average (a compact blob far from any piece is a crumb, not a strand), or
+    // nearly all of it too thin for the opening (a network of gaps, whose bbox is no length).
+    if (len >= THIN_LENGTH * body && (st.area / len < THIN_WIDTH * body || removed[st.label] >= THIN_REMOVED * st.area)) thin.add(st.label);
   }
   if (thin.size === 0) return null;
   const out = createMask(pw, ph);
@@ -858,6 +866,34 @@ function isPlausibleSingle(c: Candidate): boolean {
   return r > 0.6 && r < 1.6;
 }
 
+/** Largest hole that is filled, in typical object areas (see typicalObjectArea). */
+const HOLE_MAX_OBJECTS = 3;
+
+/**
+ * Median area of the components of at least `minArea` px that do not touch the photo border
+ * (loose pieces and patches, not networks of tile gaps reaching the border); Infinity without any.
+ */
+function typicalObjectArea(m: Mask, minArea: number): number {
+  const { width: w, height: h } = m;
+  const { count, y: ry, x0: rx0, x1: rx1, root } = labelRuns(m, 1, 8);
+  const area = new Float64Array(count);
+  for (let i = 0; i < count; i++) {
+    const r = root[i];
+    if (area[r] < 0) continue;
+    if (ry[i] === 0 || ry[i] === h - 1 || rx0[i] === 0 || rx1[i] === w - 1) area[r] = -1;
+    else area[r] += rx1[i] - rx0[i] + 1;
+  }
+  const areas: number[] = [];
+  for (let i = 0; i < count; i++) if (root[i] === i && area[i] >= minArea) areas.push(area[i]);
+  return areas.length > 0 ? median(areas) : Infinity;
+}
+
+/**
+ * Smallest reference single as a share of the photo area (a piece covers ≥ 0.2 % even with 200
+ * pieces in view; specks of shadow or grain that happen to have a tidy outline are far smaller).
+ */
+const MIN_REFERENCE_SHARE = 5e-4;
+
 /** Shape confidence of clean single pieces (assembled patches rarely exceed ≈ 0.8). */
 const STRONG_SINGLE = 0.85;
 
@@ -867,8 +903,9 @@ const STRONG_SINGLE = 0.85;
  * sizes are clearly multi-modal take the smallest well-supported size cluster (patches are multiples
  * of a piece, never smaller).
  */
-function referenceSingles(cands: Candidate[]): Candidate[] {
-  const plausible = cands.filter(isPlausibleSingle);
+function referenceSingles(cands: Candidate[], minArea: number): Candidate[] {
+  // Crumbs and specks that happen to have a tidy outline are no reference (see MIN_REFERENCE_SHARE).
+  const plausible = cands.filter((c) => c.area >= minArea && isPlausibleSingle(c));
   const strong = plausible.filter((c) => c.shape!.confidence >= STRONG_SINGLE);
   const pool = strong.length >= 2 ? strong : plausible;
   if (pool.length < 2) return pool;
@@ -942,7 +979,9 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     // Pieces lying 1–3 px apart are still separate here (closing bridges them): kept for splitting.
     const preClose = cloneMask(fg);
     fg = close(fg, 2);
-    fg = fillHoles(fg);
+    // Holes in pieces (print like the table) are filled; table enclosed by a grid of tile gaps or by
+    // an assembled frame is not (far larger than any piece).
+    fg = fillHoles(fg, HOLE_MAX_OBJECTS * typicalObjectArea(fg, minArea));
     const unfiltered = diag ? cloneMask(fg) : null;
     fg = removeSmallComponents(fg, minArea);
     if (diag && unfiltered) {
@@ -956,7 +995,7 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
     lap('shapes');
     // Single-piece reference size.
     const references = () => {
-      const singles = referenceSingles(cands);
+      const singles = referenceSingles(cands, MIN_REFERENCE_SHARE * W * H);
       const others = cands.filter((c) => !c.touchesBorder);
       const refArea = singles.length > 0 ? median(singles.map((c) => c.area)) : others.length > 0 ? median(others.map((c) => c.area)) : 0;
       const refBody = singles.length > 0 ? median(singles.map((c) => c.shape!.bodySize)) : Math.sqrt(refArea);
@@ -986,30 +1025,28 @@ export function segmentPieces(photo: RGBAImage, opts: SegmentOptions = {}): Segm
   // Shadow zones and local lighting the smooth surface cannot follow: learn them from the table
   // around the pieces found so far (coarse grid, cells of at least two pieces) and segment again.
   if (p.ref.refBody > 0 && fit.palette.length === 0) {
-    // Excluded (on a 4× coarser grid): clear objects (median score above the high threshold) and
-    // anything piece-shaped, plus the surroundings of every strong pixel of other blobs (print of
-    // weak pieces and patches is speckled with them). Smooth weak blobs, which may be the shadow
-    // zone itself, stay in the estimate (a cell spans several pieces, so the median is robust).
+    // Excluded (on a 4× coarser grid): anything piece-shaped and every blob with a fair share of
+    // strong pixels (pieces, and patches of weak pieces whose print is speckled with them). Smooth
+    // weak blobs, which may be the shadow zone itself, stay in the estimate (a cell spans several
+    // pieces, so the median is robust).
     const f = 4, cw = Math.ceil(W / f), ch = Math.ceil(H / f);
-    const whole = createMask(cw, ch), strong = createMask(cw, ch);
+    const whole = createMask(cw, ch);
     const sd = p.score.data, high = p.th.high;
     for (const c of p.cands) {
       if (c.area < 0.25 * p.ref.refArea) continue;
+      const { x: bx, y: by, width: bw, height: bh } = c.bbox;
+      let strong = 0;
+      for (let y = 0; y < bh; y++) {
+        for (let x = 0; x < bw; x++) if (c.mask.data[y * bw + x] && sd[(y + by) * W + x + bx] >= high) strong++;
+      }
       const pieceLike = c.area >= 0.5 * p.ref.refArea && c.shape !== null && c.shape.confidence >= MIN_SHAPE_CONFIDENCE;
-      const all = pieceLike || medianScore(p.score, c) >= high;
-      for (let y = 0; y < c.bbox.height; y++) {
-        const Y = y + c.bbox.y, crow = ((Y / f) | 0) * cw;
-        for (let x = 0; x < c.bbox.width; x++) {
-          if (!c.mask.data[y * c.bbox.width + x]) continue;
-          const X = x + c.bbox.x;
-          if (all) whole.data[crow + ((X / f) | 0)] = 1;
-          else if (sd[Y * W + X] >= high) strong.data[crow + ((X / f) | 0)] = 1;
-        }
+      if (!pieceLike && strong < LOCAL_STRONG_SHARE * c.area) continue;
+      for (let y = 0; y < bh; y++) {
+        const crow = (((y + by) / f) | 0) * cw;
+        for (let x = 0; x < bw; x++) if (c.mask.data[y * bw + x]) whole.data[crow + (((x + bx) / f) | 0)] = 1;
       }
     }
-    const exclude = dilate(whole, Math.max(1, Math.round((0.1 * p.ref.refBody) / f)));
-    const near = dilate(strong, Math.max(1, Math.round((0.3 * p.ref.refBody) / f)));
-    for (let i = 0; i < exclude.data.length; i++) exclude.data[i] |= near.data[i];
+    const exclude = dilate(whole, Math.max(1, Math.round((0.25 * p.ref.refBody) / f)));
     const local = fitLocalTable(scored, fit, exclude, Math.max(2 * p.ref.refBody, Math.min(W, H) / 10));
     lap('local');
     if (local) {

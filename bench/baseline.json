@@ -292,13 +292,13 @@
       },
       "wave-rim-shadow-light": {
         "segRecall": 0.6,
-        "segPrecision": 0.571,
+        "segPrecision": 0.632,
         "shapeRate": 0.5,
         "kindAccuracy": 0.9,
         "top1": 0.3,
         "top3": 0.3,
         "rotationOk": 1,
-        "confidentPrecision": 0.769,
+        "confidentPrecision": 1,
         "fitPrecision": 1,
         "fitRecall": 0,
         "warnings": 1,
@@ -346,7 +346,7 @@
       },
       "wave-gingham": {
         "segRecall": 0.9,
-        "segPrecision": 0.545,
+        "segPrecision": 1,
         "shapeRate": 0.75,
         "kindAccuracy": 1,
         "top1": 0.85,
@@ -355,7 +355,7 @@
         "confidentPrecision": 1,
         "fitPrecision": 1,
         "fitRecall": 1,
-        "warnings": 2,
+        "warnings": 1,
         "assembledRecall": 1,
         "assembledPrecision": 1,
         "neighborPrecision": 1,
@@ -451,6 +451,78 @@
         "neighborPrecision": 1,
         "neighborRecall": 0.333,
         "hiddenRate": 0.1
+      },
+      "wave-plank-gaps": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 0.941,
+        "top3": 0.938,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 1,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
+      },
+      "starry-shadow-zone": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 0.95,
+        "kindAccuracy": 1,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
+      },
+      "wave-dark-wood-pieces": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 0.8,
+        "kindAccuracy": 0.938,
+        "top1": 0.8,
+        "top3": 0.85,
+        "rotationOk": 1,
+        "confidentPrecision": 0.938,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 1,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
+      },
+      "starry-wood-tiles-real": {
+        "segRecall": 0.813,
+        "segPrecision": 0.813,
+        "shapeRate": 0.571,
+        "kindAccuracy": 1,
+        "top1": 0.563,
+        "top3": 0.571,
+        "rotationOk": 1,
+        "confidentPrecision": 0.889,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 4,
+        "assembledRecall": 0.5,
+        "assembledPrecision": 0.25,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0.188
       }
     },
     "box": {
@@ -473,6 +545,11 @@
         "successRate": 1,
         "meanError": 0.001,
         "falseWarnings": 0
+      }
+    },
+    "feedback": {
+      "2026-10-18-wood-planks-1500pc.json": {
+        "missedFound": 1
       }
     }
   }

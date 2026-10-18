@@ -473,6 +473,46 @@ describe('segmentPieces on real-photo conditions', () => {
     expect(singles.filter((p) => p.shapeFound).length).toBeGreaterThanOrEqual(0.8 * singles.length);
   });
 
+  it('keeps plank gaps and tile seams crossing under and next to pieces out of the regions', () => {
+    const { photo, truth, cut } = scene('great-wave', 'wood', 2, { background: [196, 172, 140], backgroundTexture: 0, pattern: { kind: 'planks', width: 320, gap: 12, tiles: true } });
+    const seg = segmentPieces(photo);
+    debug('planks', photo, seg, truth);
+    const { recall, offeredFalse } = evaluate(seg, truth, cut);
+    console.log(`plank gaps: palette ${seg.background.palette.length}, recall ${recall.toFixed(2)}, false ${offeredFalse}, regions ${seg.regions.length}`);
+    expect(recall).toBeGreaterThanOrEqual(0.9);
+    expect(offeredFalse).toBe(0);
+    // No strand of a gap is a region of its own, and no gap makes a region much longer than a piece.
+    const body = seg.medianBodySize ?? 100;
+    expect(seg.regions.filter((r) => r.region.kind !== 'patch' && Math.max(r.region.bbox.width, r.region.bbox.height) > 2.2 * body)).toEqual([]);
+    expect(seg.regions.length).toBeLessThanOrEqual(truth.length + 1);
+  });
+
+  it('takes a large soft shadow reaching in from the border for table', () => {
+    const { photo, truth, cut } = scene('starry-night', 'light', 2, { background: [206, 196, 178], shadowZone: { strength: 0.5 } });
+    const seg = segmentPieces(photo);
+    debug('shadow-zone', photo, seg, truth);
+    const { recall, offeredFalse } = evaluate(seg, truth, cut);
+    console.log(`shadow zone: palette ${seg.background.palette.length}, local ${seg.background.local ? 'yes' : 'no'}, recall ${recall.toFixed(2)}, false ${offeredFalse}`);
+    expect(recall).toBeGreaterThanOrEqual(0.9);
+    expect(offeredFalse).toBe(0);
+    expect(seg.regions.length).toBeLessThanOrEqual(truth.length + 1);
+  });
+
+  it('keeps pieces in dark tones of the table colour strong (no shadow tolerance for them)', () => {
+    const { photo, truth, cut } = scene('great-wave', 'wood', 2, { background: [190, 166, 134], backgroundTexture: 8, darkPieces: { share: 0.5, level: 0.5 } });
+    const diagnostics: SegmentDiagnostics = {};
+    const seg = segmentPieces(photo, { diagnostics });
+    debug('dark-pieces', photo, seg, truth);
+    const { recall, offeredFalse, ev } = evaluate(seg, truth, cut);
+    const singles = ev.pieces.filter((p) => !p.isPatch && p.detected);
+    console.log(`dark wood pieces: recall ${recall.toFixed(2)}, false ${offeredFalse}, shapes ${singles.filter((p) => p.shapeFound).length}/${singles.length}`);
+    expect(recall).toBeGreaterThanOrEqual(0.95);
+    expect(offeredFalse).toBe(0);
+    expect(singles.filter((p) => p.shapeFound).length).toBeGreaterThanOrEqual(0.8 * singles.length);
+    // Their print scores well above the high threshold, not in the shadow-tolerant band.
+    expect(seg.quality.issues.find((i) => i.code === 'low_contrast')).toBeUndefined();
+  });
+
   it('measures how much table or cast shadow the outlines take in on a light table', () => {
     // Excess over the ring inside: a pale sky on a cream table is not mistaken for shadow.
     const median = (seg: ReturnType<typeof segmentPieces>) => {
