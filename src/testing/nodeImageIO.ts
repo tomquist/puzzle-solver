@@ -39,3 +39,9 @@ export function savePng(path: string, img: RGBAImage): void {
 
 /** True when the DEBUG_IMAGES env var is set; tests should only write debug PNGs then. */
 export const DEBUG_IMAGES = !!process.env.DEBUG_IMAGES;
+
+/**
+ * Segmentation options for A/B runs of the benchmark and the feedback tools: GRAPH_CUT=1 / 0 turns
+ * the graph-cut outline refinement on / off (unset: the pipeline's default).
+ */
+export const SEGMENT_OPTIONS: { graphCut?: boolean } = process.env.GRAPH_CUT === undefined ? {} : { graphCut: process.env.GRAPH_CUT !== '0' };

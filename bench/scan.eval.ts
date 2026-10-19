@@ -5,6 +5,9 @@
  *   npm run bench                     # run and compare with the baseline
  *   UPDATE_BASELINE=1 npm run bench   # accept the current numbers as the new baseline
  *   DEBUG_IMAGES=1 npm run bench      # also write overlays to .debug/bench/
+ *   GRAPH_CUT=1 npm run bench         # A/B: with the graph-cut outline refinement (0: without)
+ *
+ * outlineIoU / boundaryF (report only): outline accuracy of the regions matched to a truth item.
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import type { RGBAImage } from '../src/cv/image';
@@ -13,7 +16,7 @@ import { analyzeScan } from '../src/pipeline/analyzeScan';
 import { detectBox, suggestRectifiedSize } from '../src/pipeline/box';
 import { buildReferenceIndex } from '../src/pipeline/match';
 import type { GridSpec } from '../src/model/types';
-import { DEBUG_IMAGES, loadTestAsset, savePng } from '../src/testing/nodeImageIO';
+import { DEBUG_IMAGES, loadTestAsset, savePng, SEGMENT_OPTIONS } from '../src/testing/nodeImageIO';
 import { generateJigsaw, perturbReference, renderBoxPhoto, renderPiecesPhoto, Rng, type RenderOptions, type RGB } from '../src/testing/synth';
 import { average, compareToBaseline, yieldToEventLoop, evaluateScan, overlay, pickItems, report, saveBaselineSuite, UPDATE_BASELINE, type ItemSpec, type MetricRecord } from './lib';
 
@@ -237,7 +240,7 @@ const SCENARIOS: Scenario[] = [
 
 const COLUMNS = [
   'segRecall', 'segPrecision', 'shapeRate', 'kindAccuracy', 'top1', 'top3', 'rotationOk', 'confidentPrecision', 'confidentRate',
-  'fitPrecision', 'fitRecall', 'assembledRecall', 'assembledPrecision', 'neighborPrecision', 'neighborRecall', 'hiddenRate', 'warnings', 'ms',
+  'fitPrecision', 'fitRecall', 'assembledRecall', 'assembledPrecision', 'neighborPrecision', 'neighborRecall', 'hiddenRate', 'warnings', 'outlineIoU', 'boundaryF', 'ms',
 ];
 const results: Record<string, MetricRecord> = {};
 const paintings = new Map<string, RGBAImage>();
@@ -277,7 +280,7 @@ describe('scan benchmark', () => {
         const rng = new Rng(seed * 13 + 3);
         const { photo, truth } = renderPiecesPhoto(src, cut, items, { seed: seed + 50, ...s.render(rng) });
         const t0 = performance.now();
-        const { result } = analyzeScan(index, photo, { maxSide: Math.max(photo.width, photo.height) });
+        const { result } = analyzeScan(index, photo, { maxSide: Math.max(photo.width, photo.height), segment: SEGMENT_OPTIONS });
         const ms = performance.now() - t0;
         const { metrics, regionToTruth } = evaluateScan(result, truth, cut, ms);
         perSeed.push({ ...metrics });

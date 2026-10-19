@@ -8,12 +8,14 @@
  * the table, and filling the closed rim recovers it) → connected components → outline tracing and
  * shape analysis → peeling of glare halos and soft shadows → splitting of touching pieces at narrow
  * necks or along the edges between them → reassembly of fragments → outlines snapped to brightness
- * edges in blocky JPEGs → classification (piece / patch / fragment / clutter at the photo border) →
- * reading-order ids → quality.
+ * edges in blocky JPEGs → (option) graph-cut refinement of outlines in doubt, trimming halos the
+ * colour models clearly take for table (refine.ts) → classification (piece / patch / fragment /
+ * clutter at the photo border) → reading-order ids → quality.
  */
 import { componentMask, labelComponents, labelRuns, removeSmallComponents } from '../../cv/components';
 import { traceOuterContour } from '../../cv/contour';
 import { distanceTransform } from '../../cv/distance';
+import { gmmNegLogLikBest } from '../../cv/gmm';
 import { solveLinear, type Point } from '../../cv/geometry';
 import { cloneMask, createGray, createMask, cropMask, cropRGBA, maskArea, maskBounds, type GrayImage, type Mask, type RGBAImage, type Rect } from '../../cv/image';
 import { close, dilate, erode, fillHoles, open } from '../../cv/morphology';
@@ -24,6 +26,7 @@ import { otsuThreshold, threshold } from '../../cv/threshold';
 import type { DetectedRegion, PieceShape, QualityIssue, RegionKind } from '../../model/types';
 import { backgroundAt, fitBackground, fitLocalTable, foregroundScore, tableChromaDistance, tableChromasAt, type BackgroundFit } from './background';
 import { assessPhoto, assessRegions } from './quality';
+import { refineByGraphCut } from './refine';
 import { analyzePieceShape, bodyOrientation, orientationHistogram } from './shape';
 import type { BackgroundModel, RegionDiagnostics, SegmentOptions, Segmentation, SegmentedRegion } from './types';
 import { boxBlurRGB, doubleMask, halveGray, interpolateReplicatedChroma, median, offsetPoints, smoothChroma } from './util';
@@ -1350,6 +1353,106 @@ function peelShadowHalo(c: Candidate, img: RGBAImage, fit: BackgroundFit, noise:
   return { ...peeled, group: c.group, merged: c.merged };
 }
 
+/** Graph-cut refinement (SegmentOptions.graphCut) when the option is not given. */
+const GRAPH_CUT_DEFAULT = false;
+/** Depth (body sizes, 3–48 px) from which region pixels stay piece in the graph cut. */
+const GC_INNER = 0.15;
+/** Distance (body sizes, 2–24 px) outside a region beyond which pixels stay table. */
+const GC_OUTER = 0.08;
+/** Width (body sizes, at least 4 px) of the window beyond that which only feeds the table model. */
+const GC_RING = 0.1;
+/** Regions refined: from GC_MIN_PIECES to GC_MAX_PIECES piece areas (clusters gain little and are slow)… */
+const GC_MIN_PIECES = 0.3;
+const GC_MAX_PIECES = 3;
+/** …whose outline is in doubt: shape confidence below GC_DOUBT_CONFIDENCE, or above GC_DOUBT_AREA piece areas. */
+const GC_DOUBT_CONFIDENCE = 0.7;
+const GC_DOUBT_AREA = 1.3;
+/** Share of a region the refinement must keep (it trims halos, it does not replace the region)… */
+const GC_MIN_KEPT = 0.5;
+/** …and must remove at least (halos are 8–25 % of a region; less is noise at knob tips and corners). */
+const GC_MIN_CHANGE = 0.03;
+/**
+ * Mean data margin (nats per pixel: −log p(piece) + log p(table) under colour models of the
+ * region's interior and of the table around it) from which a part the cut removed goes to the
+ * table; parts below GC_KEEP_MIN_AREA piece areas go regardless (outline smoothing).
+ */
+const GC_MARGIN = 1;
+const GC_KEEP_MIN_AREA = 0.004;
+/** Opening radius (px, or body sizes when larger) below which removed strips stay with the piece. */
+const GC_THIN_PX = 2;
+const GC_THIN = 0.02;
+/**
+ * Body size (px) per step of the reduced scale of the first cut (larger pieces are cut coarsely
+ * first), up to GC_MAX_SCALE (coarser cuts miss the thin halo bands of close-ups).
+ */
+const GC_BODY_PX = 50;
+const GC_MAX_SCALE = 3;
+
+/**
+ * Refine a region's outline by graph cut (refine.ts): the band from GC_INNER body sizes inside the
+ * outline to GC_OUTER outside is relabelled (other regions stay table), and the region gives up
+ * only what looks like a halo (glare, soft shadow, table colour bled into by a JPEG): parts the cut
+ * removed that are wider than a thin strip and that colour models of the region's interior and of
+ * the table around it clearly take for table. Thin strips all along the outline are the blend of
+ * piece and table at a clean edge; parts those models do not clearly give to the table are print
+ * resembling the table, cut off because the cut follows strong print edges (a dark corner on a
+ * dark table). Nothing is added: the cut only shrinks the region. Parts of at least GC_MIN_PIECES
+ * piece areas become candidates (several when the cut separates pieces). Null when nothing usable
+ * remains or the change is too small to be a halo.
+ */
+function graphCutCandidate(c: Candidate, all: Candidate[], img: RGBAImage, body: number, ra: number, minArea: number, W: number, H: number): Candidate[] | null {
+  const inner = Math.max(3, Math.min(48, Math.round(GC_INNER * body)));
+  const outer = Math.max(2, Math.min(24, Math.round(GC_OUTER * body)));
+  const ring = Math.max(4, Math.round(GC_RING * body));
+  const reach = outer + ring + 2;
+  const others = all.filter((o) => o !== c && rectGap(o.bbox, c.bbox) <= reach);
+  const r = refineByGraphCut(img, c.mask, c.bbox, others, { inner, outer, ring, scale: Math.max(1, Math.min(GC_MAX_SCALE, Math.round(body / GC_BODY_PX))) });
+  if (!r) return null;
+  const { x: x0, y: y0, width: w, height: h } = r.rect;
+  const refined = fillHoles(r.mask);
+  // The region in the window; what the cut removed from it.
+  const region = createMask(w, h), removed = createMask(w, h);
+  let any = 0;
+  for (let y = 0; y < c.bbox.height; y++) {
+    for (let x = 0; x < c.bbox.width; x++) {
+      if (!c.mask.data[y * c.bbox.width + x]) continue;
+      const i = (y + c.bbox.y - y0) * w + x + c.bbox.x - x0;
+      region.data[i] = 1;
+      if (!refined.data[i]) { removed.data[i] = 1; any++; }
+    }
+  }
+  for (let i = 0; i < w * h; i++) refined.data[i] &= region.data[i];
+  if (any > 0) {
+    // Only bands wider than a thin strip (anti-aliasing, blur, JPEG colour at a clean edge) go…
+    const thin = Math.max(GC_THIN_PX, GC_THIN * body);
+    const thick = open(removed, thin, 'disk');
+    for (let i = 0; i < w * h; i++) if (removed.data[i] && !thick.data[i]) refined.data[i] = 1;
+    // …and only where colour models of the region's interior and of the table around it (not the
+    // cut's own models, which drift towards what it cut off) clearly say table on average.
+    const rc = labelComponents(thick, 8);
+    const margin = new Float64Array(rc.stats.length + 1);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const l = rc.labels[y * w + x];
+        if (!l) continue;
+        const o = ((y + y0) * W + x + x0) * 4;
+        margin[l] += gmmNegLogLikBest(r.piece, img.data[o], img.data[o + 1], img.data[o + 2]) - gmmNegLogLikBest(r.table, img.data[o], img.data[o + 1], img.data[o + 2]);
+      }
+    }
+    const keep = new Set(rc.stats.filter((st) => st.area >= GC_KEEP_MIN_AREA * ra && margin[st.label] < GC_MARGIN * st.area).map((st) => st.label));
+    if (keep.size > 0) for (let i = 0; i < w * h; i++) if (keep.has(rc.labels[i])) refined.data[i] = 1;
+    // Notches left where only parts of a band went are closed again (within the region).
+    const closed = close(refined, thin, 'disk');
+    for (let i = 0; i < w * h; i++) refined.data[i] = closed.data[i] & region.data[i];
+  }
+  const { labels, stats } = labelComponents(refined, 8);
+  const parts = stats.filter((st) => st.area >= Math.max(minArea, GC_MIN_PIECES * ra));
+  const kept = parts.reduce((sum, st) => sum + st.area, 0);
+  // (Changes of a few pixels at knob tips and corners are noise, not a halo.)
+  if (kept < GC_MIN_KEPT * c.area || (parts.length === 1 && kept > (1 - GC_MIN_CHANGE) * c.area)) return null;
+  return parts.map((st) => makeCandidate(componentMask(labels, w, st.label, st.bbox), { x: st.bbox.x + x0, y: st.bbox.y + y0, width: st.bbox.width, height: st.bbox.height }, W, H, st.area, SHAPE_MAX_PIECES * ra));
+}
+
 /**
  * Relative piece-size trend over the photo: robust least-squares plane of √area / median √area of
  * the reference pieces against normalised position. Returns null with fewer than 6 references or
@@ -1799,6 +1902,25 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
     return blocky ? snapOutline(peeled, scored, score, th.high, noise, bodyAt, W, H) ?? peeled : peeled;
   });
   lap('snap');
+  // Outlines in doubt (no convincing piece shape, or larger than a piece) refined by graph cut:
+  // halos trimmed; pieces the cut separates (each at least half a piece) become touching pieces.
+  // (Not on a dark table: no visible cast shadows there, and dark print at an outline looks like it.)
+  if (refArea > 0 && (opts.graphCut ?? GRAPH_CUT_DEFAULT) && fit.color[0] >= DARK_TABLE_L) {
+    const out: Candidate[] = [];
+    for (const c of cands) {
+      const ra = refAreaAt(c);
+      const doubtful = !c.shape || c.shape.confidence < GC_DOUBT_CONFIDENCE || c.area > GC_DOUBT_AREA * ra;
+      const parts = doubtful && !c.touchesBorder && c.area >= GC_MIN_PIECES * ra && c.area <= GC_MAX_PIECES * ra ? graphCutCandidate(c, cands, scored, refBody * Math.sqrt(ra / refArea), ra, minArea, W, H) : null;
+      if (!parts || (parts.length > 1 && parts.some((q) => q.area < 0.5 * ra))) out.push(c);
+      else if (parts.length === 1) out.push({ ...parts[0], group: c.group, merged: c.merged });
+      else {
+        group++;
+        for (const q of parts) out.push({ ...q, group });
+      }
+    }
+    cands = out;
+    lap('graphcut');
+  }
 
   // Noise is no region: strands (seam stubs, cracks) and small weak specks (shadow or grain noise
   // that only the low threshold picked up). Strong crumbs and larger weak blobs, which may be a

@@ -529,6 +529,24 @@ describe('segmentPieces on real-photo conditions', () => {
     // Only measured on plain light tables (dark painting content looks like a dark table).
     expect(dark.regions.every((r) => r.borderTable === 0)).toBe(true);
   });
+
+  it('trims cast shadows off outlines in doubt with the graph-cut option, finding more pieces', () => {
+    // Pieces with a cardboard rim and a soft cast shadow on a light table (as the bench's
+    // wave-rim-shadow-light): the shadow joins most outlines and spoils their shape.
+    const ref = PAINTINGS['great-wave'];
+    const cut = generateJigsaw(10, 14, ref.width, ref.height, 21);
+    const items = Array.from({ length: 16 }, (_, i) => (i * 9 + 4) % 140);
+    const { photo, truth } = renderPiecesPhoto(ref, cut, items, {
+      seed: 71, background: [226, 222, 214], noiseSigma: 3, blurSigma: 0.7, illumination: 0.15, scale: [1.3, 1.45],
+      rim: {}, edgeDarkening: 0.15, shadow: 0.5, shadowOffset: [8, 5], shadowBlur: 4.5,
+    });
+    const runs = [false, true].map((graphCut) => evaluateScene(segmentPieces(photo, { graphCut, assessQuality: false }), truth, cut, 0.5));
+    const meanIoU = (ev: SceneEval) => ev.pieces.reduce((s, p) => s + p.iou, 0) / ev.pieces.length;
+    const found = (ev: SceneEval) => ev.pieces.filter((p) => p.iou >= 0.8).length;
+    console.log(`graph cut, cast shadows: mean IoU ${meanIoU(runs[0]).toFixed(3)} -> ${meanIoU(runs[1]).toFixed(3)}, found ${found(runs[0])} -> ${found(runs[1])} of ${truth.length}`);
+    expect(meanIoU(runs[1])).toBeGreaterThan(meanIoU(runs[0]) + 0.005);
+    expect(found(runs[1])).toBeGreaterThan(found(runs[0]));
+  });
 });
 
 describe('segmentPieces performance', () => {

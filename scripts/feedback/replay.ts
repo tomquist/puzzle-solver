@@ -18,6 +18,7 @@ import { detectBox } from '../../src/pipeline/box';
 import { buildReferenceIndex } from '../../src/pipeline/match';
 import { segmentPieces, type BackgroundModel, type SegmentDiagnostics } from '../../src/pipeline/pieces';
 import { basename } from 'node:path';
+import { SEGMENT_OPTIONS } from '../../src/testing/nodeImageIO';
 import { decodeFeedbackImage, readFeedbackFile } from './io';
 import { readReview, type FeedbackReview, type MarkReview, type ReviewObject } from './review';
 import { cellJaccard, cellKey, centroidOf, containsPoint, correspondent, distanceToRect, formatCells, overlaps, rasterizeRegions, regionAtTap, type RasterRegion } from './regions';
@@ -221,7 +222,7 @@ export function replayFeedback(bundle: FeedbackBundle, name: string, opts: Repla
   const diagnostics: SegmentDiagnostics = {};
   let t = now();
   const segTimings: Record<string, number> = {};
-  const seg = segmentPieces(photo, { timings: segTimings, diagnostics });
+  const seg = segmentPieces(photo, { ...SEGMENT_OPTIONS, timings: segTimings, diagnostics });
   timings.segment = now() - t;
   out.diagnostics = diagnostics;
   out.background = seg.background;
@@ -231,7 +232,7 @@ export function replayFeedback(bundle: FeedbackBundle, name: string, opts: Repla
     const index = buildReferenceIndex(ref, bundle.puzzle.grid, bundle.puzzle.cut);
     timings.index = now() - t;
     t = now();
-    out.current = analyzeScan(index, photo, { maxSide: Math.max(photo.width, photo.height) }).result;
+    out.current = analyzeScan(index, photo, { maxSide: Math.max(photo.width, photo.height), segment: SEGMENT_OPTIONS }).result;
     timings.analyze = now() - t;
     out.matched = true;
   } else {
