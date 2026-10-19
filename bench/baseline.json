@@ -660,6 +660,11 @@
         "objectClean": 1,
         "objectPrecision": 0.947
       },
+      "2026-10-19-board-letter-strip-1500pc.json": {
+        "objectRecall": 0.938,
+        "objectClean": 0.75,
+        "objectPrecision": 0.737
+      },
       "2026-10-19-closeup-shadow-board-1500pc.json": {
         "objectRecall": 1,
         "objectClean": 0.667,

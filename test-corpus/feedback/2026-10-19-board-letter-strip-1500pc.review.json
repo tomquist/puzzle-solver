@@ -1,0 +1,172 @@
+{
+  "reviewed": "2026-10-19",
+  "note": "Answer key for the middle only (loose pieces around the letter strip).",
+  "marks": {
+    "1": {
+      "verdict": "ok",
+      "note": "two-piece patch (postcards + dark ornament) placed on the ARTISAN line of the chalkboard sign: no chalkboard text on it"
+    },
+    "2": {
+      "verdict": "ok",
+      "kind": "bad_outline",
+      "note": "part of one assembled strip (ACCEPTED ORDERS SPECIAL CHOCOLATE ARTISAN HANDMADE + three pieces on top) split into 6 regions; marked merged, the region should be the whole strip"
+    },
+    "3": {
+      "verdict": "ok",
+      "kind": "bad_outline",
+      "note": "part of one assembled strip (ACCEPTED ORDERS SPECIAL CHOCOLATE ARTISAN HANDMADE + three pieces on top) split into 6 regions; marked merged, the region should be the whole strip"
+    },
+    "4": {
+      "verdict": "ok",
+      "kind": "bad_outline",
+      "note": "part of one assembled strip (ACCEPTED ORDERS SPECIAL CHOCOLATE ARTISAN HANDMADE + three pieces on top) split into 6 regions; marked merged, the region should be the whole strip"
+    },
+    "5": {
+      "verdict": "ok",
+      "kind": "bad_outline",
+      "note": "part of one assembled strip (ACCEPTED ORDERS SPECIAL CHOCOLATE ARTISAN HANDMADE + three pieces on top) split into 6 regions; marked merged, the region should be the whole strip"
+    },
+    "6": {
+      "verdict": "ok",
+      "kind": "bad_outline",
+      "note": "part of one assembled strip (ACCEPTED ORDERS SPECIAL CHOCOLATE ARTISAN HANDMADE + three pieces on top) split into 6 regions; marked merged, the region should be the whole strip"
+    },
+    "7": {
+      "verdict": "ok",
+      "kind": "bad_outline",
+      "note": "part of one assembled strip (ACCEPTED ORDERS SPECIAL CHOCOLATE ARTISAN HANDMADE + three pieces on top) split into 6 regions; marked merged, the region should be the whole strip"
+    },
+    "8": {
+      "verdict": "ok"
+    },
+    "9": {
+      "verdict": "ok"
+    },
+    "10": {
+      "verdict": "ok"
+    },
+    "11": {
+      "verdict": "ok"
+    },
+    "12": {
+      "verdict": "ok",
+      "note": "dark tab and dark edges left out"
+    },
+    "13": {
+      "verdict": "ok",
+      "note": "covers only the lower of two pieces"
+    },
+    "14": {
+      "verdict": "ok"
+    },
+    "15": {
+      "verdict": "ok"
+    }
+  },
+  "area": {
+    "x": 330,
+    "y": 1030,
+    "width": 1070,
+    "height": 670
+  },
+  "objects": [
+    {
+      "x": 692,
+      "y": 1138,
+      "note": "orange piece"
+    },
+    {
+      "x": 630,
+      "y": 1233,
+      "note": "two assembled pieces: postcards + dark ornament"
+    },
+    {
+      "x": 930,
+      "y": 1079,
+      "note": "pink/green piece"
+    },
+    {
+      "x": 1055,
+      "y": 1100,
+      "note": "beige ornate piece (upper of two, touching or joined)"
+    },
+    {
+      "x": 1051,
+      "y": 1179,
+      "note": "yellow striped piece below it: joined to it or separate",
+      "unsure": true
+    },
+    {
+      "x": 1159,
+      "y": 1108,
+      "note": "piece right of it"
+    },
+    {
+      "x": 897,
+      "y": 1208,
+      "note": "grey ornament piece"
+    },
+    {
+      "x": 997,
+      "y": 1300,
+      "note": "yellow/pink piece"
+    },
+    {
+      "x": 1080,
+      "y": 1350,
+      "note": "dark piece"
+    },
+    {
+      "x": 1155,
+      "y": 1333,
+      "note": "dark piece with orange"
+    },
+    {
+      "x": 1130,
+      "y": 1442,
+      "note": "olive piece"
+    },
+    {
+      "x": 842,
+      "y": 1400,
+      "note": "piece with blue/orange"
+    },
+    {
+      "x": 580,
+      "y": 1483,
+      "note": "assembled letter strip with three pieces on top"
+    },
+    {
+      "x": 801,
+      "y": 1667,
+      "note": "pink piece"
+    },
+    {
+      "x": 930,
+      "y": 1567,
+      "note": "yellow stone-wall piece (with the pink/grey one right of it, joined)"
+    },
+    {
+      "x": 997,
+      "y": 1575,
+      "note": "pink/grey piece right of the stone wall: joined or separate",
+      "unsure": true
+    },
+    {
+      "x": 1155,
+      "y": 1550,
+      "note": "blue/grey piece at the sign patch"
+    },
+    {
+      "x": 1313,
+      "y": 1250,
+      "note": "sign patch (CHOCOLATE SHOPPE)"
+    },
+    {
+      "x": 1122,
+      "y": 1667,
+      "note": "purple pieces below the sign: part of it or separate",
+      "unsure": true
+    }
+  ]
+}
