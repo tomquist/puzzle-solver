@@ -63,6 +63,25 @@ function darkWoodLowerPart(img: RGBAImage, wood: RGB, level = 0.5): RGBAImage {
   return out;
 }
 
+/**
+ * The painting with its lower half in a flat grey (a grey sky, grey stones) keeping a little of the
+ * print's lightness detail (`detail`, relative): pieces from there show large areas of nearly one
+ * colour, as plain as a table, and the reference shows them alike.
+ */
+function greyLowerPart(img: RGBAImage, grey: RGB, detail = 0.2): RGBAImage {
+  const out = { width: img.width, height: img.height, data: new Uint8ClampedArray(img.data) };
+  for (let y = 0; y < img.height; y++) {
+    const t = Math.max(0, Math.min(1, (y / img.height - 0.45) / 0.05));
+    if (t === 0) continue;
+    for (let x = 0; x < img.width; x++) {
+      const i = (y * img.width + x) * 4, d = img.data;
+      const l = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+      for (let c = 0; c < 3; c++) out.data[i + c] = d[i + c] * (1 - t) + t * grey[c] * (1 + detail * (l - 0.4));
+    }
+  }
+  return out;
+}
+
 const SCENARIOS: Scenario[] = [
   { name: 'starry-320-dark', painting: 'starry-night', grid: { rows: 16, cols: 20 }, items: { singles: 24 }, seeds: [1, 2], render: standard, clean: true },
   { name: 'wave-1000-dark', painting: 'great-wave', grid: { rows: 25, cols: 40 }, items: { singles: 30 }, seeds: [1, 2], render: standard, clean: true },
@@ -234,6 +253,20 @@ const SCENARIOS: Scenario[] = [
     render: (rng) => ({
       ...standard(rng), background: [168, 171, 176], illumination: 0.15, margin: 4, packing: 1.7,
       darkPieces: { share: 0.6, level: 0.4 }, secondSurface: { color: [142, 134, 82] }, jpegQuality: 85,
+    }),
+  },
+  // From real feedback (a tan board under the phone's shadow): assembled patches along all four
+  // photo sides, cut off by them, cover nearly all of the border band; loose pieces lie in between,
+  // a hard-edged rectangular shadow darkens the middle and water stains mark the board. Half of
+  // the print is a nearly plain grey (a grey sky): the border band is mostly print, and its grey
+  // looks like a table colour there. The table is the board.
+  {
+    name: 'starry-board-edge-patches',
+    painting: 'starry-night', grid: { rows: 16, cols: 20 }, seeds: [36, 37], tone: (img) => greyLowerPart(img, [115, 115, 118]),
+    items: { singles: 10, patches: [[2, 9], [2, 9], [2, 9], [2, 9], [2, 9], [2, 9], [2, 9], [2, 9]] },
+    render: (rng) => ({
+      ...standard(rng), background: [198, 162, 114], backgroundTexture: 10, illumination: 0.1, scale: 0.9, width: 1260, height: 1420,
+      edgePatches: { gap: -24 }, hardShadow: { rect: [0.3, 0.35, 0.72, 1.1], strength: 0.3 }, stains: { count: 5 }, jpegQuality: 85,
     }),
   },
 ];
