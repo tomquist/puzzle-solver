@@ -10,6 +10,7 @@
  *   5-background.png  table model (modelled colour), its statistics and the quality reports
  *   6-marks-<n>.png   zoom per mark / failed placement: app | current | score | mask
  *   7-box.png         box photo: user quad vs. current detectBox quad, corner errors
+ *   8-key.png         the review's answer key (objects, area) over the current outlines: alone / merged / missed
  *   summary.txt       the printed summary; replay.json: judgements and metrics
  * Colours are the same in every image (see COLORS in draw.ts).
  */
@@ -23,7 +24,7 @@ import type { FeedbackBundle } from '../../src/feedback/format';
 import type { DetectedRegion, QualityReport, RegionMatch, ScanResult } from '../../src/model/types';
 import { backgroundAt } from '../../src/pipeline/pieces';
 import { COLORS, fillRect, heat, hstack, View, vstack, withHeader, type Color, type HeaderLines } from './draw';
-import { feedbackMetrics, type FeedbackReplay, type MarkJudgement, type ObjectScore, type PlacementJudgement } from './replay';
+import { feedbackMetrics, type FeedbackReplay, type MarkJudgement, type ObjectScore, type ObjectStatus, type PlacementJudgement } from './replay';
 import { formatCells } from './regions';
 
 const MAX_SIDE = 1400;
@@ -54,7 +55,9 @@ function statusColor(r: DetectedRegion, m: RegionMatch | undefined): Color {
   return m.status === 'confident' ? COLORS.confident : COLORS.ambiguous;
 }
 
-const verdictColor = (fixed: boolean | null): Color => (fixed === true ? COLORS.ok : fixed === false ? COLORS.bad : COLORS.neutral);
+const KEY_COLORS: Record<ObjectStatus | 'unsure', Color> = { alone: COLORS.ok, merged: COLORS.merged, missed: COLORS.bad, unsure: [170, 170, 170, 255] };
+
+const verdictColor =(fixed: boolean | null): Color => (fixed === true ? COLORS.ok : fixed === false ? COLORS.bad : COLORS.neutral);
 const darker = (c: Color): Color => [c[0] * 0.5, c[1] * 0.5, c[2] * 0.5, 235];
 
 function savePng(path: string, img: RGBAImage): void {
@@ -268,6 +271,30 @@ export function writeInspection(r: FeedbackReplay, outDir: string): { summary: s
     save('4-mask.png', m.render([
       [['WHITE = FOREGROUND BY COLOUR', MASK_COLOURS.colour], ['CYAN = ADDED BY THE TEXTURE CUE', MASK_COLOURS.texture], [`ORANGE = SPECKS DROPPED (< ${d.minArea} PX)`, MASK_COLOURS.removed]],
       [[`EXPECTED PIECE: BODY ${Math.round(d.refBody ?? 0)} PX, AREA ${Math.round(d.refArea ?? 0)} PX (FRAGMENT < 35%, PATCH > 180%)`, COLORS.white]],
+      OUTLINE_LEGEND,
+    ]));
+  }
+
+  if (r.photo && r.current && r.key) {
+    // 8) The review's answer key over the current outlines.
+    const { objects, area, status } = r.key;
+    const v = new View(r.photo, { maxSide: MAX_SIDE });
+    drawRegions(v, r.current, 1);
+    if (area) {
+      const { x, y, width: w, height: h } = area;
+      v.polygon([{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }], COLORS.badOutline, 3);
+    }
+    const rad = Math.max(6, 0.12 * size * v.scale);
+    objects.forEach((o, i) => {
+      const color = o.unsure ? KEY_COLORS.unsure : KEY_COLORS[status[i]];
+      v.circle(o, rad, COLORS.black, 5);
+      v.circle(o, rad, color, 3);
+      v.label({ x: o.x, y: o.y - (rad + 10) / v.scale }, `K${i + 1}`, COLORS.white, darker(color), TEXT);
+    });
+    const n = (k: ObjectStatus) => objects.filter((o, i) => !o.unsure && status[i] === k).length;
+    save('8-key.png', v.render([
+      [[`ANSWER KEY (${objects.length} OBJECTS${area ? ', CYAN = KEY AREA' : ''}) OVER THE CURRENT OUTLINES`, COLORS.white]],
+      [[`ALONE ${n('alone')}`, KEY_COLORS.alone], [`MERGED ${n('merged')}`, KEY_COLORS.merged], [`MISSED ${n('missed')}`, KEY_COLORS.missed], ['UNSURE (NOT COUNTED)', KEY_COLORS.unsure]],
       OUTLINE_LEGEND,
     ]));
   }

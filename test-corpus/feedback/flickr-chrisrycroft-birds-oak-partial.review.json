@@ -1,0 +1,17 @@
+{
+  "reviewed": "2026-10-19",
+  "marks": {},
+  "area": { "x": 1500, "y": 400, "width": 900, "height": 500 },
+  "objects": [
+    { "x": 1400, "y": 650, "note": "the large assembled part (birds), reaching into the area at its right edge" },
+    { "x": 1780, "y": 500, "note": "loose pink piece" },
+    { "x": 1920, "y": 630, "note": "loose green/purple piece" },
+    { "x": 2110, "y": 470, "note": "assembled group of about five pieces (light green and grey)" },
+    { "x": 2380, "y": 500, "unsure": true, "note": "red piece cut off by the right edge" },
+    { "x": 2370, "y": 400, "unsure": true, "note": "grey piece cut off by the right edge" },
+    { "x": 2280, "y": 310, "unsure": true, "note": "grey-green piece above the area" },
+    { "x": 1800, "y": 330, "unsure": true, "note": "edge of the upper assembled part (barn), above the area" },
+    { "x": 2330, "y": 905, "unsure": true, "note": "assembled part at the bottom right, out of focus" },
+    { "x": 1880, "y": 960, "unsure": true, "note": "dark piece at the bottom, out of focus" }
+  ]
+}

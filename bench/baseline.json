@@ -674,6 +674,31 @@
         "objectRecall": 1,
         "objectClean": 0.833,
         "objectPrecision": 1
+      },
+      "flickr-chrisrycroft-birds-oak-partial.json": {
+        "objectRecall": 0.5,
+        "objectClean": 0.5,
+        "objectPrecision": 0.091
+      },
+      "flickr-electric-eye-oblique-wood-pieces.json": {
+        "objectRecall": 1,
+        "objectClean": 0.739,
+        "objectPrecision": 0.957
+      },
+      "flickr-electric-eye-sunlit-wood-pieces.json": {
+        "objectRecall": 0.219,
+        "objectClean": 0.156,
+        "objectPrecision": 0.065
+      },
+      "flickr-tatters-peacock-white-cloth-1000pc.json": {
+        "objectRecall": 1,
+        "objectClean": 0.941,
+        "objectPrecision": 0.846
+      },
+      "flickr-welikesharing-map-oblique-wood.json": {
+        "objectRecall": 0.5,
+        "objectClean": 0.5,
+        "objectPrecision": 0.333
       }
     },
     "sides": {
@@ -916,6 +941,95 @@
         "jitter dtw+colour@5": 0.474,
         "jitter dtw-levelled+colour@1": 0.158,
         "jitter dtw-levelled+colour@5": 0.684
+      }
+    },
+    "puzzlemap": {
+      "100_dc.jpg": {
+        "cells": 100,
+        "top1": 0.846,
+        "top3": 1,
+        "rotationOk": 0.846,
+        "confidentPrecision": 1,
+        "segFound": 1,
+        "segTop1": 0,
+        "segTop3": 0.077,
+        "segErrors": 0
+      },
+      "120_avengers.png": {
+        "cells": 120,
+        "top1": 0.946,
+        "top3": 0.979,
+        "rotationOk": 0.946,
+        "confidentPrecision": 0.988,
+        "segFound": 0.936,
+        "segTop1": 0.155,
+        "segTop3": 0.231,
+        "segErrors": 1
+      },
+      "6_patos_p2.jpg": {
+        "cells": 6,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "segFound": 1,
+        "segTop1": 0.647,
+        "segTop3": 0.941,
+        "segErrors": 0
+      },
+      "6_patos_p3.jpg": {
+        "cells": 6,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "segFound": 0.917,
+        "segTop1": 0.5,
+        "segTop3": 0.583,
+        "segErrors": 0
+      },
+      "6_patos_p4.jpg": {
+        "cells": 6,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "segFound": 0.711,
+        "segTop1": 0.263,
+        "segTop3": 0.421,
+        "segErrors": 0
+      },
+      "6_patos_p5.jpg": {
+        "cells": 6,
+        "top1": 0.97,
+        "top3": 0.97,
+        "rotationOk": 0.97,
+        "confidentPrecision": 1,
+        "segFound": 0.909,
+        "segTop1": 0.515,
+        "segTop3": 0.667,
+        "segErrors": 0
+      },
+      "6_patos.jpg": {
+        "cells": 6,
+        "top1": 0.783,
+        "top3": 0.848,
+        "rotationOk": 0.783,
+        "confidentPrecision": 1,
+        "segFound": 0.978,
+        "segTop1": 0.609,
+        "segTop3": 0.848,
+        "segErrors": 0
+      },
+      "overall": {
+        "top1": 0.939,
+        "top3": 0.972,
+        "rotationOk": 0.939,
+        "confidentPrecision": 0.991,
+        "segFound": 0.927,
+        "segTop1": 0.229,
+        "segTop3": 0.331,
+        "segErrors": 1
       }
     }
   }
