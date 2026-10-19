@@ -36,7 +36,8 @@ objective.
 ## Metrics (benchmark)
 
 - Box detection: max corner error (% of picture diagonal); rectified-image alignment error.
-- Segmentation: piece recall/precision (IoU ≥ 0.8), patch detection, false fragments.
+- Segmentation: piece recall/precision (IoU ≥ 0.8), patch detection, false fragments; outline
+  accuracy of the matched regions (mask IoU and boundary F-score at 2 px, report only).
 - Shape: corner error (% of body size), piece-kind accuracy (corner/edge/interior), side-kind accuracy.
 - Matching: top-1 / top-3 cell accuracy, rotation accuracy, confidence calibration (confident ⇒
   correct rate), patch placement accuracy.

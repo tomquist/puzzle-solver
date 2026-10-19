@@ -13,6 +13,8 @@ puzzle picture and box photo.
   Playwright's Chromium: `npx playwright install chromium`).
 - `npm run bench` replays every file here and checks the corrections stay fixed
   (bench/feedback.eval.ts, gated by bench/baseline.json).
+- `GRAPH_CUT=1` (or `0`) in front of either command turns the graph-cut outline refinement on
+  (off) for A/B comparisons (SegmentOptions.graphCut).
 
 Marks are what the user tapped, not ground truth: users tap beside a piece, overlook one or mark
 two touching pieces as one. Before a new file's marks count, check every mark by eye on the photo

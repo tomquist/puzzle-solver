@@ -78,6 +78,12 @@ export interface SegmentOptions {
   fragmentAreaRatio?: number;
   /** Split touching pieces at narrow necks into separate regions (default true). */
   splitTouching?: boolean;
+  /**
+   * Refine outlines in doubt by graph cut (GrabCut-style colour models and contrast-sensitive
+   * smoothness, see refine.ts) after splitting and snapping, trimming halos the colour models
+   * clearly take for table; not on dark tables (default false).
+   */
+  graphCut?: boolean;
   /** Run the photo-quality assessment (default true). */
   assessQuality?: boolean;
   /** When given, milliseconds per stage are added to it (e.g. `background`, `threshold`, `shapes`). */

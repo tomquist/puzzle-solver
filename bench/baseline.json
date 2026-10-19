@@ -559,6 +559,24 @@
         "neighborPrecision": 1,
         "neighborRecall": 0.333,
         "hiddenRate": 0.028
+      },
+      "starry-board-edge-patches": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 0.8,
+        "kindAccuracy": 0.688,
+        "top1": 0.194,
+        "top3": 0.35,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 0,
+        "warnings": 1,
+        "assembledRecall": 0,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0.5
       }
     },
     "box": {
@@ -605,9 +623,9 @@
         "objectPrecision": 1
       },
       "2026-10-18-pale-pieces-light-table-1500pc.json": {
-        "missedFound": 0.8,
-        "objectRecall": 0.917,
-        "objectClean": 0.917,
+        "missedFound": 1,
+        "objectRecall": 1,
+        "objectClean": 0.833,
         "objectPrecision": 0.923
       },
       "2026-10-18-spread-stone-table-1500pc.json": {
@@ -643,14 +661,14 @@
         "objectPrecision": 0.947
       },
       "2026-10-19-closeup-shadow-board-1500pc.json": {
-        "objectRecall": 0.667,
-        "objectClean": 0.333,
-        "objectPrecision": 0.16
+        "objectRecall": 1,
+        "objectClean": 0.667,
+        "objectPrecision": 0.5
       },
       "2026-10-19-wide-board-patches-1500pc.json": {
-        "objectRecall": 0,
-        "objectClean": 0,
-        "objectPrecision": 0
+        "objectRecall": 1,
+        "objectClean": 0.833,
+        "objectPrecision": 1
       }
     },
     "sides": {

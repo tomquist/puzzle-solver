@@ -42,6 +42,12 @@ describe('scoreObjects', () => {
     expect(scoreObjects([{ x: 20, y: 20 }], regions, { x: 0, y: 0, width: 200, height: 100 })).toEqual({ objects: 1, found: 1, clean: 1, regions: 2, real: 1 });
   });
 
+  it('finds an object in the area through a region centred outside it', () => {
+    // A patch from x 150 to 350 is centred at x 250, outside the key's area (x < 200).
+    const regions = rasterizeRegions([square(1, 150, 0, 200)]);
+    expect(scoreObjects([{ x: 170, y: 20 }], regions, { x: 0, y: 0, width: 200, height: 400 })).toEqual({ objects: 1, found: 1, clean: 1, regions: 0, real: 0 });
+  });
+
   it('leaves unsure objects out of the counts but lets them justify a region', () => {
     const regions = rasterizeRegions([square(1, 0, 0, 40), square(2, 100, 0, 40)]);
     const key = [{ x: 20, y: 20 }, { x: 120, y: 20, unsure: true }];

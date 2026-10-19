@@ -8,6 +8,15 @@
  * (moderately darker pixels with proportionally scaled chroma). A patterned cloth (or the floor
  * beyond a table edge) adds further table colours: the score is then the distance to the nearest
  * table colour or blend of two.
+ *
+ * The border band is not always table: assembled patches may cover most of it. What tells table
+ * from print is uniformity at the scale of the sample grid (≈ 1/150 of the photo): a table, a
+ * cloth or the floor is a large area of alike neighbours, print is broken up by its detail and the
+ * cut lines between pieces. So when the band's colour explains little of the photo's uniform
+ * area, the table is refitted from the dominant uniform colour; a further table colour that shows
+ * as large areas must be about as uniform there as the main surface; and light the quadratic
+ * surface cannot follow (the phone's hard-edged shadow, a lit strip) is corrected locally from
+ * the large uniform areas of the table's hue under other light.
  */
 import { rgbToLab } from '../../cv/color';
 import { solveLinear } from '../../cv/geometry';
@@ -144,9 +153,9 @@ function localRow(g: LocalTableGrid, y: number): Float32Array {
  * lighting the quadratic surface cannot follow become table. The outer nodes sit on the photo
  * border (half windows there), so a shadow reaching in from the edge is followed up to the edge.
  * Nodes with too little table are filled from their neighbours. Returns null when the residuals
- * are negligible everywhere (< LOCAL_MIN_RESIDUAL sigmas).
+ * are negligible everywhere (< `minResidual` sigmas).
  */
-export function fitLocalTable(photo: RGBAImage, fit: BackgroundFit, exclude: Mask, cell: number): LocalTableGrid | null {
+export function fitLocalTable(photo: RGBAImage, fit: BackgroundFit, exclude: Mask, cell: number, minResidual = LOCAL_MIN_RESIDUAL): LocalTableGrid | null {
   const { width: w, height: h, data } = photo;
   const cols = Math.max(2, Math.round((2 * w) / cell) + 1), rows = Math.max(2, Math.round((2 * h) / cell) + 1);
   const cellW = w / (cols - 1), cellH = h / (rows - 1);
@@ -197,11 +206,15 @@ export function fitLocalTable(photo: RGBAImage, fit: BackgroundFit, exclude: Mas
     }
   }
   fillFromNeighbours(res, valid, cols, rows);
+  const grid = { cols, rows, cellW, cellH, residual: res };
+  return maxResidual(grid, fit.sigma) >= minResidual ? grid : null;
+}
+
+/** Largest residual (sigmas) of a local grid. */
+function maxResidual(g: LocalTableGrid, sigma: readonly number[]): number {
   let big = 0;
-  for (let i = 0; i < cols * rows; i++) {
-    for (let c = 0; c < 3; c++) big = Math.max(big, Math.abs(res[i * 3 + c]) / fit.sigma[c]);
-  }
-  return big >= LOCAL_MIN_RESIDUAL ? { cols, rows, cellW, cellH, residual: res } : null;
+  for (let i = 0; i < g.residual.length; i++) big = Math.max(big, Math.abs(g.residual[i]) / sigma[i % 3]);
+  return big;
 }
 
 /** Give grid nodes without enough table the mean of their valid neighbours (repeated). */
@@ -365,7 +378,9 @@ function fitChannel(s: Samples, ch: number, weight: Float32Array): number[] | nu
 
 /**
  * Fit the background model of a photo. Robust to pieces lying on the border band (median start,
- * Tukey-weighted refits that exclude samples near foreground).
+ * Tukey-weighted refits that exclude samples near foreground). When assembled patches cover most
+ * of the border band, the table is found as the photo's dominant uniform surface instead
+ * ({@link surfaceSeed}).
  */
 export function fitBackground(photo: RGBAImage): BackgroundFit {
   const { width, height } = photo;
@@ -382,29 +397,68 @@ export function fitBackground(photo: RGBAImage): BackgroundFit {
     bandIdx = [];
     for (let i = 0; i < s.n; i++) if (s.band[i]) bandIdx.push(i);
   }
+  const bandAll: number[] = [];
+  for (let i = 0; i < s.n; i++) if (s.band[i]) bandAll.push(i);
+  let fit = fitSurface(s, bandIdx, bandAll, s.band, skipClipped, width, height);
+  // 2) The border band may show assembled patches rather than table: then the main colour is a
+  // blend of print colours that explains little of the photo's uniform area. The dominant uniform
+  // colour of the whole photo starts a second fit, kept when it explains the uniform area clearly
+  // better.
+  const tex = sampleTexture(s);
+  const seed = surfaceSeed(s, fit, tex);
+  if (seed) {
+    const inSeed = new Uint8Array(s.n);
+    for (const i of seed) inSeed[i] = 1;
+    const alt = fitSurface(s, seed, seed, inSeed, skipClipped, width, height);
+    if (uniformExplained(s, alt, tex) >= RESEED_GAIN * uniformExplained(s, fit, tex)) fit = alt;
+  }
+  // 3) Further table colours (patterned cloth, a second surface).
+  findPalette(s, fit, tex);
+  // 4) Light the smooth surface cannot follow (a hard-edged shadow, a lit strip): local
+  // corrections learnt from the large uniform areas of the table's hue under other light.
+  if (fit.palette.length === 0) {
+    const local = shadeLocal(photo, s, fit, tex);
+    if (local) fit.local = local;
+  }
+  // How well the table model explains the border band (low for a patterned cloth it cannot follow).
+  let bandN = 0, bandIn = 0;
+  for (let i = 0; i < s.n; i++) {
+    if (!s.band[i]) continue;
+    bandN++;
+    if (sampleDistance(s, i, fit) < 3.5) bandIn++;
+  }
+  fit.bandFit = bandN > 0 ? bandIn / bandN : 1;
+  return fit;
+}
+
+/**
+ * Main table surface fitted from the samples `seed` (border band, or the photo's dominant uniform
+ * surface): start colour = median of `seedAll`, spread from `seed` (global, chroma limited by the
+ * local spread), then Tukey-weighted quadratic refits over all samples (the first only over
+ * `seedMask`) that exclude the neighbourhood of foreground.
+ */
+function fitSurface(s: Samples, seed: readonly number[], seedAll: readonly number[], seedMask: Uint8Array, skipClipped: boolean, width: number, height: number): BackgroundFit {
   const color: [number, number, number] = [0, 0, 0];
   const sigma: [number, number, number] = [0, 0, 0];
-  const tmp = new Float32Array(bandIdx.length);
-  // Local spread: differences between neighbouring band samples (noise + texture, but not a second
+  const tmp = new Float32Array(seed.length);
+  // Local spread: differences between neighbouring seed samples (noise + texture, but not a second
   // surface such as the floor beyond the table edge, which would inflate the global spread and let
   // that surface into the first fit).
-  const inBand = new Uint8Array(s.n);
-  for (const i of bandIdx) inBand[i] = 1;
+  const inSeed = new Uint8Array(s.n);
+  for (const i of seed) inSeed[i] = 1;
   const diffs: number[][] = [[], [], []];
-  for (const i of bandIdx) {
+  for (const i of seed) {
     const gx = i % s.gw;
     for (const j of [gx + 1 < s.gw ? i + 1 : -1, i + s.gw < s.n ? i + s.gw : -1]) {
-      if (j < 0 || !inBand[j]) continue;
+      if (j < 0 || !inSeed[j]) continue;
       for (let ch = 0; ch < 3; ch++) diffs[ch].push(Math.abs(s.lab[i * 3 + ch] - s.lab[j * 3 + ch]));
     }
   }
-  const bandAll: number[] = [];
-  for (let i = 0; i < s.n; i++) if (s.band[i]) bandAll.push(i);
-  const all = new Float32Array(bandAll.length);
+  const all = new Float32Array(seedAll.length);
   for (let ch = 0; ch < 3; ch++) {
-    for (let j = 0; j < bandAll.length; j++) all[j] = s.lab[bandAll[j] * 3 + ch];
+    for (let j = 0; j < seedAll.length; j++) all[j] = s.lab[seedAll[j] * 3 + ch];
     color[ch] = median(all);
-    for (let j = 0; j < bandIdx.length; j++) tmp[j] = Math.abs(s.lab[bandIdx[j] * 3 + ch] - color[ch]);
+    for (let j = 0; j < seed.length; j++) tmp[j] = Math.abs(s.lab[seed[j] * 3 + ch] - color[ch]);
     const global = 1.4826 * median(tmp);
     const local = diffs[ch].length >= 20 ? (1.4826 * median(diffs[ch])) / Math.SQRT2 : Infinity;
     // Lightness also varies with the lighting gradient (fitted next), so only chroma is limited.
@@ -433,11 +487,11 @@ export function fitBackground(photo: RGBAImage): BackgroundFit {
       gridMask.data[i] = dist[i] >= 3.5 ? 1 : 0;
     }
     const near = dilate(gridMask, 1);
-    const bandOnly = iter === 0;
+    const seedOnly = iter === 0;
     let used = 0;
     for (let i = 0; i < s.n; i++) {
       const d = dist[i];
-      if ((bandOnly && !s.band[i]) || near.data[i] || d >= C) weight[i] = 0;
+      if ((seedOnly && !seedMask[i]) || near.data[i] || d >= C) weight[i] = 0;
       else {
         const t = d / C;
         weight[i] = (1 - t * t) * (1 - t * t);
@@ -468,17 +522,230 @@ export function fitBackground(photo: RGBAImage): BackgroundFit {
   }
   const lo = quantile(Ys, 0.05), hi = quantile(Ys, 0.95);
   const ratio = Ys.length >= 20 && lo > 1e-4 ? hi / lo : lightingRatio({ coefficients });
-  const fit: BackgroundFit = { color, coefficients, sigma, width, height, lightingRatio: ratio, bandFit: 1, palette: [] };
-  findPalette(s, fit);
-  // How well the table model explains the border band (low for a patterned cloth it cannot follow).
-  let bandN = 0, bandIn = 0;
+  return { color, coefficients, sigma, width, height, lightingRatio: ratio, bandFit: 1, palette: [] };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Uniform surfaces: a table is large and uniform, print is not
+// ---------------------------------------------------------------------------------------------
+
+/** Colour difference (lightness-weighted Lab units) between neighbouring samples below which they count as alike. */
+const UNIFORM_DIFF = 6;
+/** The same in multiples of the photo's quietest sample texture (10th percentile), for noisy photos. */
+const UNIFORM_NOISE = 2.5;
+/** Share of the uniform samples the band's main colour must explain, below which the photo is searched for the table. */
+const RESEED_MAX_EXPLAINED = 0.5;
+/** Smallest share of all samples the dominant uniform colour must cover to start a new fit (a surface, not one patch). */
+const RESEED_MIN_SHARE = 0.1;
+/** Factor by which a fit from the dominant uniform colour must explain more uniform samples to replace the band's fit. */
+const RESEED_GAIN = 2;
+/**
+ * Uniform share of a further table colour relative to the main surface's below which its large
+ * areas are print (measured ≤ 0.3 for print colours of assembled patches, ≥ 0.65 for second
+ * tables, cloths, the floor beyond a table edge and shadow zones).
+ */
+const PALETTE_MIN_UNIFORM = 0.5;
+
+/** Weighted Lab difference of two samples. */
+function sampleDiff(s: Samples, i: number, j: number): number {
+  const dL = s.lab[i * 3] - s.lab[j * 3], da = s.lab[i * 3 + 1] - s.lab[j * 3 + 1], db = s.lab[i * 3 + 2] - s.lab[j * 3 + 2];
+  return Math.sqrt(W_L * dL * dL + da * da + db * db);
+}
+
+/**
+ * Sample texture: the largest colour difference to a 4-neighbour on the sample grid (≈ 1/150 of
+ * the photo apart). Table, cloth and floor are uniform at that scale (noise, grain, slow shading);
+ * print and the cut lines of assembled patches are not.
+ */
+function sampleTexture(s: Samples): Float32Array {
+  const t = new Float32Array(s.n);
   for (let i = 0; i < s.n; i++) {
-    if (!s.band[i]) continue;
-    bandN++;
-    if (sampleDistance(s, i, fit) < 3.5) bandIn++;
+    const gx = i % s.gw;
+    let m = 0;
+    if (gx + 1 < s.gw) m = Math.max(m, sampleDiff(s, i, i + 1));
+    if (gx > 0) m = Math.max(m, sampleDiff(s, i, i - 1));
+    if (i + s.gw < s.n) m = Math.max(m, sampleDiff(s, i, i + s.gw));
+    if (i >= s.gw) m = Math.max(m, sampleDiff(s, i, i - s.gw));
+    t[i] = m;
   }
-  fit.bandFit = bandN > 0 ? bandIn / bandN : 1;
-  return fit;
+  return t;
+}
+
+/** Texture below which a sample counts as uniform (UNIFORM_DIFF, raised for noisy photos). */
+function uniformLimit(tex: Float32Array): number {
+  return Math.max(UNIFORM_DIFF, UNIFORM_NOISE * quantile(tex, 0.1));
+}
+
+/** Share of the photo's uniform samples that the main surface of `fit` explains (within 3.5 sigmas). */
+function uniformExplained(s: Samples, fit: BackgroundFit, tex: Float32Array): number {
+  const lim = uniformLimit(tex);
+  const k = fit.coefficients, is = fit.sigma;
+  let n = 0, inside = 0;
+  for (let i = 0; i < s.n; i++) {
+    if (tex[i] >= lim) continue;
+    n++;
+    const u = s.u[i], v = s.v[i];
+    if (distance(s.lab[i * 3], s.lab[i * 3 + 1], s.lab[i * 3 + 2], evalPoly(k[0], u, v), evalPoly(k[1], u, v), evalPoly(k[2], u, v), 1 / is[0], 1 / is[1], 1 / is[2]) < 3.5) inside++;
+  }
+  return n > 0 ? inside / n : 1;
+}
+
+/**
+ * Seed samples for the table when the border band shows mostly something else (assembled patches
+ * covering the photo border): null while the band's main colour explains at least half of the
+ * photo's uniform samples (every plain or two-surface table measured ≥ 0.65); otherwise the
+ * members of the densest colour of the uniform samples, if they cover a surface-sized share of
+ * the photo. A table is the largest uniform area of the photo; print, even in large patches, is
+ * broken up by its own detail and the cut lines.
+ */
+function surfaceSeed(s: Samples, fit: BackgroundFit, tex: Float32Array): number[] | null {
+  if (uniformExplained(s, fit, tex) >= RESEED_MAX_EXPLAINED) return null;
+  const lim = uniformLimit(tex);
+  const uni: number[] = [];
+  for (let i = 0; i < s.n; i++) if (tex[i] < lim && !s.clip[i]) uni.push(i);
+  if (uni.length < RESEED_MIN_SHARE * s.n) return null;
+  const mode = densestColour(uni, (i) => [s.lab[i * 3], s.lab[i * 3 + 1], s.lab[i * 3 + 2]]);
+  return mode && mode.members.length >= RESEED_MIN_SHARE * s.n ? mode.members : null;
+}
+
+/**
+ * Members of the densest colour among the samples `idx` (colours given by `col`): 4-unit Lab bins
+ * (lightness weighted) counted over each bin's 3×3×3 neighbourhood; members lie within 8 units of
+ * the mode, refined once around their median (`centre`). Null with fewer than 10 members.
+ */
+function densestColour(idx: readonly number[], col: (i: number) => [number, number, number]): { members: number[]; centre: number[] } | null {
+  const wl = Math.sqrt(W_L);
+  const pts = idx.map(col);
+  const key = (q: readonly number[]) => `${Math.floor((q[0] * wl) / 4)},${Math.floor(q[1] / 4)},${Math.floor(q[2] / 4)}`;
+  const bins = new Map<string, number>();
+  for (const q of pts) bins.set(key(q), (bins.get(key(q)) ?? 0) + 1);
+  let bestKey = '', bestN = -1;
+  for (const k of bins.keys()) {
+    const [x, y, z] = k.split(',').map(Number);
+    let n = 0;
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) n += bins.get(`${x + dx},${y + dy},${z + dz}`) ?? 0;
+    if (n > bestN) { bestN = n; bestKey = k; }
+  }
+  if (bestN < 10) return null;
+  const [bx, by, bz] = bestKey.split(',').map(Number);
+  const centre = [(bx + 0.5) * 4 / wl, (by + 0.5) * 4, (bz + 0.5) * 4];
+  const within = (c: readonly number[], q: readonly number[], r: number) => Math.hypot((q[0] - c[0]) * wl, q[1] - c[1], q[2] - c[2]) <= r;
+  let members = idx.filter((_, j) => within(centre, pts[j], 8));
+  if (members.length < 10) return null;
+  const med = [0, 1, 2].map((ch) => median(members.map((i) => col(i)[ch])));
+  members = idx.filter((_, j) => within(med, pts[j], 8));
+  return members.length >= 10 ? { members, centre: med } : null;
+}
+
+/** Range of (L* + 16) ratios to the modelled table within which a uniform area of the table's hue may be table under other light. */
+const SHADE_RHO: [number, number] = [0.45, 1.6];
+/** Largest chroma distance (table sigmas) from the table chroma scaled by that ratio. */
+const SHADE_CHROMA = 3;
+
+/**
+ * Table under other light: samples in large uniform areas (alike neighbours linked, each area
+ * ≥ SURFACE_MIN_SHARE of the photo, so larger than a piece) whose colour is the modelled table's
+ * darkened or lightened, chroma scaled alike (a hard-edged shadow, a lit strip, a stain). A grey
+ * piece is no darker table (its chroma does not follow), and a piece, even in the table's hue, is
+ * cut off from the table around it by its rim and shadow.
+ */
+function shadeSurfaces(s: Samples, fit: BackgroundFit, tex: Float32Array): Uint8Array {
+  const lim = uniformLimit(tex);
+  const k = fit.coefficients, isa = 1 / fit.sigma[1], isb = 1 / fit.sigma[2];
+  const cand = new Uint8Array(s.n);
+  for (let i = 0; i < s.n; i++) {
+    if (tex[i] >= lim) continue;
+    const u = s.u[i], v = s.v[i];
+    const ref = evalPoly(k[0], u, v) + 16;
+    if (ref <= 1) continue;
+    const rho = (s.lab[i * 3] + 16) / ref;
+    if (rho < SHADE_RHO[0] || rho > SHADE_RHO[1]) continue;
+    const da = (s.lab[i * 3 + 1] - rho * evalPoly(k[1], u, v)) * isa, db = (s.lab[i * 3 + 2] - rho * evalPoly(k[2], u, v)) * isb;
+    if (da * da + db * db <= SHADE_CHROMA * SHADE_CHROMA) cand[i] = 1;
+  }
+  // Areas: union of alike 4-neighbours.
+  const parent = new Int32Array(s.n);
+  for (let i = 0; i < s.n; i++) parent[i] = i;
+  const find = (i: number): number => {
+    while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; }
+    return i;
+  };
+  for (let i = 0; i < s.n; i++) {
+    if (!cand[i]) continue;
+    const gx = i % s.gw;
+    for (const j of [gx + 1 < s.gw ? i + 1 : -1, i + s.gw < s.n ? i + s.gw : -1]) {
+      if (j < 0 || !cand[j] || sampleDiff(s, i, j) >= lim) continue;
+      const a = find(i), b = find(j);
+      if (a !== b) parent[a] = b;
+    }
+  }
+  const size = new Int32Array(s.n);
+  for (let i = 0; i < s.n; i++) if (cand[i]) size[find(i)]++;
+  const out = new Uint8Array(s.n);
+  for (let i = 0; i < s.n; i++) if (cand[i] && size[find(i)] >= SURFACE_MIN_SHARE * s.n) out[i] = 1;
+  return out;
+}
+
+/** Largest share of the table's lightness misfit that may remain once local corrections from its uniform areas apply. */
+const SHADE_EXPLAINED = 0.5;
+/**
+ * Smallest lightness misfit (L* units; 90th percentile / 1.645, a sigma for normal residuals) of
+ * those areas around the smooth surface worth correcting here: hard-edged shadows and lit strips
+ * measured ≥ 4.2, gentler unevenness ≤ 3 (left to the local model of the segmentation, learnt
+ * around the pieces found).
+ */
+const SHADE_MIN_SPREAD = 3.5;
+
+/**
+ * Local corrections for light the smooth surface cannot follow, learnt from the table under other
+ * light ({@link shadeSurfaces}): a hard-edged shadow over part of the table, a lit strip beside
+ * it. Kept only when the smooth surface misses those areas clearly (SHADE_MIN_SPREAD), the
+ * corrections explain most of it (the misfit, measured at its 90th percentile, at most halves)
+ * and they are large against what remains: glare spots, drop shadows and stains are too small to
+ * change the 90th percentile, a shadow over a fifth of the table is not.
+ */
+function shadeLocal(photo: RGBAImage, s: Samples, fit: BackgroundFit, tex: Float32Array): LocalTableGrid | null {
+  const shade = shadeSurfaces(s, fit, tex);
+  const idx: number[] = [], before: number[] = [];
+  for (let i = 0; i < s.n; i++) {
+    if (!shade[i]) continue;
+    idx.push(i);
+    before.push(Math.abs(s.lab[i * 3] - evalPoly(fit.coefficients[0], s.u[i], s.v[i])));
+  }
+  if (idx.length < 50) return null;
+  const s0 = quantile(before, 0.9) / 1.645;
+  if (s0 < SHADE_MIN_SPREAD) return null;
+  const exclude = createMask(s.gw, s.gh);
+  for (let i = 0; i < s.n; i++) exclude.data[i] = shade[i] ^ 1;
+  const { width: w, height: h } = photo;
+  const local = fitLocalTable(photo, fit, exclude, Math.min(w, h) / 10, 0);
+  if (!local) return null;
+  const after = idx.map((i) => Math.abs(s.lab[i * 3] - backgroundAt({ ...fit, local }, ((s.u[i] + 1) / 2) * (w - 1), ((s.v[i] + 1) / 2) * (h - 1))[0]));
+  const s1 = Math.max(SIGMA_FLOOR[0], quantile(after, 0.9) / 1.645);
+  if (s1 > SHADE_EXPLAINED * s0) return null;
+  // Large against the remaining misfit (chroma against the model's own spread).
+  return maxResidual(local, [s1, fit.sigma[1], fit.sigma[2]]) >= LOCAL_MIN_RESIDUAL ? local : null;
+}
+
+/**
+ * Share of the samples in `members` that are uniform: alike (UNIFORM_DIFF) every 4-neighbour,
+ * except neighbours in `skip` (the other table colour: the edge between two surfaces, or a thin
+ * plank gap in the table, is no print).
+ */
+function uniformShare(s: Samples, members: Uint8Array, skip: Uint8Array, lim: number): number {
+  let n = 0, uni = 0;
+  for (let i = 0; i < s.n; i++) {
+    if (!members[i]) continue;
+    n++;
+    const gx = i % s.gw;
+    let ok = true;
+    for (const j of [gx + 1 < s.gw ? i + 1 : -1, gx > 0 ? i - 1 : -1, i + s.gw < s.n ? i + s.gw : -1, i - s.gw]) {
+      if (j < 0 || skip[j]) continue;
+      if (sampleDiff(s, i, j) >= lim) { ok = false; break; }
+    }
+    if (ok) uni++;
+  }
+  return n > 0 ? uni / n : 0;
 }
 
 /** Lighting factor of the main surface at (u, v) relative to lightness `ref` ((L + 16) ratio). */
@@ -570,7 +837,7 @@ const BLOB_MIN_SHARE = 0.0015;
  * `blob`, the share in piece-sized areas (pieces in that colour, scattered over the table). Pattern
  * elements and specks, smaller still, count for neither.
  */
-function colourLayout(s: Samples, fit: BackgroundFit, p: PaletteColour): { surface: number; blob: number } {
+function colourLayout(s: Samples, fit: BackgroundFit, p: PaletteColour): { surface: number; blob: number; members: Mask } {
   const m = createMask(s.gw, s.gh);
   const k = fit.coefficients;
   let n = 0;
@@ -585,7 +852,7 @@ function colourLayout(s: Samples, fit: BackgroundFit, p: PaletteColour): { surfa
     m.data[i] = 1;
     n++;
   }
-  if (n === 0) return { surface: 0, blob: 0 };
+  if (n === 0) return { surface: 0, blob: 0, members: m };
   const { stats } = labelComponents(m, 8);
   let surface = 0, blob = 0;
   for (const st of stats) {
@@ -593,7 +860,28 @@ function colourLayout(s: Samples, fit: BackgroundFit, p: PaletteColour): { surfa
     if (share >= SURFACE_MIN_SHARE) surface += st.area;
     else if (share >= BLOB_MIN_SHARE) blob += st.area;
   }
-  return { surface: surface / n, blob: blob / n };
+  return { surface: surface / n, blob: blob / n, members: m };
+}
+
+/**
+ * Whether a further table colour that shows as large areas is as uniform there as the main
+ * surface is ({@link uniformShare}, each ignoring its edges with the other): a second table, a
+ * cloth or the floor is; the print of assembled patches lying along the border (a grey sky, dark
+ * stones over many pieces) is broken up by detail and cut lines. Undecided (true) when the main
+ * surface itself hardly shows uniform samples.
+ */
+function surfaceLike(s: Samples, fit: BackgroundFit, members: Mask, tex: Float32Array): boolean {
+  const k = fit.coefficients, is = fit.sigma;
+  const main = new Uint8Array(s.n);
+  for (let i = 0; i < s.n; i++) {
+    if (members.data[i]) continue;
+    const u = s.u[i], v = s.v[i];
+    if (distance(s.lab[i * 3], s.lab[i * 3 + 1], s.lab[i * 3 + 2], evalPoly(k[0], u, v), evalPoly(k[1], u, v), evalPoly(k[2], u, v), 1 / is[0], 1 / is[1], 1 / is[2]) < 3) main[i] = 1;
+  }
+  const lim = uniformLimit(tex);
+  const ref = uniformShare(s, main, members.data, lim);
+  if (ref < 0.1) return true;
+  return uniformShare(s, members.data, main, lim) >= PALETTE_MIN_UNIFORM * ref;
 }
 
 /** Noise and texture of a set of samples: robust spread of the differences between neighbouring members. */
@@ -656,9 +944,10 @@ function sampleDistance(s: Samples, i: number, fit: BackgroundFit): number {
  * to two are added, each the densest colour of the unexplained band samples (lighting-compensated,
  * so one paint under a gradient stays one colour), covering ≥ 10 % of the band with a spread like
  * plain paint and laid out like a table (a surface or a fine pattern, not piece-sized blobs: many
- * pieces in one colour lying on the border look like a colour cluster too).
+ * pieces in one colour lying on the border look like a colour cluster too), and, where it shows as
+ * large areas, uniform there like a surface (not the print of assembled patches on the border).
  */
-function findPalette(s: Samples, fit: BackgroundFit): void {
+function findPalette(s: Samples, fit: BackgroundFit, tex: Float32Array): void {
   const band: number[] = [];
   let meanL = 0;
   for (let i = 0; i < s.n; i++) {
@@ -690,28 +979,13 @@ function findPalette(s: Samples, fit: BackgroundFit): void {
   for (let round = 0; round < 3 && fit.palette.length < 2; round++) {
     const out = band.filter((i) => !ignored[i] && sampleDistance(s, i, fit) >= 3.5);
     if (out.length < PALETTE_MIN_SHARE * band.length) break;
-    // Densest colour: 4-unit Lab bins, counted over each bin's 3×3×3 neighbourhood.
+    // Densest colour (lighting compensated); the share also counts the blends around the colour
+    // (pattern edges, within 16 units).
     const pts = out.map((i) => comp(i, meanL));
-    const key = (q: readonly number[]) => `${Math.floor((q[0] * wl) / 4)},${Math.floor(q[1] / 4)},${Math.floor(q[2] / 4)}`;
-    const bins = new Map<string, number>();
-    for (const q of pts) bins.set(key(q), (bins.get(key(q)) ?? 0) + 1);
-    let bestKey = '', bestN = -1;
-    for (const k of bins.keys()) {
-      const [x, y, z] = k.split(',').map(Number);
-      let n = 0;
-      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) n += bins.get(`${x + dx},${y + dy},${z + dz}`) ?? 0;
-      if (n > bestN) { bestN = n; bestKey = k; }
-    }
-    const [bx, by, bz] = bestKey.split(',').map(Number);
-    const centre = [(bx + 0.5) * 4 / wl, (by + 0.5) * 4, (bz + 0.5) * 4];
-    // Members: within 8 units (lightness weighted) of the mode, refined once around their median;
-    // the share also counts the blends around the colour (pattern edges, within 16 units).
     const within = (c: readonly number[], q: readonly number[], r: number) => Math.hypot((q[0] - c[0]) * wl, q[1] - c[1], q[2] - c[2]) <= r;
-    let members = out.filter((_, j) => within(centre, pts[j], 8));
-    if (members.length < 10) break;
-    const med = [0, 1, 2].map((ch) => median(members.map((i) => comp(i, meanL)[ch])));
-    members = out.filter((_, j) => within(med, pts[j], 8));
-    if (members.length < 10) break;
+    const mode = densestColour(out, (i) => comp(i, meanL));
+    if (!mode) break;
+    const { members, centre: med } = mode;
     // Its footprint: the colour itself plus its blends with the main surface (pattern edges).
     let footprint = 0;
     const is = [1 / Math.max(2, mainSigma[0]), 1 / Math.max(2, mainSigma[1]), 1 / Math.max(2, mainSigma[2])];
@@ -754,8 +1028,10 @@ function findPalette(s: Samples, fit: BackgroundFit): void {
     // A table colour forms a surface (or a fine pattern); a colour that shows mainly as piece-sized
     // blobs is the print of pieces lying on the border (dark pieces scattered over a light table),
     // not table. Its samples are left out of the further search.
+    // A colour shown as large areas must be uniform there like a surface: large areas of print
+    // (assembled patches along the border) are not table either.
     const lay = colourLayout(s, fit, colour);
-    if (lay.blob >= PIECE_BLOB_SHARE && lay.blob > lay.surface) {
+    if ((lay.blob >= PIECE_BLOB_SHARE && lay.blob > lay.surface) || (lay.surface + lay.blob >= 0.5 && !surfaceLike(s, fit, lay.members, tex))) {
       for (const i of out) if (within(colour.color, lit(i, colour), 16)) ignored[i] = 1;
       continue;
     }

@@ -332,6 +332,20 @@ export interface RenderOptions {
   shadowZone?: ShadowZoneStyle;
   /** Some pieces printed in dark tones of the table colour (dark wood, deep shadow look-alikes). */
   darkPieces?: DarkPieceStyle;
+  /**
+   * The phone's (or the photographer's) hard-edged shadow: a rectangle with sharp edges reaching
+   * in from one photo side that darkens table and pieces alike.
+   */
+  hardShadow?: HardShadowStyle;
+  /** Water stains on the table: darker, slightly more saturated patches of its colour with a darker rim. */
+  stains?: StainStyle;
+  /**
+   * Assembled patches (items with several pieces) lie along the photo sides (in turn top, bottom,
+   * right, left), long side parallel to the side and `gap` px from it (default 4; negative: cut off
+   * by the photo border, the truth outline then is the visible part), so that they cover most of
+   * the border band; loose pieces lie in between.
+   */
+  edgePatches?: { gap?: number };
   /** Simulate phone JPEG compression (4:2:0 chroma, this quality 1..100) as the last step. */
   jpegQuality?: number;
   /**
@@ -420,6 +434,26 @@ export interface SecondSurfaceStyle {
   depth?: number;
   /** Brightness change of its own lighting along the strip, e.g. 0.25 = ±25 % (default 0.25). */
   gradient?: number;
+}
+
+/** Hard-edged shadow (see {@link RenderOptions.hardShadow}). */
+export interface HardShadowStyle {
+  /** Rectangle as fractions of the photo [x0, y0, x1, y1] (may reach beyond it; default [0.3, 0.3, 0.75, 1.1]). */
+  rect?: [number, number, number, number];
+  /** Darkening inside, 0..1 (default 0.3). */
+  strength?: number;
+  /** Softness of the edge (Gaussian-like ramp width in px, default 3). */
+  edge?: number;
+}
+
+/** Water stains (see {@link RenderOptions.stains}). */
+export interface StainStyle {
+  /** Number of stains (default 5). */
+  count?: number;
+  /** Darkening at the rim, 0..1 (default 0.22; the inside darkens by 40 % of it). */
+  strength?: number;
+  /** Radius range as a fraction of the shorter photo side (default [0.06, 0.16]). */
+  radius?: [number, number];
 }
 
 /** Pieces in dark table-coloured tones (see {@link RenderOptions.darkPieces}). */
@@ -539,6 +573,31 @@ function chamfer(width: number, height: number, seed: (i: number) => boolean): F
     }
   }
   return d;
+}
+
+/** A polygon clipped to the rectangle [0, w] × [0, h] (Sutherland–Hodgman). */
+function clipToRect(poly: readonly Point[], w: number, h: number): Point[] {
+  let out = [...poly];
+  const edges: [(p: Point) => number, (a: Point, b: Point) => Point][] = [
+    [(p) => p.x, (a, b) => ({ x: 0, y: a.y + ((b.y - a.y) * (0 - a.x)) / (b.x - a.x) })],
+    [(p) => w - p.x, (a, b) => ({ x: w, y: a.y + ((b.y - a.y) * (w - a.x)) / (b.x - a.x) })],
+    [(p) => p.y, (a, b) => ({ x: a.x + ((b.x - a.x) * (0 - a.y)) / (b.y - a.y), y: 0 })],
+    [(p) => h - p.y, (a, b) => ({ x: a.x + ((b.x - a.x) * (h - a.y)) / (b.y - a.y), y: h })],
+  ];
+  for (const [inside, cross] of edges) {
+    const src = out;
+    out = [];
+    for (let i = 0; i < src.length; i++) {
+      const a = src[(i + src.length - 1) % src.length], b = src[i];
+      const ia = inside(a) >= 0, ib = inside(b) >= 0;
+      if (ib) {
+        if (!ia) out.push(cross(a, b));
+        out.push(b);
+      } else if (ia) out.push(cross(a, b));
+    }
+    if (out.length === 0) break;
+  }
+  return out;
 }
 
 function boundsOf(pts: readonly Point[]): { x0: number; y0: number; x1: number; y1: number } {
@@ -706,6 +765,59 @@ function applyShadowZone(scene: FloatImage, z: ShadowZoneStyle, rng: Rng): void 
       data[o] *= f;
       data[o + 1] *= f;
       data[o + 2] *= f;
+    }
+  }
+}
+
+/** Darken a rectangle with sharp (few px) edges: a hard-edged shadow over table and pieces alike. */
+function applyHardShadow(scene: FloatImage, z: HardShadowStyle): void {
+  const { width: W, height: H, data } = scene;
+  const [fx0, fy0, fx1, fy1] = z.rect ?? [0.3, 0.3, 0.75, 1.1];
+  const strength = z.strength ?? 0.3, edge = Math.max(0.5, z.edge ?? 3);
+  const x0 = fx0 * W, y0 = fy0 * H, x1 = fx1 * W, y1 = fy1 * H;
+  for (let y = 0; y < H; y++) {
+    const ty = smooth01((Math.min(y - y0, y1 - y) / edge + 1) / 2);
+    if (ty <= 0) continue;
+    for (let x = 0; x < W; x++) {
+      const t = ty * smooth01((Math.min(x - x0, x1 - x) / edge + 1) / 2);
+      if (t <= 0) continue;
+      const f = 1 - strength * t, o = (y * W + x) * 3;
+      data[o] *= f;
+      data[o + 1] *= f;
+      data[o + 2] *= f;
+    }
+  }
+}
+
+/**
+ * Water stains on the table: irregular round patches, darker and slightly more saturated (same
+ * hue), with a darker rim where the water dried.
+ */
+function paintStains(scene: FloatImage, z: StainStyle, rng: Rng): void {
+  const { width: W, height: H, data } = scene;
+  const count = z.count ?? 5, strength = z.strength ?? 0.22;
+  const [r0, r1] = z.radius ?? [0.06, 0.16];
+  const wobble = noiseField(rng);
+  for (let k = 0; k < count; k++) {
+    const R = rng.uniform(r0, r1) * Math.min(W, H);
+    const cx = rng.uniform(0, W), cy = rng.uniform(0, H), phase = rng.uniform(0, 100);
+    const rim = Math.max(3, 0.08 * R);
+    const bx0 = Math.max(0, Math.floor(cx - 1.4 * R)), bx1 = Math.min(W - 1, Math.ceil(cx + 1.4 * R));
+    const by0 = Math.max(0, Math.floor(cy - 1.4 * R)), by1 = Math.min(H - 1, Math.ceil(cy + 1.4 * R));
+    for (let y = by0; y <= by1; y++) {
+      for (let x = bx0; x <= bx1; x++) {
+        const edge = R * (1 + 0.25 * wobble(2 * Math.atan2(y - cy, x - cx) + phase, phase));
+        const d = Math.hypot(x - cx, y - cy) - edge;
+        if (d > rim) continue;
+        // Inside: 40 % of the darkening; the rim (a band just inside the edge) all of it.
+        const inside = smooth01(-d / 2 + 0.5);
+        const ring = Math.exp(-((d + rim) * (d + rim)) / (2 * (0.5 * rim) ** 2));
+        const t = strength * Math.max(0.4 * inside, ring);
+        if (t <= 0) continue;
+        const o = (y * W + x) * 3;
+        const m = (data[o] + data[o + 1] + data[o + 2]) / 3;
+        for (let c = 0; c < 3; c++) data[o + c] = (1 - t) * (data[o + c] + 0.8 * t * (data[o + c] - m));
+      }
     }
   }
 }
@@ -1037,8 +1149,14 @@ export function renderPiecesPhoto(
     ext?: { x0: number; y0: number; x1: number; y1: number };
     /** Close pairs: this item lies at the position of item `to` plus `off`. */
     attach?: { to: number; off: Point };
+    /** Edge patches: the photo side it lies along (0 top, 1 right, 2 bottom, 3 left). */
+    side?: number;
     pos?: Point;
   }
+  // Edge patches take turns over the sides (top, bottom, right, left), long side parallel to it
+  // (own random stream).
+  const erng = opts.edgePatches ? streamRng(opts.seed, 9) : null;
+  let edgeCount = 0;
   const items: Item[] = pieces.map((entry) => {
     const indices = Array.isArray(entry) ? entry : [entry];
     const union = patchOutline(cut, indices);
@@ -1046,12 +1164,20 @@ export function renderPiecesPhoto(
     for (const i of indices) for (const c of cut.pieces[i].corners) { px += c.x; py += c.y; }
     const pivot = { x: px / (4 * indices.length), y: py / (4 * indices.length) };
     const rot = opts.rotation ?? 'any';
-    const deg = typeof rot === 'number' ? rot : rot === 'none' ? 0 : rot === 'quarter' ? 90 * rng.int(4) : rng.uniform(0, 360);
+    let deg: number, side: number | undefined;
+    if (erng && indices.length > 1) {
+      side = [0, 2, 1, 3][edgeCount++ % 4];
+      const rows = new Set(indices.map((i) => cut.pieces[i].row)).size, cols = new Set(indices.map((i) => cut.pieces[i].col)).size;
+      const wide = cols >= rows, horizontalSide = side % 2 === 0;
+      deg = (wide === horizontalSide ? 0 : 90) + 180 * erng.int(2) + erng.uniform(-2, 2);
+    } else {
+      deg = typeof rot === 'number' ? rot : rot === 'none' ? 0 : rot === 'quarter' ? 90 * rng.int(4) : rng.uniform(0, 360);
+    }
     const sc = opts.scale === undefined ? defScale : typeof opts.scale === 'number' ? opts.scale : rng.uniform(opts.scale[0], opts.scale[1]);
     const theta = (deg * Math.PI) / 180;
     const T = similarityAbout(pivot, { x: 0, y: 0 }, theta, sc);
     const local = boundsOf(union.map((p) => applyMat3(T, p)));
-    return { indices, refOutlines: indices.map((i) => cut.pieces[i].outline), union, pivot, theta, scale: sc, local };
+    return { indices, refOutlines: indices.map((i) => cut.pieces[i].outline), union, pivot, theta, scale: sc, local, side };
   });
 
   // Close pairs: the second item of a pair is attached to the first at a given outline gap.
@@ -1097,17 +1223,51 @@ export function renderPiecesPhoto(
   const bodyPx = cellSize * (opts.scale === undefined ? defScale : typeof opts.scale === 'number' ? opts.scale : (opts.scale[0] + opts.scale[1]) / 2);
   const clutterFor = opts.clutter && opts.clutter.length > 0 ? makeClutter(opts.clutter, streamRng(opts.seed, 3), bodyPx, reference) : null;
 
+  // Edge patches: even slots along each side; the left and right sides between the patches along
+  // the top and bottom.
+  const eg = opts.edgePatches?.gap ?? 4;
+  const edgeSlot = new Map<Item, { slot: number; of: number }>();
+  let bandDepth = 0;
+  for (let side = 0; side < 4; side++) {
+    const on = items.filter((it) => it.side === side);
+    on.forEach((it, k) => edgeSlot.set(it, { slot: k, of: on.length }));
+    if (side % 2 === 0) for (const it of on) bandDepth = Math.max(bandDepth, it.ext!.y1 - it.ext!.y0);
+  }
+
   // Placement (random, non-overlapping axis-aligned boxes with margin).
   const place = (W: number, H: number): boolean => {
     const placed: { x0: number; y0: number; x1: number; y1: number }[] = clutterFor ? clutterZones(clutterFor(W, H), W, H, margin) : [];
-    for (const it of items) {
+    // (Edge patches first: their slots are fixed.)
+    for (const it of [...items.filter((i) => i.side !== undefined), ...items.filter((i) => i.side === undefined)]) {
       if (it.attach) continue;
       const ext = it.ext!;
       const w = ext.x1 - ext.x0, h = ext.y1 - ext.y0;
       let ok = false;
       for (let attempt = 0; attempt < 3000 && !ok; attempt++) {
-        const x0 = rng.uniform(margin, W - margin - w);
-        const y0 = rng.uniform(margin, H - margin - h);
+        let x0 = rng.uniform(margin, W - margin - w);
+        let y0 = rng.uniform(margin, H - margin - h);
+        if (it.side !== undefined) {
+          // In its slot along its photo side, `gap` px from it.
+          const { slot, of } = edgeSlot.get(it)!;
+          const along = it.side % 2 === 0 ? w : h;
+          const [a0, a1] = it.side % 2 === 0 ? [eg, W - eg] : [eg + bandDepth + margin, H - eg - bandDepth - margin];
+          const len = (a1 - a0) / of;
+          if (len < along) break;
+          const t = a0 + slot * len + rng.uniform(0, len - along);
+          if (it.side % 2 === 0) {
+            x0 = t;
+            y0 = it.side === 0 ? eg : H - eg - h;
+          } else {
+            x0 = it.side === 3 ? eg : W - eg - w;
+            y0 = t;
+          }
+          const box = { x0, y0, x1: x0 + w, y1: y0 + h };
+          if (placed.some((b) => box.x0 < b.x1 + margin && box.x1 + margin > b.x0 && box.y0 < b.y1 + margin && box.y1 + margin > b.y0)) continue;
+          placed.push(box);
+          it.pos = { x: x0 - ext.x0, y: y0 - ext.y0 };
+          ok = true;
+          continue;
+        }
         if (!(x0 >= margin && y0 >= margin)) break;
         const box = { x0, y0, x1: x0 + w, y1: y0 + h };
         if (placed.some((b) => box.x0 < b.x1 + margin && box.x1 + margin > b.x0 && box.y0 < b.y1 + margin && box.y1 + margin > b.y0)) continue;
@@ -1160,6 +1320,7 @@ export function renderPiecesPhoto(
     }
   }
   if (opts.secondSurface) paintSecondSurface(scene, opts.secondSurface, bg, streamRng(opts.seed, 7));
+  if (opts.stains) paintStains(scene, opts.stains, streamRng(opts.seed, 10));
   if (clutterFor) {
     for (const obj of clutterFor(PW, PH)) {
       const c = polygonCoverage(obj.poly, PW, PH, ss);
@@ -1290,8 +1451,10 @@ export function renderPiecesPhoto(
       };
     });
     const anchor = cut.pieces[it.indices[0]];
-    const outline = it.union.map((p) => applyMat3(T, p));
-    const ob = boundsOf([...outline, ...photoOutlines.flat()]);
+    // (An edge patch reaching beyond the photo is judged by its visible part.)
+    const whole = it.union.map((p) => applyMat3(T, p));
+    const outline = it.side !== undefined ? clipToRect(whole, PW, PH) : whole;
+    const ob = it.side !== undefined ? boundsOf(outline) : boundsOf([...outline, ...photoOutlines.flat()]);
     truth.push({
       pieces: [...it.indices],
       row: anchor.row,
@@ -1378,6 +1541,7 @@ export function renderPiecesPhoto(
   }
 
   if (opts.shadowZone) applyShadowZone(scene, opts.shadowZone, streamRng(opts.seed, 5));
+  if (opts.hardShadow) applyHardShadow(scene, opts.hardShadow);
   const photo = finishPhoto(scene, rng, opts);
   return { photo: opts.jpegQuality ? jpegRoundTrip(photo, opts.jpegQuality) : photo, truth };
 }

@@ -8,7 +8,7 @@ import { limitSize } from '../cv/resize';
 import type { CellRef, RegionMatch, ScanResult } from '../model/types';
 import type { ProgressCallback } from '../worker/api';
 import { buildGroups, findFits, matchRegions, sampleEdgeStrips, type EdgeStrips, type FitOptions, type MatchInput, type ReferenceIndex, type ShapeMetric } from './match';
-import { resolveRegionIssues, segmentPieces } from './pieces';
+import { resolveRegionIssues, segmentPieces, type SegmentOptions } from './pieces';
 
 /** How the fit hints compare piece sides (see `FitOptions`). */
 export interface SideComparison {
@@ -39,6 +39,8 @@ export interface AnalyzeScanOptions {
   onProgress?: ProgressCallback;
   /** Side comparison for the fit hints (default {@link DEFAULT_SIDE_COMPARISON}). */
   sides?: SideComparison;
+  /** Segmentation switches (A/B runs of the benchmark). */
+  segment?: Pick<SegmentOptions, 'graphCut'>;
 }
 
 export interface AnalyzeScanOutput {
@@ -59,7 +61,7 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
 
   report({ stage: 'segment', progress: 0.08, message: 'Finding pieces' });
   let t = now();
-  const seg = segmentPieces(image, { timings });
+  const seg = segmentPieces(image, { ...opts.segment, timings });
   timings.segment = now() - t;
 
   const regions = seg.regions.map((s) => s.region);

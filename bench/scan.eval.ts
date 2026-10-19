@@ -5,6 +5,9 @@
  *   npm run bench                     # run and compare with the baseline
  *   UPDATE_BASELINE=1 npm run bench   # accept the current numbers as the new baseline
  *   DEBUG_IMAGES=1 npm run bench      # also write overlays to .debug/bench/
+ *   GRAPH_CUT=1 npm run bench         # A/B: with the graph-cut outline refinement (0: without)
+ *
+ * outlineIoU / boundaryF (report only): outline accuracy of the regions matched to a truth item.
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import type { RGBAImage } from '../src/cv/image';
@@ -13,7 +16,7 @@ import { analyzeScan } from '../src/pipeline/analyzeScan';
 import { detectBox, suggestRectifiedSize } from '../src/pipeline/box';
 import { buildReferenceIndex } from '../src/pipeline/match';
 import type { GridSpec } from '../src/model/types';
-import { DEBUG_IMAGES, loadTestAsset, savePng } from '../src/testing/nodeImageIO';
+import { DEBUG_IMAGES, loadTestAsset, savePng, SEGMENT_OPTIONS } from '../src/testing/nodeImageIO';
 import { generateJigsaw, perturbReference, renderBoxPhoto, renderPiecesPhoto, Rng, type RenderOptions, type RGB } from '../src/testing/synth';
 import { average, compareToBaseline, yieldToEventLoop, evaluateScan, overlay, pickItems, report, saveBaselineSuite, UPDATE_BASELINE, type ItemSpec, type MetricRecord } from './lib';
 
@@ -55,6 +58,25 @@ function darkWoodLowerPart(img: RGBAImage, wood: RGB, level = 0.5): RGBAImage {
       const i = (y * img.width + x) * 4, d = img.data;
       const f = level * (0.6 + (0.8 * (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2])) / 255);
       for (let c = 0; c < 3; c++) out.data[i + c] = d[i + c] * (1 - t) + t * (0.75 * wood[c] * f + 0.25 * d[i + c] * level);
+    }
+  }
+  return out;
+}
+
+/**
+ * The painting with its lower half in a flat grey (a grey sky, grey stones) keeping a little of the
+ * print's lightness detail (`detail`, relative): pieces from there show large areas of nearly one
+ * colour, as plain as a table, and the reference shows them alike.
+ */
+function greyLowerPart(img: RGBAImage, grey: RGB, detail = 0.2): RGBAImage {
+  const out = { width: img.width, height: img.height, data: new Uint8ClampedArray(img.data) };
+  for (let y = 0; y < img.height; y++) {
+    const t = Math.max(0, Math.min(1, (y / img.height - 0.45) / 0.05));
+    if (t === 0) continue;
+    for (let x = 0; x < img.width; x++) {
+      const i = (y * img.width + x) * 4, d = img.data;
+      const l = (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+      for (let c = 0; c < 3; c++) out.data[i + c] = d[i + c] * (1 - t) + t * grey[c] * (1 + detail * (l - 0.4));
     }
   }
   return out;
@@ -233,11 +255,25 @@ const SCENARIOS: Scenario[] = [
       darkPieces: { share: 0.6, level: 0.4 }, secondSurface: { color: [142, 134, 82] }, jpegQuality: 85,
     }),
   },
+  // From real feedback (a tan board under the phone's shadow): assembled patches along all four
+  // photo sides, cut off by them, cover nearly all of the border band; loose pieces lie in between,
+  // a hard-edged rectangular shadow darkens the middle and water stains mark the board. Half of
+  // the print is a nearly plain grey (a grey sky): the border band is mostly print, and its grey
+  // looks like a table colour there. The table is the board.
+  {
+    name: 'starry-board-edge-patches',
+    painting: 'starry-night', grid: { rows: 16, cols: 20 }, seeds: [36, 37], tone: (img) => greyLowerPart(img, [115, 115, 118]),
+    items: { singles: 10, patches: [[2, 9], [2, 9], [2, 9], [2, 9], [2, 9], [2, 9], [2, 9], [2, 9]] },
+    render: (rng) => ({
+      ...standard(rng), background: [198, 162, 114], backgroundTexture: 10, illumination: 0.1, scale: 0.9, width: 1260, height: 1420,
+      edgePatches: { gap: -24 }, hardShadow: { rect: [0.3, 0.35, 0.72, 1.1], strength: 0.3 }, stains: { count: 5 }, jpegQuality: 85,
+    }),
+  },
 ];
 
 const COLUMNS = [
   'segRecall', 'segPrecision', 'shapeRate', 'kindAccuracy', 'top1', 'top3', 'rotationOk', 'confidentPrecision', 'confidentRate',
-  'fitPrecision', 'fitRecall', 'assembledRecall', 'assembledPrecision', 'neighborPrecision', 'neighborRecall', 'hiddenRate', 'warnings', 'ms',
+  'fitPrecision', 'fitRecall', 'assembledRecall', 'assembledPrecision', 'neighborPrecision', 'neighborRecall', 'hiddenRate', 'warnings', 'outlineIoU', 'boundaryF', 'ms',
 ];
 const results: Record<string, MetricRecord> = {};
 const paintings = new Map<string, RGBAImage>();
@@ -277,7 +313,7 @@ describe('scan benchmark', () => {
         const rng = new Rng(seed * 13 + 3);
         const { photo, truth } = renderPiecesPhoto(src, cut, items, { seed: seed + 50, ...s.render(rng) });
         const t0 = performance.now();
-        const { result } = analyzeScan(index, photo, { maxSide: Math.max(photo.width, photo.height) });
+        const { result } = analyzeScan(index, photo, { maxSide: Math.max(photo.width, photo.height), segment: SEGMENT_OPTIONS });
         const ms = performance.now() - t0;
         const { metrics, regionToTruth } = evaluateScan(result, truth, cut, ms);
         perSeed.push({ ...metrics });

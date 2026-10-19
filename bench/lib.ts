@@ -5,6 +5,7 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type { Point, Quad } from '../src/cv/geometry';
+import { distanceTransform } from '../src/cv/distance';
 import { createMask, createRGBA, type Mask, type Rect, type RGBAImage } from '../src/cv/image';
 import { drawPolygon, fillPolygon } from '../src/cv/raster';
 import type { CellRef, DetectedRegion, PuzzleSide, RegionMatch, ScanResult } from '../src/model/types';
@@ -75,7 +76,7 @@ function polygonBounds(pts: Point[]): Rect {
   return { x: Math.floor(x0), y: Math.floor(y0), width: Math.ceil(x1) - Math.floor(x0) + 1, height: Math.ceil(y1) - Math.floor(y0) + 1 };
 }
 
-interface PolyMask {
+export interface PolyMask {
   rect: Rect;
   mask: Mask;
   area: number;
@@ -160,7 +161,55 @@ export interface ScanMetrics {
   neighborRecall: number;
   /** Truth items whose regions all end up 'unmatched' (hidden in the UI). */
   hiddenRate: number;
+  /** Outline accuracy of the matched regions (IoU ≥ 0.8): mean mask IoU with the truth outline… */
+  outlineIoU: number;
+  /** …and mean boundary F-score at BOUNDARY_TOLERANCE px (outline pixels near the truth outline, and back). */
+  boundaryF: number;
   ms: number;
+}
+
+/** Distance (px) within which an outline pixel counts as on the other outline (boundary F-score). */
+export const BOUNDARY_TOLERANCE = 2;
+
+/**
+ * Boundary F-score of two rasterised outlines: precision = share of a's boundary pixels within
+ * `tol` px of b's boundary, recall = the same from b to a (boundary = set pixels with an unset
+ * 4-neighbour).
+ */
+export function boundaryFScore(a: PolyMask, b: PolyMask, tol = BOUNDARY_TOLERANCE): number {
+  const pad = Math.ceil(tol) + 2;
+  const x0 = Math.min(a.rect.x, b.rect.x) - pad, y0 = Math.min(a.rect.y, b.rect.y) - pad;
+  const w = Math.max(a.rect.x + a.rect.width, b.rect.x + b.rect.width) + pad - x0;
+  const h = Math.max(a.rect.y + a.rect.height, b.rect.y + b.rect.height) + pad - y0;
+  const edge = (m: PolyMask): Mask => {
+    const full = createMask(w, h);
+    for (let y = 0; y < m.rect.height; y++) {
+      for (let x = 0; x < m.rect.width; x++) full.data[(y + m.rect.y - y0) * w + x + m.rect.x - x0] = m.mask.data[y * m.rect.width + x];
+    }
+    const e = createMask(w, h);
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = y * w + x;
+        if (full.data[i] && (!full.data[i - 1] || !full.data[i + 1] || !full.data[i - w] || !full.data[i + w])) e.data[i] = 1;
+      }
+    }
+    return e;
+  };
+  const ea = edge(a), eb = edge(b);
+  // Distance of every pixel to the nearest boundary pixel of the other outline.
+  const near = (e: Mask) => {
+    const inv = createMask(w, h);
+    for (let i = 0; i < inv.data.length; i++) inv.data[i] = e.data[i] ? 0 : 1;
+    return distanceTransform(inv).data;
+  };
+  const da = near(ea), db = near(eb);
+  let na = 0, ha = 0, nb = 0, hb = 0;
+  for (let i = 0; i < w * h; i++) {
+    if (ea.data[i]) { na++; if (db[i] <= tol) ha++; }
+    if (eb.data[i]) { nb++; if (da[i] <= tol) hb++; }
+  }
+  const p = na > 0 ? ha / na : 0, r = nb > 0 ? hb / nb : 0;
+  return p + r > 0 ? (2 * p * r) / (p + r) : 0;
 }
 
 const SIDE_DELTA: Record<PuzzleSide, [number, number]> = { top: [-1, 0], right: [0, 1], bottom: [1, 0], left: [0, -1] };
@@ -363,6 +412,13 @@ export function evaluateScan(result: ScanResult, truth: PieceTruth[], cut: Jigsa
       if (A.pieces.length === 1 && B.pieces.length === 1 && isAdj({ row: A.row, col: A.col }, { row: B.row, col: B.col })) nbTruth++;
     }
   }
+  // Outline accuracy of the matched regions.
+  let iouSum = 0, bfSum = 0;
+  regionToTruth.forEach((ti, rid) => {
+    const rm = regionMasks.get(rid)!;
+    iouSum += iou(rm, truthMasks[ti]);
+    bfSum += boundaryFScore(rm, truthMasks[ti]);
+  });
   const warnings = result.quality.issues.filter((i) => i.severity !== 'info').length;
   const rate = (a: number, b: number) => (b === 0 ? 1 : a / b);
   return {
@@ -387,6 +443,8 @@ export function evaluateScan(result: ScanResult, truth: PieceTruth[], cut: Jigsa
       neighborPrecision: rate(nbOk, nbPairs),
       neighborRecall: rate(nbFound.size, nbTruth),
       hiddenRate: truth.length === 0 ? 0 : hidden / truth.length,
+      outlineIoU: regionToTruth.size > 0 ? iouSum / regionToTruth.size : 0,
+      boundaryF: regionToTruth.size > 0 ? bfSum / regionToTruth.size : 0,
       ms,
     },
   };
@@ -425,7 +483,7 @@ export function quadError(found: Quad, truth: Quad): number {
 
 /** Metrics where lower is better; everything else is higher-is-better. Timing is report-only. */
 const LOWER_IS_BETTER = new Set(['warnings', 'meanError', 'maxError', 'falseWarnings', 'hiddenRate', 'boxError']);
-const REPORT_ONLY = new Set(['ms', 'items', 'regions', 'scenes', 'confidentRate']);
+const REPORT_ONLY = new Set(['ms', 'items', 'regions', 'scenes', 'confidentRate', 'outlineIoU', 'boundaryF']);
 
 export type MetricRecord = Record<string, number>;
 
