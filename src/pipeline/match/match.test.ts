@@ -8,7 +8,7 @@ import type { CellRef, RegionMatch } from '../../model/types';
 import { DEBUG_IMAGES, loadTestAsset, savePng } from '../../testing/nodeImageIO';
 import { generateJigsaw, perturbReference, renderPiecesPhoto, Rng, type JigsawCut, type PieceTruth } from '../../testing/synth';
 import { matchRegionsDetailed } from './colorCorrection';
-import { capForBorder, CONFIDENT_THRESHOLD, matchConfidence, matchRegionDetailed, outlineFactor, type MatchDetail } from './matchRegion';
+import { capForBorder, CONFIDENT_THRESHOLD, matchConfidence, matchRegionDetailed, outlineFactor, scorePlacement, type MatchDetail } from './matchRegion';
 import { buildReferenceIndex, cellAt, matchRegion, matchRegions, type MatchInput, type ReferenceIndex } from './index';
 import { accuracy, angleError, inputFromTruth, renderScenario, type Accuracy } from './testkit';
 
@@ -106,6 +106,25 @@ describe('matchRegion — Starry Night 20×16 (320 pieces)', () => {
     report('Starry 20×16, no shape, matchRegions', acc, ms / inputs.length);
     expect(acc.top1).toBeGreaterThanOrEqual(0.93);
     expect(acc.top3).toBeGreaterThanOrEqual(0.97);
+  });
+
+  it('scores a given cell and rotation on the scale of the candidates (scorePlacement)', () => {
+    const inputs = scene.truth.slice(0, 8).map((t, i) => inputFromTruth(scene.photo, cut, t, i + 1, { withShape: true }));
+    let diff = 0, worseTurned = 0;
+    for (const inp of inputs) {
+      const d = matchRegionDetailed(index, inp);
+      const c = d.match.candidates[0];
+      const same = scorePlacement(index, inp, d, { row: c.row, col: c.col }, c.rotationDeg)!;
+      expect(same.row).toBe(c.row);
+      expect(same.col).toBe(c.col);
+      expect(angleError(same.rotationDeg, c.rotationDeg)).toBeLessThan(10);
+      diff += Math.abs(same.score - c.score);
+      const turned = scorePlacement(index, inp, d, { row: c.row, col: c.col }, c.rotationDeg + 180)!;
+      expect(angleError(turned.rotationDeg, c.rotationDeg + 180)).toBeLessThan(10);
+      if (turned.score < c.score - 0.05) worseTurned++;
+    }
+    expect(diff / inputs.length).toBeLessThan(0.02);
+    expect(worseTurned).toBeGreaterThanOrEqual(7);
   });
 
   it('puts edge and corner pieces on the border', () => {

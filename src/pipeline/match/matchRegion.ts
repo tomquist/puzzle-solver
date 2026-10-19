@@ -470,6 +470,8 @@ export interface MatchDetail {
   best?: { map: Mapping; ref: Point };
   src?: PhotoSource;
   features?: MatchFeatures;
+  /** Score parameters of the run (with the colour hinge for featureless regions), for {@link scorePlacement}. */
+  params?: ScoreParams;
 }
 
 /** Template std with and without a per-channel linear ramp (plane fit over template coordinates). */
@@ -638,7 +640,40 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   // region's score is noise, so it stays a (low-confidence) ambiguous match with alternatives.
   const status: MatchStatus =
     best.score < UNMATCHED_SCORE && features.detail >= TEXTURE_DETAIL ? 'unmatched' : conf >= CONFIDENT_THRESHOLD ? 'confident' : 'ambiguous';
-  return { match: { regionId: input.regionId, candidates, coveredCells, status }, best: { map: best.map, ref: best.ref }, src, features };
+  return { match: { regionId: input.regionId, candidates, coveredCells, status }, best: { map: best.map, ref: best.ref }, src, features, params: sp };
+}
+
+/**
+ * The matcher's score of a region at a given cell and rotation (to the nearest quarter turn), on
+ * the scale of its own candidates: the same photo source and score parameters as the run that
+ * produced `detail`, the position searched within ±0.3 cell of the cell centre and refined like a
+ * candidate (finer levels, then angle and scale), with the same priors (flat sides, placed cells).
+ * Confidence is left at 0 for the caller to set. Null without the run's photo source, or when the
+ * region cannot be laid there (template off the picture).
+ */
+export function scorePlacement(index: ReferenceIndex, input: MatchInput, detail: MatchDetail, cell: CellRef, rotationDeg: number, opts: MatchOptions = {}): Placement | null {
+  if (!detail.src || !detail.params) return null;
+  const sp = detail.params;
+  const { hyps } = makeHypotheses(index, input, detail.src);
+  const cache = new TemplateCache(detail.src);
+  const L = index.levels.length;
+  const ci = Math.max(0, index.levels.findIndex((l) => l.prefix && l.ppc >= 6));
+  const li0 = Math.min(ci + 1, L - 1);
+  const centre = { x: (cell.col + 0.5) * index.cellW - 0.5, y: (cell.row + 0.5) * index.cellH - 0.5 };
+  let best: Candidate | null = null;
+  for (const hyp of hyps) {
+    if (angleDiff(norm360(hyp.map.phi * DEG), rotationDeg) > 45) continue;
+    let c: Candidate | null = { hyp, map: hyp.map, ref: centre, raw: -Infinity, score: -Infinity, level: li0 };
+    c = refinePosition(index, li0, c, cache, Math.ceil(0.3 * index.levels[li0].ppc), sp);
+    for (let li = li0 + 1; li < L && c; li++) c = refinePosition(index, li, c, cache, Math.ceil(index.levels[li].ppc / index.levels[li - 1].ppc) + 1, sp);
+    if (!c) continue;
+    c = refineAngleScale(index, L - 1, c, cache, sp);
+    if (!best || c.score > best.score) best = c;
+  }
+  if (!best) return null;
+  const placed = new Set((opts.placedCells ?? []).map(cellKey));
+  if (placed.has(cellKey(cell))) best.score -= PLACED_PENALTY;
+  return { row: cell.row, col: cell.col, x: best.ref.x, y: best.ref.y, rotationDeg: norm360(best.map.phi * DEG) % 360, score: best.score, confidence: 0 };
 }
 
 /** Information content of the best placement: texture detail, peak sharpness and plateau size. */

@@ -1,13 +1,29 @@
 /**
  * One scan, end to end: segment the photo into pieces/patches, analyse shapes and photo quality,
- * locate every region in the reference picture and derive fit hints.
+ * locate every region in the reference picture (optionally made consistent with the shape fits
+ * between the scan's pieces) and derive fit hints.
  */
 import type { RGBAImage } from '../cv/image';
 import { convexHull, polygonArea } from '../cv/polygon';
 import { limitSize } from '../cv/resize';
 import type { CellRef, RegionMatch, ScanResult } from '../model/types';
 import type { ProgressCallback } from '../worker/api';
-import { buildGroups, findFits, matchRegions, sampleEdgeStrips, type EdgeStrips, type FitOptions, type MatchInput, type ReferenceIndex, type ShapeMetric } from './match';
+import {
+  buildGroups,
+  enforceConsistency,
+  findFits,
+  matchRegionsDetailed,
+  sampleEdgeStrips,
+  scorePlacement,
+  shapeFits,
+  type ConsistencyReport,
+  type EdgeStrips,
+  type FitOptions,
+  type MatchDetail,
+  type MatchInput,
+  type ReferenceIndex,
+  type ShapeMetric,
+} from './match';
 import { resolveRegionIssues, segmentPieces, type SegmentOptions } from './pieces';
 
 /** How the fit hints compare piece sides (see `FitOptions`). */
@@ -41,12 +57,28 @@ export interface AnalyzeScanOptions {
   sides?: SideComparison;
   /** Segmentation switches (A/B runs of the benchmark). */
   segment?: Pick<SegmentOptions, 'graphCut'>;
+  /**
+   * Make the placements consistent with the shape fits between the scan's pieces before the fit
+   * hints and groups are derived (match/consistency.ts; default {@link DEFAULT_CONSISTENCY}).
+   */
+  consistency?: boolean;
 }
+
+/**
+ * Whether the consistency pass runs unless the caller chooses: off. In the scan benchmark only 11
+ * of 29 shape fits are true neighbours (most pieces of a scan have no partner in it, so a mutually
+ * best side is often a coincidence), too few to move a placement; the pass changes nothing in 32
+ * of 33 scenes, and its one gain (starry-grey-neighbors top-1 0.586 → 0.638) comes from its
+ * one-piece-per-cell rule, not from the fits.
+ */
+export const DEFAULT_CONSISTENCY = false;
 
 export interface AnalyzeScanOutput {
   result: ScanResult;
   /** The (possibly downscaled) image all coordinates in `result` refer to. */
   analysedImage: RGBAImage;
+  /** What the consistency pass did, when it ran. */
+  consistency?: ConsistencyReport;
 }
 
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -87,10 +119,10 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
       solidity: s.region.contour.length >= 3 ? s.region.area / Math.max(1, polygonArea(convexHull(s.region.contour))) : undefined,
     },
   }));
-  const matched = inputs.length > 0 ? matchRegions(index, inputs, { placedCells: opts.placedCells }) : [];
+  const details = inputs.length > 0 ? matchRegionsDetailed(index, inputs, { placedCells: opts.placedCells }) : [];
   timings.match = now() - t;
 
-  const byId = new Map<number, RegionMatch>(matched.map((m) => [m.regionId, m]));
+  const byId = new Map<number, RegionMatch>(details.map((d) => [d.match.regionId, d.match]));
   const matches: RegionMatch[] = regions.map(
     (r) => byId.get(r.id) ?? { regionId: r.id, candidates: [], status: 'unmatched' },
   );
@@ -98,7 +130,7 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
   report({ stage: 'fits', progress: 0.94, message: 'Checking which pieces fit together' });
   t = now();
   const sides = opts.sides ?? DEFAULT_SIDE_COMPARISON;
-  // One distance cache for both calls below (the sides do not change between them).
+  // One distance cache for all calls below (the sides do not change between them).
   const fitOptions: FitOptions = { shape: sides.shape, band: sides.band, colourShare: sides.colourShare, cache: new WeakMap() };
   if (sides.colour) {
     // Colour strips just inside the sides of single pieces (a few hundred Lab samples per piece).
@@ -112,6 +144,21 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
     }
     fitOptions.strips = strips;
     timings.strips = now() - ts;
+  }
+  let consistency: ConsistencyReport | undefined;
+  if (opts.consistency ?? DEFAULT_CONSISTENCY) {
+    // Placements and shape fits made to agree; the hints and groups below then follow the new placements.
+    const tc = now();
+    const inputById = new Map<number, MatchInput>(inputs.map((inp) => [inp.regionId, inp]));
+    const detailById = new Map<number, MatchDetail>(details.map((d) => [d.match.regionId, d]));
+    consistency = enforceConsistency(regions, matches, shapeFits(regions, fitOptions), index.grid, {
+      placedCells: opts.placedCells,
+      score: (id, cell, rotationDeg) => {
+        const inp = inputById.get(id), d = detailById.get(id);
+        return inp && d ? scorePlacement(index, inp, d, cell, rotationDeg, { placedCells: opts.placedCells }) : null;
+      },
+    });
+    timings.consistency = now() - tc;
   }
   // Groups first (they may place weak members of assembled grids), then the fit hints.
   const groups = buildGroups(regions, matches, findFits(regions, matches, index.grid, fitOptions), index.grid, {
@@ -138,5 +185,6 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
       timings,
     },
     analysedImage: image,
+    consistency,
   };
 }
