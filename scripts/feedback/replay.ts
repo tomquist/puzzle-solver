@@ -88,8 +88,11 @@ export function scoreObjects(objects: ReviewObject[], regions: RasterRegion[], a
     const cx = r.rect.x + r.rect.width / 2, cy = r.rect.y + r.rect.height / 2;
     return cx >= area.x && cx < area.x + area.width && cy >= area.y && cy < area.y + area.height;
   };
-  const shown = regions.filter((r) => r.region.kind !== 'unknown' && inArea(r));
-  const hits = objects.map((o) => shown.find((r) => containsPoint(r, o)));
+  // An object is found by any shown region over it, also one reaching beyond the area (a whole
+  // patch centred outside it); only the regions centred inside the area are judged real or false.
+  const visible = regions.filter((r) => r.region.kind !== 'unknown');
+  const shown = visible.filter(inArea);
+  const hits = objects.map((o) => visible.find((r) => containsPoint(r, o)));
   const perRegion = new Map<RasterRegion, number>();
   for (const h of hits) if (h) perRegion.set(h, (perRegion.get(h) ?? 0) + 1);
   const counted = objects.map((o, i) => ({ o, h: hits[i] })).filter(({ o }) => !o.unsure);

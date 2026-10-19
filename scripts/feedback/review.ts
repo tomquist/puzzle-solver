@@ -17,7 +17,8 @@
  * for every loose piece and every assembled group, found by checking the photo by eye, not taken
  * from any result. It scores the whole result, including mistakes nobody marked. `unsure` objects
  * count neither way. With `area` the key covers only that rectangle (photo pixels; for photos where
- * only part can be told apart reliably): only regions centred inside it are scored.
+ * only part can be told apart reliably): only regions centred inside it are judged real or false,
+ * while its objects are found by any region over them.
  */
 import { existsSync, readFileSync } from 'node:fs';
 

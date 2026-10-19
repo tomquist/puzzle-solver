@@ -666,8 +666,8 @@
         "objectPrecision": 0.5
       },
       "2026-10-19-wide-board-patches-1500pc.json": {
-        "objectRecall": 0.667,
-        "objectClean": 0.667,
+        "objectRecall": 1,
+        "objectClean": 0.833,
         "objectPrecision": 1
       }
     },
