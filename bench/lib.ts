@@ -165,13 +165,16 @@ export interface ScanMetrics {
 
 const SIDE_DELTA: Record<PuzzleSide, [number, number]> = { top: [-1, 0], right: [0, 1], bottom: [1, 0], left: [0, -1] };
 
-/** Associate regions with ground-truth items and compute all scan metrics. */
-export function evaluateScan(result: ScanResult, truth: PieceTruth[], cut: JigsawCut, ms: number): { metrics: ScanMetrics; regionToTruth: Map<number, number> } {
+/**
+ * Regions that correspond to ground-truth items: the item with the highest IoU, when ≥ 0.8 (each
+ * item at most once). Also returns the rasterised outlines for further tests.
+ */
+export function associateRegions(regions: Pick<DetectedRegion, 'id' | 'contour'>[], truth: PieceTruth[]) {
   const truthMasks = truth.map((t) => rasterize(t.outline));
-  const regionMasks = new Map<number, PolyMask>(result.regions.map((r) => [r.id, rasterize(r.contour)]));
+  const regionMasks = new Map<number, PolyMask>(regions.map((r) => [r.id, rasterize(r.contour)]));
   const regionToTruth = new Map<number, number>();
   const truthToRegion = new Map<number, number>();
-  for (const r of result.regions) {
+  for (const r of regions) {
     let best = -1, bestIoU = 0;
     const rm = regionMasks.get(r.id)!;
     truth.forEach((_, i) => {
@@ -183,6 +186,12 @@ export function evaluateScan(result: ScanResult, truth: PieceTruth[], cut: Jigsa
       truthToRegion.set(best, r.id);
     }
   }
+  return { regionToTruth, truthToRegion, truthMasks, regionMasks };
+}
+
+/** Associate regions with ground-truth items and compute all scan metrics. */
+export function evaluateScan(result: ScanResult, truth: PieceTruth[], cut: JigsawCut, ms: number): { metrics: ScanMetrics; regionToTruth: Map<number, number> } {
+  const { regionToTruth, truthToRegion, truthMasks, regionMasks } = associateRegions(result.regions, truth);
   // Regions that lie (≥ 80 %) inside a truth item: parts of it (a patch split into several regions).
   const partsOf = new Map<number, number[]>();
   for (const r of result.regions) {

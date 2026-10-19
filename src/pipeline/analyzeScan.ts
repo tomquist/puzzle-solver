@@ -7,14 +7,38 @@ import { convexHull, polygonArea } from '../cv/polygon';
 import { limitSize } from '../cv/resize';
 import type { CellRef, RegionMatch, ScanResult } from '../model/types';
 import type { ProgressCallback } from '../worker/api';
-import { buildGroups, findFits, matchRegions, type MatchInput, type ReferenceIndex } from './match';
+import { buildGroups, findFits, matchRegions, sampleEdgeStrips, type EdgeStrips, type FitOptions, type MatchInput, type ReferenceIndex, type ShapeMetric } from './match';
 import { resolveRegionIssues, segmentPieces } from './pieces';
+
+/** How the fit hints compare piece sides (see `FitOptions`). */
+export interface SideComparison {
+  /** Side shape comparison. */
+  shape?: ShapeMetric;
+  /** DTW band in profile samples. */
+  band?: number;
+  /** Compare the colours just inside the sides too (samples each piece's edge strips). */
+  colour?: boolean;
+  /** Share of colour in the side distance. */
+  colourShare?: number;
+}
+
+/**
+ * Side comparison of the fit hints unless the caller chooses one: DTW of the profiles with the tilt
+ * of a misplaced corner removed. In bench/sides.eval.ts the true partner is among the five closest
+ * sides more often than point by point (0.49 vs 0.40; first as often), and with corners a few
+ * pixels off it holds up better (top-1 0.11 vs 0.05, top-5 0.33 vs 0.19); the scan benchmark keeps
+ * no wrong shape hint. Colour strips stay off: they find partners well on synthetic scans but add
+ * no correct hint there, and real photos are untested.
+ */
+export const DEFAULT_SIDE_COMPARISON: SideComparison = { shape: 'dtw-levelled', colour: false };
 
 export interface AnalyzeScanOptions {
   placedCells?: CellRef[];
   /** Longest side the photo is reduced to before analysis (default 2400). */
   maxSide?: number;
   onProgress?: ProgressCallback;
+  /** Side comparison for the fit hints (default {@link DEFAULT_SIDE_COMPARISON}). */
+  sides?: SideComparison;
 }
 
 export interface AnalyzeScanOutput {
@@ -71,13 +95,29 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
 
   report({ stage: 'fits', progress: 0.94, message: 'Checking which pieces fit together' });
   t = now();
+  const sides = opts.sides ?? DEFAULT_SIDE_COMPARISON;
+  // One distance cache for both calls below (the sides do not change between them).
+  const fitOptions: FitOptions = { shape: sides.shape, band: sides.band, colourShare: sides.colourShare, cache: new WeakMap() };
+  if (sides.colour) {
+    // Colour strips just inside the sides of single pieces (a few hundred Lab samples per piece).
+    const ts = now();
+    const strips = new Map<number, EdgeStrips>();
+    for (const s of seg.regions) {
+      const shape = s.region.kind === 'piece' ? s.region.shape : undefined;
+      if (!shape) continue;
+      const st = sampleEdgeStrips(s.image, s.mask, { x: s.region.bbox.x, y: s.region.bbox.y }, s.region.contour, shape);
+      if (st) strips.set(s.region.id, st);
+    }
+    fitOptions.strips = strips;
+    timings.strips = now() - ts;
+  }
   // Groups first (they may place weak members of assembled grids), then the fit hints.
-  const groups = buildGroups(regions, matches, findFits(regions, matches, index.grid), index.grid, {
+  const groups = buildGroups(regions, matches, findFits(regions, matches, index.grid, fitOptions), index.grid, {
     cellW: index.cellW,
     cellH: index.cellH,
     bodySize: seg.medianBodySize,
   });
-  const fits = findFits(regions, matches, index.grid);
+  const fits = findFits(regions, matches, index.grid, fitOptions);
   timings.fits = now() - t;
   // A region placed confidently was evidently segmented well enough: no low-contrast warning for it.
   resolveRegionIssues(seg, new Set(matches.filter((m) => m.status === 'confident').map((m) => m.regionId)), ['low_contrast']);

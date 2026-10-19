@@ -221,17 +221,9 @@ function quadCost(P: Point[], turn: number[], outlineArea: number): number {
  */
 export function analyzePieceShape(contour: Point[], opts: ShapeOptions = {}): PieceShape | null {
   const flatTol = opts.flatTolerance ?? 0.08;
-  if (contour.length < 16) return null;
-  let pts = contour;
-  if (polygonSignedArea(pts) < 0) pts = [...pts].reverse();
-  const area = polygonArea(pts);
-  if (area < 150) return null;
-  const Lest = Math.sqrt(area);
-  const perim = polygonPerimeter(pts);
-  const N = Math.max(96, Math.min(1200, Math.round(perim / Math.max(0.75, Lest / 140))));
-  const ds = perim / N;
-  const dense = resampleContour(pts, N);
-  const fine = smoothContour(dense, Math.max(0.6, 0.7 / ds));
+  const o = prepareOutline(contour);
+  if (!o) return null;
+  const { area, Lest, N, ds, dense, fine } = o;
   const coarse = smoothContour(dense, Math.max(0.8, (0.025 * Lest) / ds));
   const k = Math.max(2, Math.round((0.08 * Lest) / ds));
   const turn = turningAngles(coarse, k);
@@ -346,6 +338,55 @@ export function analyzePieceShape(contour: Point[], opts: ShapeOptions = {}): Pi
   if (kind === 'unknown') confidence *= 0.5;
   confidence = Math.max(0, Math.min(1, confidence));
   return { corners, sides, angleDeg, bodySize, center, kind, confidence };
+}
+
+/**
+ * The outline as the shape analysis reads it: clockwise, resampled at even spacing `ds` (finer for
+ * small pieces) and lightly smoothed (`fine`, which the side profiles follow). Null when too small.
+ */
+function prepareOutline(contour: Point[]): { area: number; Lest: number; N: number; ds: number; dense: Point[]; fine: Point[] } | null {
+  if (contour.length < 16) return null;
+  let pts = contour;
+  if (polygonSignedArea(pts) < 0) pts = [...pts].reverse();
+  const area = polygonArea(pts);
+  if (area < 150) return null;
+  const Lest = Math.sqrt(area);
+  const perim = polygonPerimeter(pts);
+  const N = Math.max(96, Math.min(1200, Math.round(perim / Math.max(0.75, Lest / 140))));
+  const ds = perim / N;
+  const dense = resampleContour(pts, N);
+  const fine = smoothContour(dense, Math.max(0.6, 0.7 / ds));
+  return { area, Lest, N, ds, dense, fine };
+}
+
+/**
+ * Side profiles (see {@link sideProfile}) that {@link analyzePieceShape} reports for `contour` when
+ * it finds the body corners `corners` (clockwise, start corner of side 0 first), with each corner
+ * optionally moved along the outline by `shifts[j]` px (positive = clockwise). For evaluating how
+ * corner errors change the profiles; null when the outline is too small.
+ */
+export function sideProfilesAt(contour: Point[], corners: readonly Point[], shifts?: readonly number[]): { length: number; profile: number[] }[] | null {
+  const o = prepareOutline(contour);
+  if (!o) return null;
+  const { fine, N, ds } = o;
+  const idx: number[] = [], at: Point[] = [];
+  for (let j = 0; j < 4; j++) {
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i < N; i++) {
+      const d = (fine[i].x - corners[j].x) ** 2 + (fine[i].y - corners[j].y) ** 2;
+      if (d < bd) { bd = d; bi = i; }
+    }
+    const shift = shifts ? Math.round(shifts[j] / ds) : 0;
+    const i = (((bi + shift) % N) + N) % N;
+    idx.push(i);
+    at.push(shift ? fine[i] : corners[j]);
+  }
+  return [0, 1, 2, 3].map((j) => {
+    const path = arc(fine, idx[j], idx[(j + 1) % 4]);
+    path[0] = at[j];
+    path[path.length - 1] = at[(j + 1) % 4];
+    return sideProfile(path, at[j], at[(j + 1) % 4]);
+  });
 }
 
 /**

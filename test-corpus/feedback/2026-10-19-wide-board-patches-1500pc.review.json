@@ -1,0 +1,203 @@
+{
+  "reviewed": "2026-10-19",
+  "note": "Every marked outline covers a fragment of a piece or patch (12 marks checked in detail, the rest on the overview). Answer key only for the upper middle, where loose pieces lie apart; which edge patches are joined can't be told reliably.",
+  "marks": {
+    "1": {
+      "verdict": "ok"
+    },
+    "2": {
+      "verdict": "ok"
+    },
+    "3": {
+      "verdict": "ok"
+    },
+    "4": {
+      "verdict": "ok"
+    },
+    "5": {
+      "verdict": "ok"
+    },
+    "6": {
+      "verdict": "ok"
+    },
+    "7": {
+      "verdict": "ok"
+    },
+    "8": {
+      "verdict": "ok"
+    },
+    "9": {
+      "verdict": "ok"
+    },
+    "10": {
+      "verdict": "ok"
+    },
+    "11": {
+      "verdict": "ok"
+    },
+    "12": {
+      "verdict": "ok"
+    },
+    "13": {
+      "verdict": "ok"
+    },
+    "14": {
+      "verdict": "ok"
+    },
+    "15": {
+      "verdict": "ok"
+    },
+    "16": {
+      "verdict": "ok"
+    },
+    "17": {
+      "verdict": "ok"
+    },
+    "18": {
+      "verdict": "ok"
+    },
+    "19": {
+      "verdict": "ok"
+    },
+    "20": {
+      "verdict": "ok"
+    },
+    "21": {
+      "verdict": "ok"
+    },
+    "22": {
+      "verdict": "ok"
+    },
+    "23": {
+      "verdict": "ok"
+    },
+    "24": {
+      "verdict": "ok"
+    },
+    "25": {
+      "verdict": "ok"
+    },
+    "26": {
+      "verdict": "ok"
+    },
+    "27": {
+      "verdict": "ok"
+    },
+    "28": {
+      "verdict": "ok"
+    },
+    "29": {
+      "verdict": "ok"
+    },
+    "30": {
+      "verdict": "ok"
+    },
+    "31": {
+      "verdict": "ok"
+    },
+    "32": {
+      "verdict": "ok"
+    },
+    "33": {
+      "verdict": "ok"
+    },
+    "34": {
+      "verdict": "ok"
+    },
+    "35": {
+      "verdict": "ok"
+    },
+    "36": {
+      "verdict": "ok"
+    },
+    "37": {
+      "verdict": "ok"
+    },
+    "38": {
+      "verdict": "ok"
+    },
+    "39": {
+      "verdict": "ok"
+    },
+    "40": {
+      "verdict": "ok"
+    },
+    "41": {
+      "verdict": "ok"
+    },
+    "42": {
+      "verdict": "ok"
+    },
+    "43": {
+      "verdict": "ok"
+    },
+    "44": {
+      "verdict": "ok"
+    },
+    "45": {
+      "verdict": "ok"
+    },
+    "46": {
+      "verdict": "ok"
+    },
+    "47": {
+      "verdict": "ok"
+    }
+  },
+  "area": {
+    "x": 430,
+    "y": 170,
+    "width": 1030,
+    "height": 980
+  },
+  "objects": [
+    {
+      "x": 564,
+      "y": 295,
+      "note": "loose purple/grey piece, top left"
+    },
+    {
+      "x": 880,
+      "y": 278,
+      "note": "loose red/teal piece"
+    },
+    {
+      "x": 1371,
+      "y": 404,
+      "note": "loose blue piece"
+    },
+    {
+      "x": 540,
+      "y": 790,
+      "note": "two assembled pieces (dark knob on top), left of the cat"
+    },
+    {
+      "x": 869,
+      "y": 1051,
+      "note": "cat patch (with the pieces above the cat and the grey strip below)"
+    },
+    {
+      "x": 1280,
+      "y": 1105,
+      "note": "loose grey piece left of the red patch"
+    },
+    {
+      "x": 1430,
+      "y": 663,
+      "unsure": true,
+      "note": "top-left pieces of the red patch"
+    },
+    {
+      "x": 1050,
+      "y": 150,
+      "unsure": true,
+      "note": "grey/pink piece hanging from the strip at the top edge: joined or loose"
+    },
+    {
+      "x": 1370,
+      "y": 150,
+      "unsure": true,
+      "note": "grey/purple piece below the top-right strip: joined or loose"
+    }
+  ]
+}
