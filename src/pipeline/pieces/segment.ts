@@ -859,7 +859,16 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
     if (lc.stats.length === 0) return null;
     const main = lc.stats.reduce((a, b2) => (b2.area > a.area ? b2 : a));
     const b = main.bbox;
-    return makeCandidate(fillHoles(componentMask(lc.labels, w, main.label, b)), { x: b.x + bx, y: b.y + by, width: b.width, height: b.height }, W, H, undefined, SHAPE_MAX_PIECES * ra);
+    // Holes are filled, but not over another part: a piece lying inside a ring of the cluster stays
+    // that piece, not part of the ring as well.
+    const pm2 = fillHoles(componentMask(lc.labels, w, main.label, b));
+    for (let y = 0; y < b.height; y++) {
+      for (let x = 0; x < b.width; x++) {
+        const o = labels[(y + b.y) * w + x + b.x];
+        if (o > 0 && o !== l) pm2.data[y * b.width + x] = 0;
+      }
+    }
+    return makeCandidate(pm2, { x: b.x + bx, y: b.y + by, width: b.width, height: b.height }, W, H, undefined, SHAPE_MAX_PIECES * ra);
   };
   const parts = new Map<number, Candidate>();
   for (const l of live) {
@@ -1662,6 +1671,12 @@ const PEEL_COLOURED_SHARE = 0.5;
 const PEEL_MAX_PIECES = 8;
 /** Largest part (piece areas) of a split that is split again at wider necks. */
 const RESPLIT_MAX_PIECES = 20;
+/**
+ * Area (piece areas) by which a part must be smaller than the cluster it was split from to be split
+ * again: every round has to shrink the parts (a split keeps no part below half a piece), or a part
+ * the split cannot shrink recurses without end.
+ */
+const SPLIT_PROGRESS = 0.5;
 /** Largest part (piece areas) that wider necks peel off a patch of many pieces: loose pieces, pairs. */
 const PEEL_LOOSE_PIECES = 4;
 /**
@@ -1917,6 +1932,8 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
   // Split touching pieces at narrow necks, wider necks for what is still too large.
   let group = 0;
   if (refArea > 0 && opts.splitTouching !== false) {
+    // A part is split again only when the split made it clearly smaller than its cluster.
+    const shrunk = (p: Candidate, c: Candidate) => p.area <= c.area - SPLIT_PROGRESS * refAreaAt(c);
     const splitTouching = (c: Candidate, from: number): Candidate[] | null => {
       const ra = refAreaAt(c), bodyAt = refBody * Math.sqrt(ra / refArea);
       // A clean four-corner outline clearly larger than a piece is two pieces side by side.
@@ -1935,7 +1952,7 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
           const pc = makeCandidate(holed ? refill(p.mask, p.bbox, c, holed) : p.mask, p.bbox, W, H, undefined, SHAPE_MAX_PIECES * ra);
           // Parts of many pieces (an assembled frame) are not cut further, only loose pieces lying
           // against them are peeled off.
-          out.push(...((pc.area <= RESPLIT_MAX_PIECES * ra ? splitTouching(pc, k) : peelLoose(pc, k + 1)) ?? [pc]));
+          out.push(...((!shrunk(pc, c) ? null : pc.area <= RESPLIT_MAX_PIECES * ra ? splitTouching(pc, k) : peelLoose(pc, k + 1)) ?? [pc]));
         }
         // A cut through a contact zone may spoil every outline; where the edges between a few
         // pieces give as many parts with a convincing outline, those are taken.
@@ -1950,7 +1967,7 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
       const cut = splitAtEdges(c, ra, bodyAt, preClose, scored, score, th.high, W, H);
       // Parts still clearly larger than a piece (a blob of pieces lying close together, a part whose
       // overlapping pieces the area under-counted) are split in turn.
-      return cut?.flatMap((p) => (p.area > 1.4 * ra ? splitTouching(p, 0) : null) ?? [p]) ?? null;
+      return cut?.flatMap((p) => (p.area > 1.4 * ra && shrunk(p, c) ? splitTouching(p, 0) : null) ?? [p]) ?? null;
     };
     // A patch of many pieces with loose pieces lying against it: wider necks cut only parts of a few
     // pieces off it (an assembled patch's own pieces join it along whole sides).
@@ -1966,7 +1983,7 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
         const out = peelLoose(rest, k + 1) ?? [rest];
         for (const p of loose) {
           const pc = makeCandidate(p.mask, p.bbox, W, H, undefined, SHAPE_MAX_PIECES * ra);
-          out.push(...(splitTouching(pc, k) ?? [pc]));
+          out.push(...((shrunk(pc, c) ? splitTouching(pc, k) : null) ?? [pc]));
         }
         return out;
       }

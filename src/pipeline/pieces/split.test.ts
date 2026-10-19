@@ -211,3 +211,48 @@ describe('assembled groups stay whole', () => {
     expect(Math.min(a!, 90 - a!)).toBeLessThan(3);
   });
 });
+
+describe('splitting always ends', () => {
+  it('does not recurse without end on a piece lying inside a ring of the same colour', () => {
+    // A light piece inside an octagonal ring of the same light colour, 3 px of dark table between
+    // them, next to eight loose pieces. The split along the edges separates the piece from the
+    // ring; filled, the ring was the whole cluster again, split again the same way (stack overflow).
+    const ref = resizeRGBA(loadTestAsset('great-wave'), 800, 538);
+    const cut = generateJigsaw(8, 10, ref.width, ref.height, 5);
+    const table: RGB = [38, 42, 50];
+    const { photo } = renderPiecesPhoto(ref, cut, [0, 9, 19, 29, 70, 79, 77, 60], { seed: 3, background: table, noiseSigma: 2.5, scale: 1.05, width: W, height: H, margin: 40 });
+    const cx = 250, cy = 500, piece = cut.pieces[34];
+    const pc = piece.corners.reduce((a, p) => ({ x: a.x + p.x / 4, y: a.y + p.y / 4 }), { x: 0, y: 0 });
+    const inner = createMask(W, H);
+    fillPolygon(inner, piece.outline.map((p) => ({ x: cx + 1.05 * (p.x - pc.x), y: cy + 1.05 * (p.y - pc.y) })), 1);
+    const gap = dilate(inner, 3), ring = createMask(W, H);
+    fillPolygon(ring, Array.from({ length: 8 }, (_, i) => ({ x: cx + 85 * Math.cos(((i + 0.5) * Math.PI) / 4), y: cy + 85 * Math.sin(((i + 0.5) * Math.PI) / 4) })), 1);
+    // (Sensor noise: a sum of three uniform numbers, Lehmer generator.)
+    let seed = 7;
+    const uniform = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < 450; x++) {
+        const i = y * W + x;
+        const c = inner.data[i] || (ring.data[i] && !gap.data[i]) ? [225, 212, 185] : table;
+        for (let k = 0; k < 3; k++) photo.data[i * 4 + k] = c[k] + 4 * (uniform() + uniform() + uniform() - 1.5);
+      }
+    }
+    const seg = segmentPieces(photo);
+    debug('ring', photo, seg, []);
+    // The piece is a region of its own, and no pixel belongs to two regions.
+    const id = regionAt(seg, { x: cx, y: cy });
+    expect(id).toBeDefined();
+    const owner = new Int32Array(W * H);
+    for (const { region: r, mask } of seg.regions) {
+      for (let y = 0; y < r.bbox.height; y++) {
+        for (let x = 0; x < r.bbox.width; x++) {
+          if (!mask.data[y * r.bbox.width + x]) continue;
+          const i = (y + r.bbox.y) * W + x + r.bbox.x;
+          expect(owner[i], `pixel ${x + r.bbox.x},${y + r.bbox.y}`).toBe(0);
+          owner[i] = r.id;
+        }
+      }
+    }
+    expect(seg.regions.find((r) => r.region.id === id)!.region.bbox.width).toBeLessThan(140);
+  });
+});
