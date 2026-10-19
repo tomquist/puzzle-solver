@@ -16,6 +16,7 @@ so changes can be made and judged without manual photo-taking feedback loops.
 | PWA / offline, slow phone | Playwright | Manifest, icons, service worker, offline reload of the production build; 4× CPU throttling keeps progress and taps responsive | `npm run test:e2e`, CI |
 | Real-photo corpus | `npm run bench -- --corpus` | Real photos confirmed by the user still match | locally / CI when present |
 | Feedback replay | `npm run bench` (`bench/feedback.eval.ts`) | Users' feedback files (`test-corpus/feedback/`): reviewed marks stay fixed; answer keys score found / separate / false regions | CI (gate) |
+| Other puzzles | `npm run corpus:fetch-puzzlemap`, then `npm run bench` (`bench/puzzlemap.eval.ts`) | Real photos of 643 labelled pieces of other puzzles (Puzzle-Map dataset, 7 reference pictures) are placed in their reference: top-1 / top-3 cell and turn | locally when fetched (skipped otherwise) |
 
 ## Synthetic ground truth
 
@@ -93,3 +94,16 @@ truth: every mark is checked by eye first and the verdicts go into `<file>.revie
 (test-corpus/feedback/README.md). Where the pieces can be told apart, the review also holds an
 answer key: one by-eye point per piece or assembled group (optionally for part of the photo). It
 catches mistakes nobody marked, such as a regression that drops pieces on an easy photo.
+Freely licensed table photos of other puzzles (`feedback/flickr-*.json`, test-corpus/CREDITS.md)
+are wrapped into the same format with `npm run feedback:from-photo` and carry only an answer key:
+stress tests for other tables, motifs, oblique views and small pieces.
+
+### Other puzzles: Puzzle-Map
+
+Matching on real photos is otherwise only measured on one puzzle. `bench/puzzlemap.eval.ts`
+places the labelled pieces of the Puzzle-Map dataset (CC BY 4.0; fetched by
+`npm run corpus:fetch-puzzlemap` into `test-corpus/puzzle-map/`, which is not committed because
+the pictures show publishers' artwork) in their puzzles' reference pictures: once from the
+labelled piece body alone (appearance matching) and once through our segmentation of the photo.
+The suite is skipped without the data and takes about 15 minutes with it (`PUZZLEMAP_LIMIT=<n>`
+for a quick, ungated run).

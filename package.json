@@ -15,7 +15,9 @@
     "bench": "vitest run --config vitest.bench.config.ts",
     "feedback:inspect": "vite-node scripts/feedback-inspect.ts --",
     "feedback:strip": "vite-node scripts/feedback-strip.ts --",
-    "feedback:to-puzzle": "vite-node scripts/feedback-to-puzzle.ts --"
+    "feedback:to-puzzle": "vite-node scripts/feedback-to-puzzle.ts --",
+    "feedback:from-photo": "vite-node scripts/feedback-from-photo.ts --",
+    "corpus:fetch-puzzlemap": "vite-node scripts/corpus-fetch-puzzlemap.ts --"
   },
   "dependencies": {
     "comlink": "4.4.2",

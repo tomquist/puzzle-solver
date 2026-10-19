@@ -81,6 +81,28 @@ export interface ObjectScore {
   real: number;
 }
 
+/** The piece / patch region each answer-key object lies in (undefined: none). */
+function objectHits(objects: ReviewObject[], regions: RasterRegion[]): (RasterRegion | undefined)[] {
+  const visible = regions.filter((r) => r.region.kind !== 'unknown');
+  return objects.map((o) => visible.find((r) => containsPoint(r, o)));
+}
+
+function hitCounts(hits: (RasterRegion | undefined)[]): Map<RasterRegion, number> {
+  const perRegion = new Map<RasterRegion, number>();
+  for (const h of hits) if (h) perRegion.set(h, (perRegion.get(h) ?? 0) + 1);
+  return perRegion;
+}
+
+/** Outcome of one answer-key object: alone in a piece / patch region, in one with other objects, or in none. */
+export type ObjectStatus = 'alone' | 'merged' | 'missed';
+
+/** Per-object outcome of an answer key (the counts behind {@link scoreObjects}, for drawing the key). */
+export function objectStatus(objects: ReviewObject[], regions: RasterRegion[]): ObjectStatus[] {
+  const hits = objectHits(objects, regions);
+  const perRegion = hitCounts(hits);
+  return hits.map((h) => (!h ? 'missed' : perRegion.get(h) === 1 ? 'alone' : 'merged'));
+}
+
 /** Score piece / patch regions (centred inside `area`, when given) against an answer key of object points. */
 export function scoreObjects(objects: ReviewObject[], regions: RasterRegion[], area?: Rect): ObjectScore {
   const inArea = (r: RasterRegion) => {
@@ -90,11 +112,9 @@ export function scoreObjects(objects: ReviewObject[], regions: RasterRegion[], a
   };
   // An object is found by any shown region over it, also one reaching beyond the area (a whole
   // patch centred outside it); only the regions centred inside the area are judged real or false.
-  const visible = regions.filter((r) => r.region.kind !== 'unknown');
-  const shown = visible.filter(inArea);
-  const hits = objects.map((o) => visible.find((r) => containsPoint(r, o)));
-  const perRegion = new Map<RasterRegion, number>();
-  for (const h of hits) if (h) perRegion.set(h, (perRegion.get(h) ?? 0) + 1);
+  const shown = regions.filter((r) => r.region.kind !== 'unknown' && inArea(r));
+  const hits = objectHits(objects, regions);
+  const perRegion = hitCounts(hits);
   const counted = objects.map((o, i) => ({ o, h: hits[i] })).filter(({ o }) => !o.unsure);
   return {
     objects: counted.length,
@@ -122,6 +142,8 @@ export interface FeedbackReplay {
   reviewed?: boolean;
   /** Stored and current result scored against the review's answer key, when it has one. */
   objects?: { original: ObjectScore; current: ObjectScore };
+  /** The review's answer key with each object's outcome under the current pipeline (drawn by the inspector). */
+  key?: { objects: ReviewObject[]; area?: Rect; status: ObjectStatus[] };
   placements: PlacementJudgement[];
   boxPhoto: RGBAImage | null;
   box: BoxJudgement | null;
@@ -392,7 +414,10 @@ export function replayFeedback(bundle: FeedbackBundle, name: string, opts: Repla
   }
   if (opts.review) for (const j of out.marks) j.review = opts.review.marks[String(j.index)];
   const key = opts.review?.objects;
-  if (key?.length) out.objects = { original: scoreObjects(key, origR, opts.review!.area), current: scoreObjects(key, curR, opts.review!.area) };
+  if (key?.length) {
+    out.objects = { original: scoreObjects(key, origR, opts.review!.area), current: scoreObjects(key, curR, opts.review!.area) };
+    out.key = { objects: key, area: opts.review!.area, status: objectStatus(key, curR) };
+  }
   out.reviewed = !!opts.review;
   return out;
 }

@@ -7,10 +7,12 @@
  * (no opening: the thin dark cardboard rim often is the only evidence of a piece whose print matches
  * the table, and filling the closed rim recovers it) → connected components → outline tracing and
  * shape analysis → peeling of glare halos and soft shadows → splitting of touching pieces at narrow
- * necks or along the edges between them → reassembly of fragments → outlines snapped to brightness
- * edges in blocky JPEGs → (option) graph-cut refinement of outlines in doubt, trimming halos the
- * colour models clearly take for table (refine.ts) → classification (piece / patch / fragment /
- * clutter at the photo border) → reading-order ids → quality.
+ * necks (loose pieces lying against a large patch peeled off at wider ones, with the table they
+ * enclose opened) or along the edges between them (dark creases count as cuts only between pieces at
+ * their own angles) → reassembly of fragments → outlines snapped to brightness edges in blocky
+ * JPEGs → (option) graph-cut refinement of outlines in doubt, trimming halos the colour models
+ * clearly take for table (refine.ts) → classification (piece / patch / fragment / clutter at the
+ * photo border) → reading-order ids → quality.
  */
 import { componentMask, labelComponents, labelRuns, removeSmallComponents } from '../../cv/components';
 import { traceOuterContour } from '../../cv/contour';
@@ -539,6 +541,53 @@ function splitAtNecks(c: Candidate, r: number, minCore: number, minPart: number)
 }
 
 /**
+ * The mask of a cluster with the table it encloses opened again (bbox-local), or null when it
+ * encloses none: background before closing of at least `minHole` pixels inside it. Filling holes
+ * up to 1.5 pieces keeps pieces whose print matches the table whole, but also closes the table
+ * between a patch and loose pieces lying against it, which then ties them to the patch beyond any
+ * neck. (Used for peeling only: between loose pieces alone, the cuts of the opened mask are cruder
+ * than the edge split.)
+ */
+function openTableHoles(c: Candidate, preClose: Mask, minHole: number, W: number): Mask | null {
+  const { width: w, height: h } = c.mask;
+  const { x: bx, y: by } = c.bbox;
+  const bg = createMask(w, h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      bg.data[i] = c.mask.data[i] & (preClose.data[(y + by) * W + x + bx] ^ 1);
+    }
+  }
+  const { labels, stats } = labelComponents(bg, 4);
+  const holes = stats.filter((st) => st.area >= minHole);
+  if (holes.length === 0) return null;
+  const isHole = new Uint8Array(stats.length + 1);
+  for (const st of holes) isHole[st.label] = 1;
+  const out = cloneMask(c.mask);
+  for (let i = 0; i < out.data.length; i++) if (isHole[labels[i]]) out.data[i] = 0;
+  return out;
+}
+
+/**
+ * A part's mask (at `bbox`) with the opened holes it encloses given back (print inside one piece;
+ * table between several pieces stays open): `cluster` as it was, `opened` its mask with the holes.
+ */
+function refill(mask: Mask, bbox: Rect, cluster: Candidate, opened: Mask): Mask {
+  const filled = fillHoles(mask);
+  const { mask: cm, bbox: cb } = cluster;
+  for (let y = 0; y < bbox.height; y++) {
+    for (let x = 0; x < bbox.width; x++) {
+      const i = y * bbox.width + x;
+      if (!filled.data[i] || mask.data[i]) continue;
+      const cx = x + bbox.x - cb.x, cy = y + bbox.y - cb.y;
+      const j = cy * cm.width + cx;
+      if (cx < 0 || cy < 0 || cx >= cm.width || cy >= cm.height || !cm.data[j] || opened.data[j]) filled.data[i] = 0;
+    }
+  }
+  return filled;
+}
+
+/**
  * Black top-hat of the luminance over `rect` ((2r+1)² closing minus luminance, gray levels): high on
  * thin dark valleys such as the crease between two touching pieces (cardboard edge, shadow), low on
  * the step edges of a piece's print.
@@ -591,6 +640,12 @@ const CREASE_MIN = 10;
 const LOOSE_SECOND_PEAK = 0.15;
 /** Angle tolerance (degrees) of outer edges on one assembled grid (parts need not be whole pieces). */
 const OUTER_GRID_DEG = 12;
+/**
+ * Straight outer edge (body sizes) along its direction from which a part's angle counts in the grid
+ * vote: parts of a cluster split inside an assembled group may reach its outline with a few pixels
+ * only (a tab's flank), whose direction is noise.
+ */
+const OUTER_MIN_SUPPORT = 0.15;
 /** Offset tolerance (body sizes) of neighbours on one assembled grid. */
 const GRID_TOLERANCE = 0.3;
 /** Share of a part's outline along its neighbour from which the neighbour wraps around it. */
@@ -806,7 +861,16 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
     if (lc.stats.length === 0) return null;
     const main = lc.stats.reduce((a, b2) => (b2.area > a.area ? b2 : a));
     const b = main.bbox;
-    return makeCandidate(fillHoles(componentMask(lc.labels, w, main.label, b)), { x: b.x + bx, y: b.y + by, width: b.width, height: b.height }, W, H, undefined, SHAPE_MAX_PIECES * ra);
+    // Holes are filled, but not over another part: a piece lying inside a ring of the cluster stays
+    // that piece, not part of the ring as well.
+    const pm2 = fillHoles(componentMask(lc.labels, w, main.label, b));
+    for (let y = 0; y < b.height; y++) {
+      for (let x = 0; x < b.width; x++) {
+        const o = labels[(y + b.y) * w + x + b.x];
+        if (o > 0 && o !== l) pm2.data[y * b.width + x] = 0;
+      }
+    }
+    return makeCandidate(pm2, { x: b.x + bx, y: b.y + by, width: b.width, height: b.height }, W, H, undefined, SHAPE_MAX_PIECES * ra);
   };
   const parts = new Map<number, Candidate>();
   for (const l of live) {
@@ -819,8 +883,10 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
   const find = (l: number): number => (root[l] === l ? l : (root[l] = find(root[l])));
   const stats = pairStats();
   // An assembled patch: the parts' outer edges run along the cluster's grid. Only a cluster of
-  // pieces at their own angles takes dark creases for cuts.
-  const outer = live.map((l) => { const pc = parts.get(l); return pc ? outerAngle(pc, c) : null; }).filter((a): a is number => a !== null);
+  // pieces at their own angles takes dark creases for cuts (assembled pieces show a thin dark cut
+  // line as well). Parts that reach the outline along a short stretch only do not vote: in an
+  // assembled strip with pieces on top, such a part's tab flank swung the vote.
+  const outer = live.map((l) => { const pc = parts.get(l); return pc ? outerAngle(pc, c, OUTER_MIN_SUPPORT * body) : null; }).filter((a): a is number => a !== null);
   const aligned = outer.filter((a) => quarterDiff(a, c.orientation) <= OUTER_GRID_DEG).length;
   const mixed = c.secondPeak >= LOOSE_SECOND_PEAK && outer.length >= 2 && aligned < 0.75 * outer.length;
   // Median colour score along each part's stretch of the cluster outline (3 px in).
@@ -948,9 +1014,11 @@ function onOneGrid(a: Candidate, b: Candidate, cluster: Candidate, body: number)
 
 /**
  * Dominant direction (degrees modulo 90) of the straight stretches of a part's outline that lie on
- * the outer edge of its cluster; null when too little of it does.
+ * the outer edge of its cluster; null when too little of it does, or when less than `minSupport` px
+ * of straight edge run in that direction (a part reaching the outline only along a curved tab or a
+ * few pixels of a side has no telling direction). Exported for tests.
  */
-function outerAngle(part: Candidate, cluster: Candidate): number | null {
+export function outerAngle(part: { contour: Point[]; area: number }, cluster: { mask: Mask; bbox: Rect }, minSupport = 0): number | null {
   const { mask: cm, bbox: cb } = cluster;
   const outside = (x: number, y: number) => {
     const lx = Math.round(x) - cb.x, ly = Math.round(y) - cb.y;
@@ -984,6 +1052,9 @@ function outerAngle(part: Candidate, cluster: Candidate): number | null {
     for (let j = -3; j <= 3; j++) v += hist[(i + j + 90) % 90] * Math.exp(-(j * j) / 4.5);
     if (v > bestV) { bestV = v; best = i; }
   }
+  let support = 0;
+  for (let j = -4; j <= 4; j++) support += hist[(best + j + 90) % 90];
+  if ((support * perim) / N < minSupport) return null;
   return best + 0.5;
 }
 
@@ -1602,6 +1673,19 @@ const PEEL_COLOURED_SHARE = 0.5;
 const PEEL_MAX_PIECES = 8;
 /** Largest part (piece areas) of a split that is split again at wider necks. */
 const RESPLIT_MAX_PIECES = 20;
+/**
+ * Area (piece areas) by which a part must be smaller than the cluster it was split from to be split
+ * again: every round has to shrink the parts (a split keeps no part below half a piece), or a part
+ * the split cannot shrink recurses without end.
+ */
+const SPLIT_PROGRESS = 0.5;
+/** Largest part (piece areas) that wider necks peel off a patch of many pieces: loose pieces, pairs. */
+const PEEL_LOOSE_PIECES = 4;
+/**
+ * Smallest hole (piece areas) in a cluster that is table enclosed by its pieces rather than print
+ * inside one piece (print like the table rarely covers half a piece).
+ */
+const TABLE_HOLE = 0.5;
 /** Largest candidate (piece areas) whose outline is analysed as a single piece. */
 const SHAPE_MAX_PIECES = 3;
 /** Largest hole that is filled, in piece areas (see objectUnitArea). */
@@ -1850,6 +1934,8 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
   // Split touching pieces at narrow necks, wider necks for what is still too large.
   let group = 0;
   if (refArea > 0 && opts.splitTouching !== false) {
+    // A part is split again only when the split made it clearly smaller than its cluster.
+    const shrunk = (p: Candidate, c: Candidate) => p.area <= c.area - SPLIT_PROGRESS * refAreaAt(c);
     const splitTouching = (c: Candidate, from: number): Candidate[] | null => {
       const ra = refAreaAt(c), bodyAt = refBody * Math.sqrt(ra / refArea);
       // A clean four-corner outline clearly larger than a piece is two pieces side by side.
@@ -1863,8 +1949,9 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
         const out: Candidate[] = [];
         for (const p of parts) {
           const pc = makeCandidate(p.mask, p.bbox, W, H, undefined, SHAPE_MAX_PIECES * ra);
-          // Parts of many pieces (an assembled frame) are not cut further.
-          out.push(...((pc.area <= RESPLIT_MAX_PIECES * ra ? splitTouching(pc, k) : null) ?? [pc]));
+          // Parts of many pieces (an assembled frame) are not cut further, only loose pieces lying
+          // against them are peeled off.
+          out.push(...((!shrunk(pc, c) ? null : pc.area <= RESPLIT_MAX_PIECES * ra ? splitTouching(pc, k) : peelLoose(pc, k + 1)) ?? [pc]));
         }
         // A cut through a contact zone may spoil every outline; where the edges between a few
         // pieces give as many parts with a convincing outline, those are taken.
@@ -1875,11 +1962,39 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
         }
         return out;
       }
+      // A patch of many pieces without any neck: only loose pieces lying against it come off (the
+      // edges are not cut for so many pieces).
+      if (c.area > RESPLIT_MAX_PIECES * ra) return peelLoose(c, from);
       // Pieces touching along a whole side or slightly overlapping: cut along the edges between them.
       const cut = splitAtEdges(c, ra, bodyAt, preClose, scored, score, th.high, W, H);
       // Parts still clearly larger than a piece (a blob of pieces lying close together, a part whose
       // overlapping pieces the area under-counted) are split in turn.
-      return cut?.flatMap((p) => (p.area > 1.4 * ra ? splitTouching(p, 0) : null) ?? [p]) ?? null;
+      return cut?.flatMap((p) => (p.area > 1.4 * ra && shrunk(p, c) ? splitTouching(p, 0) : null) ?? [p]) ?? null;
+    };
+    // A patch of many pieces with loose pieces lying against it: wider necks cut only parts of a few
+    // pieces off it (an assembled patch's own pieces join it along whole sides). Table the patch and
+    // the loose pieces enclose is opened for these cuts (filled, it ties them together beyond any
+    // neck); between loose pieces only, the edge split separates them better than such cuts.
+    // (`opened`: the patch's table holes are open already, it was peeled before.)
+    const peelLoose = (c: Candidate, from: number, opened = false): Candidate[] | null => {
+      const ra = refAreaAt(c), bodyAt = refBody * Math.sqrt(ra / refArea);
+      const holed = opened ? null : openTableHoles(c, preClose, TABLE_HOLE * ra, W);
+      const necks = holed ? { ...c, mask: holed } : c;
+      for (let k = from; k < NECK_RADII.length; k++) {
+        const parts = splitAtNecks(necks, Math.max(2, NECK_RADII[k] * bodyAt), 0.3 * ra, 0.5 * ra)?.map((p) => (holed ? { ...p, mask: refill(p.mask, p.bbox, c, holed) } : p));
+        if (!parts) continue;
+        const main = parts.reduce((a, b) => (maskArea(b.mask) > maskArea(a.mask) ? b : a));
+        const loose = parts.filter((p) => p !== main);
+        if (loose.some((p) => maskArea(p.mask) > PEEL_LOOSE_PIECES * ra)) continue;
+        const rest = makeCandidate(main.mask, main.bbox, W, H, undefined, SHAPE_MAX_PIECES * ra);
+        const out = peelLoose(rest, k + 1, true) ?? [rest];
+        for (const p of loose) {
+          const pc = makeCandidate(p.mask, p.bbox, W, H, undefined, SHAPE_MAX_PIECES * ra);
+          out.push(...((shrunk(pc, c) ? splitTouching(pc, k) : null) ?? [pc]));
+        }
+        return out;
+      }
+      return null;
     };
     const out: Candidate[] = [];
     for (const c of cands) {
