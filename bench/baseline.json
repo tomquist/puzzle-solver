@@ -662,8 +662,8 @@
       },
       "2026-10-19-board-letter-strip-1500pc.json": {
         "objectRecall": 0.938,
-        "objectClean": 0.75,
-        "objectPrecision": 0.737
+        "objectClean": 0.875,
+        "objectPrecision": 1
       },
       "2026-10-19-closeup-shadow-board-1500pc.json": {
         "objectRecall": 1,
@@ -678,7 +678,7 @@
       "flickr-chrisrycroft-birds-oak-partial.json": {
         "objectRecall": 0.5,
         "objectClean": 0.5,
-        "objectPrecision": 0.091
+        "objectPrecision": 0.083
       },
       "flickr-electric-eye-oblique-wood-pieces.json": {
         "objectRecall": 1,
@@ -688,12 +688,12 @@
       "flickr-electric-eye-sunlit-wood-pieces.json": {
         "objectRecall": 0.219,
         "objectClean": 0.156,
-        "objectPrecision": 0.065
+        "objectPrecision": 0.067
       },
       "flickr-tatters-peacock-white-cloth-1000pc.json": {
         "objectRecall": 1,
         "objectClean": 0.941,
-        "objectPrecision": 0.846
+        "objectPrecision": 0.892
       },
       "flickr-welikesharing-map-oblique-wood.json": {
         "objectRecall": 0.5,
