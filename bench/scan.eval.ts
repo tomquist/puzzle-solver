@@ -286,6 +286,14 @@ const SCENARIOS: Scenario[] = [
     items: { singles: 4, neighborBlocks: [[3, 3], [2, 3], [2, 3], [2, 2]], neighborArea: { rows: [0.3, 0.8], cols: [0, 1] } },
     render: standard,
   },
+  // From real feedback (one large block on a light blue table): a single assembled block of about
+  // 45 pieces with ragged sides and notches, turned 25–35°, and no loose piece in the photo, so the
+  // scan has no single-piece size to go by.
+  {
+    name: 'starry-lone-block-turned',
+    painting: 'starry-night', grid: { rows: 16, cols: 20 }, items: { singles: 0, blocks: [{ rows: 8, cols: 7, missing: 11 }] }, seeds: [38, 39],
+    render: (rng) => ({ ...standard(rng), background: [196, 208, 218], illumination: 0.15, rotation: rng.uniform(25, 35) + 180 * rng.int(2) }),
+  },
 ];
 
 const COLUMNS = [

@@ -13,6 +13,7 @@ import {
   enforceConsistency,
   findFits,
   matchRegionsDetailed,
+  patchBodySize,
   sampleEdgeStrips,
   scorePlacement,
   shapeFits,
@@ -161,10 +162,13 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
     timings.consistency = now() - tc;
   }
   // Groups first (they may place weak members of assembled grids), then the fit hints.
+  // Without a single piece to measure, the patches' seams give the piece size.
+  const pitches = inputs.map(patchBodySize).filter((b): b is number => b !== undefined).sort((a, b) => a - b);
+  const bodySize = seg.medianBodySize ?? (pitches.length > 0 ? pitches[pitches.length >> 1] : undefined);
   const groups = buildGroups(regions, matches, findFits(regions, matches, index.grid, fitOptions), index.grid, {
     cellW: index.cellW,
     cellH: index.cellH,
-    bodySize: seg.medianBodySize,
+    bodySize,
   });
   const fits = findFits(regions, matches, index.grid, fitOptions);
   timings.fits = now() - t;

@@ -8,7 +8,7 @@ import type { CellRef, RegionMatch } from '../../model/types';
 import { DEBUG_IMAGES, loadTestAsset, savePng } from '../../testing/nodeImageIO';
 import { generateJigsaw, perturbReference, renderPiecesPhoto, Rng, type JigsawCut, type PieceTruth } from '../../testing/synth';
 import { matchRegionsDetailed } from './colorCorrection';
-import { capForBorder, CONFIDENT_THRESHOLD, matchConfidence, matchRegionDetailed, outlineFactor, scorePlacement, type MatchDetail } from './matchRegion';
+import { capForBorder, CONFIDENT_THRESHOLD, matchConfidence, matchRegionDetailed, outlineFactor, patchBodySize, scorePlacement, type MatchDetail } from './matchRegion';
 import { buildReferenceIndex, cellAt, matchRegion, matchRegions, type MatchInput, type ReferenceIndex } from './index';
 import { accuracy, angleError, inputFromTruth, renderScenario, type Accuracy } from './testkit';
 
@@ -162,6 +162,32 @@ describe('matchRegion — Starry Night 20×16 (320 pieces)', () => {
       expect(angleError(c.rotationDeg, truth[i].rotationDeg)).toBeLessThan(5);
       expect(m.status).toBe('confident');
       report(`Starry 20×16, patch ${truth[i].pieces.length === 4 ? '2×2' : '3×2'}`, { n: 1, top1: 1, top3: 1, rotation: 1 }, ms);
+    }
+  });
+
+  it('places a large ragged block turned ~30° when the scan has no piece size', () => {
+    // A photo of one assembled block (45 pieces, outline pieces missing) and nothing else: no single
+    // piece gives the body size, so the block measures it from its own seams.
+    const missing = new Set(['4,6', '4,9', '7,12', '10,8']);
+    const block: number[] = [];
+    for (let r = 4; r <= 10; r++) for (let c = 6; c <= 12; c++) if (!missing.has(`${r},${c}`)) block.push(r * cols + c);
+    const cell = (cut.width / cut.cols + cut.height / cut.rows) / 2;
+    for (const rotation of [32, 207]) {
+      const { photo, truth } = renderPiecesPhoto(ref, cut, [block], {
+        seed: 9, rotation, scale: 70 / cell, background: [196, 208, 218], noiseSigma: 3, blurSigma: 0.7, illumination: 0.1, supersample: 2,
+      });
+      const input = inputFromTruth(photo, cut, truth[0], 1, { withBodySize: false, orientationError: 1.5 });
+      expect(input.kind).toBe('patch');
+      expect(input.expectedBodySize).toBeUndefined();
+      expect(Math.abs(patchBodySize(input)! / 70 - 1)).toBeLessThan(0.08);
+      const { value: m, ms } = timed(() => matchRegion(index, input));
+      const expected = new Set(block.map((p) => `${cut.pieces[p].row},${cut.pieces[p].col}`));
+      const covered = (m.coveredCells ?? []).map((x) => `${x.row},${x.col}`);
+      const inter = covered.filter((k) => expected.has(k)).length;
+      expect(inter / (expected.size + covered.length - inter), `rotation ${rotation}`).toBeGreaterThanOrEqual(0.9);
+      expect(angleError(m.candidates[0].rotationDeg, truth[0].rotationDeg)).toBeLessThan(5);
+      expect(m.status).toBe('confident');
+      report(`Starry 20×16, ragged block of 45 at ${rotation}°`, { n: 1, top1: 1, top3: 1, rotation: 1 }, ms);
     }
   });
 

@@ -28,6 +28,7 @@ import { otsuThreshold, threshold } from '../../cv/threshold';
 import type { DetectedRegion, PieceShape, QualityIssue, RegionKind } from '../../model/types';
 import { backgroundAt, fitBackground, fitLocalTable, foregroundScore, tableChromaDistance, tableChromasAt, type BackgroundFit } from './background';
 import { assessPhoto, assessRegions } from './quality';
+import { estimatePatchPitch } from './patchPitch';
 import { refineByGraphCut } from './refine';
 import { analyzePieceShape, bodyOrientation, orientationHistogram } from './shape';
 import type { BackgroundModel, RegionDiagnostics, SegmentOptions, Segmentation, SegmentedRegion } from './types';
@@ -1746,6 +1747,19 @@ function referenceSingles(cands: Candidate[], minArea: number): Candidate[] {
 }
 
 /**
+ * Seam pieces (area / seam pitch², see {@link estimatePatchPitch}) at or above which a lone region
+ * is a large assembled block. Single pieces stay below ≈ 20 (their comb locks onto the knob necks,
+ * a third of a piece apart) in the real feedback photos; blocks of 30+ pieces reach their count.
+ */
+const LARGE_BLOCK_PIECES = 30;
+
+/** True when the region's seams show a large assembled block (see {@link LARGE_BLOCK_PIECES}). */
+function isLargeBlock(photo: RGBAImage, c: Candidate): boolean {
+  const est = estimatePatchPitch(cropRGBA(photo, c.bbox), c.mask, c.orientation);
+  return !!est && c.area >= LARGE_BLOCK_PIECES * est.pitch * est.pitch;
+}
+
+/**
  * Find every piece / patch in a scan photo. Regions get ids 1..n in reading order, a kind
  * ('piece' | 'patch' | 'unknown'), outline, shape (single pieces), orientation and issues; the
  * result also carries the foreground mask, background model and the photo quality report.
@@ -2069,8 +2083,9 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
     else if ((ratio > patchRatio && !confidentSingle) || (ratio > 1.4 && weakShape)) kind = 'patch';
     // Without any size reference (no convincing single piece, < 3 regions), a region without a
     // convincing single-piece shape is taken as an assembled patch (lone patches score ≤ 0.4,
-    // lone pieces ≥ 0.9).
-    else if (noReference && weakShape) kind = 'patch';
+    // lone pieces ≥ 0.9). A large block can still fit four corners moderately well: its seams,
+    // one piece apart, tell it from a single piece.
+    else if (noReference && (weakShape || (!confidentSingle && isLargeBlock(photo, c)))) kind = 'patch';
     const shape = kind === 'piece' && c.shape && c.shape.confidence >= MIN_SHAPE_CONFIDENCE ? c.shape : undefined;
     const orientationDeg = shape ? bodyOrientation(shape) : c.orientation;
     const region: DetectedRegion = {

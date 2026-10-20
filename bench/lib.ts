@@ -9,7 +9,7 @@ import { distanceTransform } from '../src/cv/distance';
 import { createMask, createRGBA, type Mask, type Rect, type RGBAImage } from '../src/cv/image';
 import { drawPolygon, fillPolygon } from '../src/cv/raster';
 import type { CellRef, DetectedRegion, PuzzleSide, RegionMatch, ScanResult } from '../src/model/types';
-import { pieceKindOf, Rng, type JigsawCut, type PieceTruth } from '../src/testing/synth';
+import { patchOutline, pieceKindOf, Rng, type JigsawCut, type PieceTruth } from '../src/testing/synth';
 import { REPO_ROOT } from '../src/testing/nodeImageIO';
 
 // ---------------------------------------------------------------------------------------------
@@ -32,6 +32,37 @@ export interface ItemSpec {
    * columns, e.g. a plain sky), when they should not lie anywhere.
    */
   neighborArea?: { rows: [number, number]; cols: [number, number] };
+  /**
+   * Irregular assembled blocks: a rows × cols rectangle with `missing` pieces taken off its outline
+   * (ragged sides, notches; the block stays one simply connected piece).
+   */
+  blocks?: { rows: number; cols: number; missing: number }[];
+}
+
+/** Cells of an irregular block: the rectangle at (r, c) with `missing` outline pieces removed. */
+function irregularBlock(cut: JigsawCut, r: number, c: number, h: number, w: number, missing: number, rng: Rng): number[] {
+  const cells = new Set<number>();
+  for (let dr = 0; dr < h; dr++) for (let dc = 0; dc < w; dc++) cells.add((r + dr) * cut.cols + c + dc);
+  const exposed = (i: number) => {
+    const row = Math.floor(i / cut.cols), col = i % cut.cols;
+    return [[-1, 0], [1, 0], [0, -1], [0, 1]].some(([a, b]) => {
+      const rr = row + a, cc = col + b;
+      return rr < r || cc < c || rr >= r + h || cc >= c + w || !cells.has(rr * cut.cols + cc);
+    });
+  };
+  for (let removed = 0, attempt = 0; removed < missing && attempt < 50 * missing; attempt++) {
+    const outline = [...cells].filter(exposed);
+    const i = outline[rng.int(outline.length)];
+    cells.delete(i);
+    try {
+      patchOutline(cut, [...cells]);
+      removed++;
+    } catch {
+      // Split, holed or touching only at a corner: keep the piece.
+      cells.add(i);
+    }
+  }
+  return [...cells].sort((a, b) => a - b);
 }
 
 /** Pick non-overlapping items (singles and rectangular patches, anchor = top-left piece first). */
@@ -46,6 +77,16 @@ export function pickItems(cut: JigsawCut, spec: ItemSpec, seed: number): (number
       for (let dr = 0; dr < h; dr++) for (let dc = 0; dc < w; dc++) idx.push((r + dr) * cut.cols + c + dc);
       if (idx.some((i) => used.has(i))) continue;
       // Keep a one-cell gap so single pieces never fit the patch by accident in the truth.
+      idx.forEach((i) => used.add(i));
+      items.push(idx);
+      break;
+    }
+  }
+  for (const b of spec.blocks ?? []) {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const r = rng.int(cut.rows - b.rows + 1), c = rng.int(cut.cols - b.cols + 1);
+      const idx = irregularBlock(cut, r, c, b.rows, b.cols, b.missing, rng);
+      if (idx.some((i) => used.has(i))) continue;
       idx.forEach((i) => used.add(i));
       items.push(idx);
       break;
