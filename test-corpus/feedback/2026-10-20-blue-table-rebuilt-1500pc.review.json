@@ -1,14 +1,14 @@
 {
   "reviewed": "2026-10-20",
-  "note": "Regions 1-7 are the table edge along the top of the photo, not pieces. Wrong-place marks to be judged against the exploded-block truth set (private).",
+  "note": "Regions 1-7 are the table edge along the top of the photo, not pieces. Wrong-place marks judged against the exploded-block truth set (private): see marks 1 and 2.",
   "marks": {
     "1": {
       "verdict": "unsure",
-      "note": "pending the truth set"
+      "note": "#13 (pale cream-pink piece) matches none of the cells the rebuilt block leaves free in the exploded-block truth set; its print resembles the lantern glow around r4c40, where the app put it (ambiguous, 0.02), so it may not belong to this block and the app may be right. Not confirmed either way."
     },
     "2": {
-      "verdict": "unsure",
-      "note": "pending the truth set"
+      "verdict": "wrong",
+      "note": "The app's placement of #16, r11c22 turned 149° (confident), is right: same piece as #36 of the exploded-block photo; its outline and print match the block piece at r11c22 in the assembled-block photo."
     }
   },
   "objects": [
