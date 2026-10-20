@@ -7,6 +7,10 @@ the cells you confirmed. Accept new numbers with `UPDATE_BASELINE=1 npm run benc
 
 Exports contain your photos — only commit puzzles you are happy to publish.
 
+`private/` (ignored by git, only its README is tracked) holds full feedback files that contain a
+commercial puzzle picture, with placement truth sidecars for `bench/private.eval.ts`. **Never
+commit anything from it**; see private/README.md.
+
 Third-party material (freely licensed photos in `feedback/`, the Puzzle-Map dataset fetched by
 `npm run corpus:fetch-puzzlemap` into `puzzle-map/`, which stays out of the repository) is listed
 with its source and licence in CREDITS.md.

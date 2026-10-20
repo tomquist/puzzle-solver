@@ -88,6 +88,12 @@ Export a puzzle you have worked on (pieces confirmed with *Placed ✓*), save th
 `test-corpus/`, and run `npm run bench`: the benchmark re-analyses your scans and checks that the
 confirmed pieces are still found in the right place. See [test-corpus/README.md](test-corpus/README.md).
 
+To measure placement on a puzzle whose picture you may not publish, keep the full feedback files
+(they contain the box picture) in `test-corpus/private/` with a `<file>.truth.json` of the true
+cells and turns: `npm run bench` scores them locally (`bench/private.eval.ts`). That folder is
+ignored by git — **never commit those files**. See
+[test-corpus/private/README.md](test-corpus/private/README.md).
+
 ## Deployment
 
 `.github/workflows/deploy.yml` runs on every push and pull request: typecheck, unit tests, build,
