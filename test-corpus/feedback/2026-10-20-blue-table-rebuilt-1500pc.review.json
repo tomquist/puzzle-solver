@@ -1,0 +1,86 @@
+{
+  "reviewed": "2026-10-20",
+  "note": "Regions 1-7 are the table edge along the top of the photo, not pieces. Wrong-place marks to be judged against the exploded-block truth set (private).",
+  "marks": {
+    "1": {
+      "verdict": "unsure",
+      "note": "pending the truth set"
+    },
+    "2": {
+      "verdict": "unsure",
+      "note": "pending the truth set"
+    }
+  },
+  "objects": [
+    {
+      "x": 1091,
+      "y": 402,
+      "note": "two pieces at the top, joined or touching (outline takes in a ring of table)"
+    },
+    {
+      "x": 723,
+      "y": 860,
+      "note": "loose piece"
+    },
+    {
+      "x": 464,
+      "y": 879,
+      "note": "loose piece"
+    },
+    {
+      "x": 681,
+      "y": 1022,
+      "note": "loose piece"
+    },
+    {
+      "x": 430,
+      "y": 1186,
+      "note": "loose piece"
+    },
+    {
+      "x": 1054,
+      "y": 1134,
+      "note": "loose piece"
+    },
+    {
+      "x": 1481,
+      "y": 1229,
+      "note": "the partly rebuilt block (one patch)"
+    },
+    {
+      "x": 750,
+      "y": 1332,
+      "note": "loose piece"
+    },
+    {
+      "x": 806,
+      "y": 1562,
+      "note": "loose piece"
+    },
+    {
+      "x": 1121,
+      "y": 1599,
+      "note": "small assembled group left of the block"
+    },
+    {
+      "x": 514,
+      "y": 1968,
+      "note": "loose piece"
+    },
+    {
+      "x": 675,
+      "y": 1912,
+      "note": "loose piece"
+    },
+    {
+      "x": 1270,
+      "y": 2041,
+      "note": "loose piece"
+    },
+    {
+      "x": 722,
+      "y": 2155,
+      "note": "loose piece"
+    }
+  ]
+}

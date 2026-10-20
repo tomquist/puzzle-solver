@@ -707,6 +707,11 @@
       "2026-10-20-blue-table-half-exploded-1500pc.json": {
         "falseRemoved": 0.4
       },
+      "2026-10-20-blue-table-rebuilt-1500pc.json": {
+        "objectRecall": 1,
+        "objectClean": 1,
+        "objectPrecision": 0.7
+      },
       "flickr-chrisrycroft-birds-oak-partial.json": {
         "objectRecall": 0.5,
         "objectClean": 0.5,
