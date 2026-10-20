@@ -577,6 +577,42 @@
         "neighborPrecision": 1,
         "neighborRecall": 1,
         "hiddenRate": 0.5
+      },
+      "starry-grey-neighbors": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 0.586,
+        "top3": 0.672,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 0.348,
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 0.348,
+        "hiddenRate": 0
+      },
+      "starry-lone-block-turned": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
       }
     },
     "box": {
@@ -674,6 +710,25 @@
         "objectRecall": 1,
         "objectClean": 0.833,
         "objectPrecision": 1
+      },
+      "2026-10-20-blue-table-block-50pc-1500pc.json": {
+        "falseRemoved": 0,
+        "objectRecall": 1,
+        "objectClean": 1,
+        "objectPrecision": 0.333
+      },
+      "2026-10-20-blue-table-exploded-45-1500pc.json": {
+        "objectRecall": 1,
+        "objectClean": 1,
+        "objectPrecision": 1
+      },
+      "2026-10-20-blue-table-half-exploded-1500pc.json": {
+        "falseRemoved": 0.4
+      },
+      "2026-10-20-blue-table-rebuilt-1500pc.json": {
+        "objectRecall": 1,
+        "objectClean": 1,
+        "objectPrecision": 0.7
       },
       "flickr-chrisrycroft-birds-oak-partial.json": {
         "objectRecall": 0.5,

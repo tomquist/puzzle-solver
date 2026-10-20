@@ -1,0 +1,20 @@
+{
+  "reviewed": "2026-10-20",
+  "marks": {
+    "1": {
+      "verdict": "ok",
+      "note": "table stain"
+    },
+    "2": {
+      "verdict": "ok",
+      "note": "table stain"
+    }
+  },
+  "objects": [
+    {
+      "x": 1106,
+      "y": 540,
+      "note": "one assembled block of ~50 pieces (shop window, jars and shelves), turned ~30 degrees"
+    }
+  ]
+}

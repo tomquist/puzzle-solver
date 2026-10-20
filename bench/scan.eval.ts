@@ -6,19 +6,26 @@
  *   UPDATE_BASELINE=1 npm run bench   # accept the current numbers as the new baseline
  *   DEBUG_IMAGES=1 npm run bench      # also write overlays to .debug/bench/
  *   GRAPH_CUT=1 npm run bench         # A/B: with the graph-cut outline refinement (0: without)
+ *   CONSISTENCY=1 npm run bench       # A/B: with the consistency pass of the placements (0: without)
  *
  * outlineIoU / boundaryF (report only): outline accuracy of the regions matched to a truth item.
+ * shapeFits / shapeFitsTrue (report only): mutually best side fits among the scan's pieces wherever
+ * they are placed (`shapeFits`, the consistency pass's evidence), and those that are true neighbours.
+ * ambFixed / ambBroken / ambConfirmed / confMoved / consistencyMs (report only, when the consistency
+ * pass runs): single pieces that were not confident before it and now sit in the right cell having
+ * been wrong / now sit wrong having been right / stay right and became confident; confident pieces
+ * it moved; its runtime.
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import type { RGBAImage } from '../src/cv/image';
 import { rectifyQuad } from '../src/cv/warp';
-import { analyzeScan } from '../src/pipeline/analyzeScan';
+import { analyzeScan, DEFAULT_SIDE_COMPARISON } from '../src/pipeline/analyzeScan';
 import { detectBox, suggestRectifiedSize } from '../src/pipeline/box';
-import { buildReferenceIndex } from '../src/pipeline/match';
+import { buildReferenceIndex, impliedPlacement, shapeFits } from '../src/pipeline/match';
 import type { GridSpec } from '../src/model/types';
-import { DEBUG_IMAGES, loadTestAsset, savePng, SEGMENT_OPTIONS } from '../src/testing/nodeImageIO';
+import { CONSISTENCY, DEBUG_IMAGES, loadTestAsset, savePng, SEGMENT_OPTIONS } from '../src/testing/nodeImageIO';
 import { generateJigsaw, perturbReference, renderBoxPhoto, renderPiecesPhoto, Rng, type RenderOptions, type RGB } from '../src/testing/synth';
-import { average, compareToBaseline, yieldToEventLoop, evaluateScan, overlay, pickItems, report, saveBaselineSuite, UPDATE_BASELINE, type ItemSpec, type MetricRecord } from './lib';
+import { angleError, average, compareToBaseline, yieldToEventLoop, evaluateScan, overlay, pickItems, report, saveBaselineSuite, UPDATE_BASELINE, type ItemSpec, type MetricRecord } from './lib';
 
 interface Scenario {
   name: string;
@@ -269,11 +276,30 @@ const SCENARIOS: Scenario[] = [
       edgePatches: { gap: -24 }, hardShadow: { rect: [0.3, 0.35, 0.72, 1.1], strength: 0.3 }, stains: { count: 5 }, jpegQuality: 85,
     }),
   },
+  // Blocks of neighbouring loose pieces from a plain area: the painting's lower half in a nearly
+  // flat grey, the blocks around and below where it begins. Placement alone is ambiguous for most
+  // of them, but their sides fit each other and some neighbours lie in the textured part. (Blocks
+  // in the Great Wave's sky are no test: its paper grain places them confidently.)
+  {
+    name: 'starry-grey-neighbors',
+    painting: 'starry-night', grid: { rows: 16, cols: 20 }, seeds: [38, 39], tone: (img) => greyLowerPart(img, [115, 115, 118]),
+    items: { singles: 4, neighborBlocks: [[3, 3], [2, 3], [2, 3], [2, 2]], neighborArea: { rows: [0.3, 0.8], cols: [0, 1] } },
+    render: standard,
+  },
+  // From real feedback (one large block on a light blue table): a single assembled block of about
+  // 45 pieces with ragged sides and notches, turned 25–35°, and no loose piece in the photo, so the
+  // scan has no single-piece size to go by.
+  {
+    name: 'starry-lone-block-turned',
+    painting: 'starry-night', grid: { rows: 16, cols: 20 }, items: { singles: 0, blocks: [{ rows: 8, cols: 7, missing: 11 }] }, seeds: [38, 39],
+    render: (rng) => ({ ...standard(rng), background: [196, 208, 218], illumination: 0.15, rotation: rng.uniform(25, 35) + 180 * rng.int(2) }),
+  },
 ];
 
 const COLUMNS = [
   'segRecall', 'segPrecision', 'shapeRate', 'kindAccuracy', 'top1', 'top3', 'rotationOk', 'confidentPrecision', 'confidentRate',
-  'fitPrecision', 'fitRecall', 'assembledRecall', 'assembledPrecision', 'neighborPrecision', 'neighborRecall', 'hiddenRate', 'warnings', 'outlineIoU', 'boundaryF', 'ms',
+  'fitPrecision', 'fitRecall', 'assembledRecall', 'assembledPrecision', 'neighborPrecision', 'neighborRecall', 'hiddenRate', 'warnings', 'outlineIoU', 'boundaryF',
+  'shapeFits', 'shapeFitsTrue', 'ambFixed', 'ambBroken', 'ambConfirmed', 'confMoved', 'consistencyMs', 'ms',
 ];
 const results: Record<string, MetricRecord> = {};
 const paintings = new Map<string, RGBAImage>();
@@ -313,10 +339,37 @@ describe('scan benchmark', () => {
         const rng = new Rng(seed * 13 + 3);
         const { photo, truth } = renderPiecesPhoto(src, cut, items, { seed: seed + 50, ...s.render(rng) });
         const t0 = performance.now();
-        const { result } = analyzeScan(index, photo, { maxSide: Math.max(photo.width, photo.height), segment: SEGMENT_OPTIONS });
+        const { result, consistency } = analyzeScan(index, photo, { maxSide: Math.max(photo.width, photo.height), segment: SEGMENT_OPTIONS, consistency: CONSISTENCY });
         const ms = performance.now() - t0;
         const { metrics, regionToTruth } = evaluateScan(result, truth, cut, ms);
-        perSeed.push({ ...metrics });
+        const changes: MetricRecord = {};
+        if (consistency) {
+          changes.ambFixed = changes.ambBroken = changes.ambConfirmed = changes.confMoved = 0;
+          changes.consistencyMs = result.timings?.consistency ?? 0;
+          for (const ch of consistency.changes) {
+            const ti = regionToTruth.get(ch.regionId);
+            if (ti === undefined || truth[ti].pieces.length > 1) continue;
+            const at = (p?: { row: number; col: number }) => !!p && p.row === truth[ti].row && p.col === truth[ti].col;
+            const was = at(ch.before.placement), now = at(ch.after.placement);
+            if (ch.before.status === 'confident') {
+              if (!ch.before.placement || !ch.after.placement || ch.before.placement.row !== ch.after.placement.row || ch.before.placement.col !== ch.after.placement.col) changes.confMoved++;
+            } else if (!was && now) changes.ambFixed++;
+            else if (was && !now) changes.ambBroken++;
+            else if (was && now && ch.after.status === 'confident') changes.ambConfirmed++;
+          }
+        }
+        // Shape fits wherever the pieces are placed (the consistency pass's evidence), and how many are true.
+        changes.shapeFits = changes.shapeFitsTrue = 0;
+        const regionById = new Map(result.regions.map((r) => [r.id, r]));
+        for (const f of shapeFits(result.regions, { ...DEFAULT_SIDE_COMPARISON, cache: new WeakMap() })) {
+          changes.shapeFits++;
+          const ta = regionToTruth.get(f.a), tb = regionToTruth.get(f.b);
+          if (ta === undefined || tb === undefined || truth[ta].pieces.length > 1 || truth[tb].pieces.length > 1) continue;
+          const A = truth[ta], B = truth[tb];
+          const p = impliedPlacement(regionById.get(f.a)!.shape!, A, f.sideA, regionById.get(f.b)!.shape!, f.sideB);
+          if (p.row === B.row && p.col === B.col && angleError(p.rotationDeg, B.rotationDeg) < 45) changes.shapeFitsTrue++;
+        }
+        perSeed.push({ ...metrics, ...changes });
         if (DEBUG_IMAGES) savePng(`.debug/bench/${s.name}-${seed}.png`, overlay(photo, result, truth, cut, regionToTruth));
       }
       const avg = average(perSeed);

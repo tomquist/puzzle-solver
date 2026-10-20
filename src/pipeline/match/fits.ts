@@ -136,6 +136,62 @@ function sideFit(a: SideOf, b: SideOf, opts: FitOptions): number | null {
   return Math.max(0.2, Math.min(1, 1.5 - rms / (2 * MAX_PROFILE_RMS)));
 }
 
+/** A shape fit: local side `sideA` of single piece `a` fits local side `sideB` of piece `b` (a < b). */
+export interface ShapeFit {
+  a: number;
+  sideA: number;
+  b: number;
+  sideB: number;
+  /** Side distance (units of the point-wise profile RMS, see {@link sideMismatch}). */
+  distance: number;
+  /** Smaller of the two sides' second-best / best distance ratios (≥ 1.6). */
+  ratio: number;
+  /** 0..1: how close the sides match and how clearly they beat the alternatives. */
+  confidence: number;
+}
+
+/**
+ * Shape fits among single pieces, wherever they are placed: complementary sides of nearly equal
+ * length whose distance is small and which are each other's best partner by a clear margin (the
+ * second-best partner of either side at least 1.6× as far). Pieces with unsure corners take no
+ * part. Partners are sought among the given regions only.
+ */
+export function shapeFits(regions: readonly DetectedRegion[], opts: FitOptions = {}): ShapeFit[] {
+  interface SideRef { id: number; shape: PieceShape; i: number }
+  const sides: SideRef[] = [];
+  for (const r of regions) {
+    const shape = r.kind === 'piece' ? r.shape : undefined;
+    if (!shape || shape.confidence < 0.5) continue;
+    for (let i = 0; i < 4; i++) if (shape.sides[i].kind === 'tab' || shape.sides[i].kind === 'blank') sides.push({ id: r.id, shape, i });
+  }
+  const best = new Map<SideRef, { other: SideRef; rms: number; second: number }>();
+  for (const s of sides) {
+    let b: SideRef | null = null, d1 = Infinity, d2 = Infinity;
+    for (const o of sides) {
+      if (o.id === s.id || !complementary(s.shape.sides[s.i].kind, o.shape.sides[o.i].kind)) continue;
+      const la = s.shape.sides[s.i].length, lb = o.shape.sides[o.i].length;
+      if (Math.max(la, lb) / Math.min(la, lb) > MAX_LENGTH_RATIO) continue;
+      const d = sideDistance({ regionId: s.id, shape: s.shape, i: s.i }, { regionId: o.id, shape: o.shape, i: o.i }, opts);
+      if (d < d1) {
+        d2 = d1;
+        d1 = d;
+        b = o;
+      } else if (d < d2) d2 = d;
+    }
+    if (b) best.set(s, { other: b, rms: d1, second: d2 });
+  }
+  const out: ShapeFit[] = [];
+  for (const [s, r] of best) {
+    const back = best.get(r.other);
+    if (!back || back.other !== s || s.id > r.other.id) continue;
+    if (r.rms > MAX_PROFILE_RMS || r.second < 1.6 * r.rms || back.second < 1.6 * back.rms) continue;
+    const ratio = Math.min(r.second, back.second) / Math.max(1e-6, r.rms);
+    const confidence = Math.max(0, 1 - r.rms / MAX_PROFILE_RMS) * Math.min(1, (ratio - 1) / 2);
+    out.push({ a: s.id, sideA: s.i, b: r.other.id, sideB: r.other.i, distance: r.rms, ratio, confidence });
+  }
+  return out;
+}
+
 interface Placed {
   region: DetectedRegion;
   cells: CellRef[];
@@ -205,42 +261,17 @@ export function findFits(regions: DetectedRegion[], matches: RegionMatch[], grid
   }
 
   // (b) Shape: mutually best, unambiguous complementary sides of single pieces.
-  interface SideRef { p: Placed; shape: PieceShape; i: number }
-  const sides: SideRef[] = [];
-  for (const p of placed) {
-    const shape = p.region.kind === 'piece' ? p.region.shape : undefined;
-    if (!shape || shape.confidence < 0.5) continue;
-    for (let i = 0; i < 4; i++) if (shape.sides[i].kind === 'tab' || shape.sides[i].kind === 'blank') sides.push({ p, shape, i });
-  }
-  const best = new Map<SideRef, { other: SideRef; rms: number; second: number }>();
-  for (const s of sides) {
-    let b: SideRef | null = null, d1 = Infinity, d2 = Infinity;
-    for (const o of sides) {
-      if (o.p === s.p || !complementary(s.shape.sides[s.i].kind, o.shape.sides[o.i].kind)) continue;
-      const la = s.shape.sides[s.i].length, lb = o.shape.sides[o.i].length;
-      if (Math.max(la, lb) / Math.min(la, lb) > MAX_LENGTH_RATIO) continue;
-      const d = sideDistance({ regionId: s.p.region.id, shape: s.shape, i: s.i }, { regionId: o.p.region.id, shape: o.shape, i: o.i }, opts);
-      if (d < d1) {
-        d2 = d1;
-        d1 = d;
-        b = o;
-      } else if (d < d2) d2 = d;
-    }
-    if (b) best.set(s, { other: b, rms: d1, second: d2 });
-  }
-  for (const [s, r] of best) {
-    const back = best.get(r.other);
-    if (!back || back.other !== s || s.p.region.id > r.other.p.region.id) continue;
-    if (r.rms > MAX_PROFILE_RMS || r.second < 1.6 * r.rms || back.second < 1.6 * back.rms) continue;
-    const A = s.p, B = r.other.p;
-    const sa = puzzleSideOf(s.shape, A.rotationDeg, s.i);
-    const sb = puzzleSideOf(r.other.shape, B.rotationDeg, r.other.i);
+  const placedById = new Map(placed.map((p) => [p.region.id, p]));
+  for (const f of shapeFits(placed.map((p) => p.region), opts)) {
+    const A = placedById.get(f.a)!, B = placedById.get(f.b)!;
+    const sa = puzzleSideOf(A.region.shape!, A.rotationDeg, f.sideA);
+    const sb = puzzleSideOf(B.region.shape!, B.rotationDeg, f.sideB);
     const k = key(A.region.id, B.region.id, SIDES[sa]);
     const existing = hints.get(k);
     // Two confidently placed regions can only fit where their locations say so.
     const bothPlaced = A.confidence >= MIN_PLACEMENT_CONFIDENCE && B.confidence >= MIN_PLACEMENT_CONFIDENCE;
     if (bothPlaced && !existing) continue;
-    let conf = Math.max(0, 1 - r.rms / MAX_PROFILE_RMS) * Math.min(1, (Math.min(r.second, back.second) / Math.max(1e-6, r.rms) - 1) / 2);
+    let conf = f.confidence;
     if (sb !== opposite(sa)) conf *= 0.5; // the placements' rotations disagree with this fit
     conf = Math.min(0.9, conf);
     if (existing) {

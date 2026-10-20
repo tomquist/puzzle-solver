@@ -258,6 +258,10 @@ compatible rotation), small offset search. The best ~30 hypotheses are refined a
 resolution with sub-cell offsets, small angle/scale adjustments. Confidence comes from the best
 score and its margin over the best distinct alternative. Patches use the same machinery with a
 sliding search and their dominant orientation; irregular-cut puzzles use the sliding search too.
+The scale comes from the scan's median piece size; a photo without any single piece (e.g. one
+large assembled block) measures it from the patch's own seams (`pieces/patchPitch.ts`: thin-line
+responses projected across the grid directions form a comb with the piece size as period), which
+also tells such a lone block from a single piece in segmentation.
 
 **Fits** – two regions fit when their best placements are adjacent cells with consistent
 rotations (location), and/or when complementary sides (tab ↔ blank) have matching profiles and

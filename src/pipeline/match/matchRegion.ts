@@ -13,6 +13,7 @@
 import { findSimilarity, type Point } from '../../cv/geometry';
 import { cellKey, type CellRef, type MatchStatus, type Placement, type RegionMatch, type SideKind } from '../../model/types';
 import { buildTemplate, colourDistanceMap, DEFAULT_SCORE, makePhotoSource, scoreAt, scoreMap, type ColorCorrection, type Mapping, type PhotoSource, type ScoreParams, type Template } from './template';
+import { estimatePatchPitch } from '../pieces/patchPitch';
 import type { MatchInput, MatchOptions, RefLevel, ReferenceIndex } from './types';
 
 /** A similarity hypothesis to search. */
@@ -84,8 +85,38 @@ function gridPrior(index: ReferenceIndex, hyp: Hypothesis, ref: Point): number {
   return pen * hyp.sideWeight;
 }
 
-/** Build the similarity hypotheses for a region. */
-function makeHypotheses(index: ReferenceIndex, input: MatchInput, src: PhotoSource): { hyps: Hypothesis[]; bodySize: number } {
+/**
+ * A seam-pitch estimate (see {@link estimatePatchPitch}) counts for a patch when the patch spans at
+ * least this many pieces at that pitch: the seams of 2–4 pieces form too short a comb (estimates
+ * there scatter from a third to the full body size).
+ */
+const PITCH_MIN_PIECES = 6;
+/** Body sizes searched around a seam-pitch estimate (the angle / scale refinement covers ±10 %). */
+const PITCH_SCALES = [0.92, 1, 1.08];
+
+/** Seam-pitch estimates per region mask (a scan matches a region up to twice). */
+const pitchMemo = new WeakMap<MatchInput['mask'], number | null>();
+
+/**
+ * Body size of a patch from its own seams, for scans without a size reference (no single piece
+ * with a detected shape, e.g. a photo of one large assembled block). Undefined when the scan gives
+ * a body size, the region is no patch, or the seams show no reliable period.
+ */
+export function patchBodySize(input: MatchInput): number | undefined {
+  if (input.kind !== 'patch' || input.shape || (input.expectedBodySize ?? 0) > 0) return undefined;
+  let pitch = pitchMemo.get(input.mask);
+  if (pitch === undefined) {
+    const est = estimatePatchPitch(input.image, input.mask, input.orientationDeg);
+    let area = 0;
+    for (let i = 0; i < input.mask.data.length; i++) area += input.mask.data[i];
+    pitch = est && area >= PITCH_MIN_PIECES * est.pitch * est.pitch ? est.pitch : null;
+    pitchMemo.set(input.mask, pitch);
+  }
+  return pitch ?? undefined;
+}
+
+/** Build the similarity hypotheses for a region (`pitch`: the patch's own body size estimate, if any). */
+function makeHypotheses(index: ReferenceIndex, input: MatchInput, src: PhotoSource, pitch?: number): { hyps: Hypothesis[]; bodySize: number } {
   const { cellW, cellH } = index;
   const cellGeo = Math.sqrt(cellW * cellH);
   const shape = input.shape;
@@ -116,7 +147,8 @@ function makeHypotheses(index: ReferenceIndex, input: MatchInput, src: PhotoSour
   let bodySizes: number[];
   if (shape) bodySizes = [shape.bodySize];
   else if (input.expectedBodySize && input.expectedBodySize > 0) bodySizes = [input.expectedBodySize];
-  else if (input.kind === 'patch') bodySizes = [2, 3, 4, 6].map((n) => Math.sqrt(src.area / n));
+  // A patch without a size reference: a few pieces (by area), and the size its seams show.
+  else if (input.kind === 'patch') bodySizes = [...[2, 3, 4, 6].map((n) => Math.sqrt(src.area / n)), ...(pitch ? PITCH_SCALES.map((f) => f * pitch) : [])];
   else {
     const b = Math.sqrt(src.area);
     bodySizes = [b * 0.88, b, b * 1.12];
@@ -470,6 +502,8 @@ export interface MatchDetail {
   best?: { map: Mapping; ref: Point };
   src?: PhotoSource;
   features?: MatchFeatures;
+  /** Score parameters of the run (with the colour hinge for featureless regions), for {@link scorePlacement}. */
+  params?: ScoreParams;
 }
 
 /** Template std with and without a per-channel linear ramp (plane fit over template coordinates). */
@@ -523,14 +557,16 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   const isPatch = input.kind === 'patch';
   let sp = ctx.score ?? DEFAULT_SCORE;
   const empty: MatchDetail = { match: { regionId: input.regionId, candidates: [], status: 'unmatched' } };
-  // Body size estimate for the erosion radius.
-  const roughBody = input.shape?.bodySize ?? input.expectedBodySize ?? Math.sqrt(Math.max(1, input.mask.data.reduce((s, v) => s + v, 0)));
+  // Body size estimate for the erosion radius and the seams. Without a scan-level size reference a
+  // patch measures its own pieces (the square root of its area would be the size of the whole patch).
+  const pitch = patchBodySize(input);
+  const roughBody = input.shape?.bodySize ?? input.expectedBodySize ?? pitch ?? Math.sqrt(Math.max(1, input.mask.data.reduce((s, v) => s + v, 0)));
   const erode = Math.max(2, Math.round(roughBody * 0.045));
   // Assembled patches: ignore the seams and gaps between their pieces (not in the printed picture).
   const seams = isPatch ? { radius: Math.max(2, Math.round(roughBody * 0.035)), angleDeg: input.orientationDeg, body: roughBody } : undefined;
   const src = makePhotoSource(input.image, input.mask, input.origin, erode, index.channelWeights, ctx.correction, seams);
   if (src.area < 50) return empty;
-  const { hyps } = makeHypotheses(index, input, src);
+  const { hyps } = makeHypotheses(index, input, src, pitch);
   if (hyps.length === 0) return empty;
 
   const cache = new TemplateCache(src);
@@ -638,7 +674,40 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   // region's score is noise, so it stays a (low-confidence) ambiguous match with alternatives.
   const status: MatchStatus =
     best.score < UNMATCHED_SCORE && features.detail >= TEXTURE_DETAIL ? 'unmatched' : conf >= CONFIDENT_THRESHOLD ? 'confident' : 'ambiguous';
-  return { match: { regionId: input.regionId, candidates, coveredCells, status }, best: { map: best.map, ref: best.ref }, src, features };
+  return { match: { regionId: input.regionId, candidates, coveredCells, status }, best: { map: best.map, ref: best.ref }, src, features, params: sp };
+}
+
+/**
+ * The matcher's score of a region at a given cell and rotation (to the nearest quarter turn), on
+ * the scale of its own candidates: the same photo source and score parameters as the run that
+ * produced `detail`, the position searched within ±0.3 cell of the cell centre and refined like a
+ * candidate (finer levels, then angle and scale), with the same priors (flat sides, placed cells).
+ * Confidence is left at 0 for the caller to set. Null without the run's photo source, or when the
+ * region cannot be laid there (template off the picture).
+ */
+export function scorePlacement(index: ReferenceIndex, input: MatchInput, detail: MatchDetail, cell: CellRef, rotationDeg: number, opts: MatchOptions = {}): Placement | null {
+  if (!detail.src || !detail.params) return null;
+  const sp = detail.params;
+  const { hyps } = makeHypotheses(index, input, detail.src, patchBodySize(input));
+  const cache = new TemplateCache(detail.src);
+  const L = index.levels.length;
+  const ci = Math.max(0, index.levels.findIndex((l) => l.prefix && l.ppc >= 6));
+  const li0 = Math.min(ci + 1, L - 1);
+  const centre = { x: (cell.col + 0.5) * index.cellW - 0.5, y: (cell.row + 0.5) * index.cellH - 0.5 };
+  let best: Candidate | null = null;
+  for (const hyp of hyps) {
+    if (angleDiff(norm360(hyp.map.phi * DEG), rotationDeg) > 45) continue;
+    let c: Candidate | null = { hyp, map: hyp.map, ref: centre, raw: -Infinity, score: -Infinity, level: li0 };
+    c = refinePosition(index, li0, c, cache, Math.ceil(0.3 * index.levels[li0].ppc), sp);
+    for (let li = li0 + 1; li < L && c; li++) c = refinePosition(index, li, c, cache, Math.ceil(index.levels[li].ppc / index.levels[li - 1].ppc) + 1, sp);
+    if (!c) continue;
+    c = refineAngleScale(index, L - 1, c, cache, sp);
+    if (!best || c.score > best.score) best = c;
+  }
+  if (!best) return null;
+  const placed = new Set((opts.placedCells ?? []).map(cellKey));
+  if (placed.has(cellKey(cell))) best.score -= PLACED_PENALTY;
+  return { row: cell.row, col: cell.col, x: best.ref.x, y: best.ref.y, rotationDeg: norm360(best.map.phi * DEG) % 360, score: best.score, confidence: 0 };
 }
 
 /** Information content of the best placement: texture detail, peak sharpness and plateau size. */

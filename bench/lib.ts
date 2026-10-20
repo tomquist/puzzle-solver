@@ -9,7 +9,7 @@ import { distanceTransform } from '../src/cv/distance';
 import { createMask, createRGBA, type Mask, type Rect, type RGBAImage } from '../src/cv/image';
 import { drawPolygon, fillPolygon } from '../src/cv/raster';
 import type { CellRef, DetectedRegion, PuzzleSide, RegionMatch, ScanResult } from '../src/model/types';
-import { pieceKindOf, Rng, type JigsawCut, type PieceTruth } from '../src/testing/synth';
+import { patchOutline, pieceKindOf, Rng, type JigsawCut, type PieceTruth } from '../src/testing/synth';
 import { REPO_ROOT } from '../src/testing/nodeImageIO';
 
 // ---------------------------------------------------------------------------------------------
@@ -25,6 +25,44 @@ export interface ItemSpec {
   bordersOnly?: boolean;
   /** Runs of adjacent cells photographed as separate loose pieces (lengths, e.g. [2, 2, 3]). */
   neighborRuns?: number[];
+  /** Blocks of adjacent cells photographed as separate loose pieces ([rows, cols]). */
+  neighborBlocks?: [number, number][];
+  /**
+   * Part of the picture the neighbour runs and blocks come from (fractions of the grid's rows and
+   * columns, e.g. a plain sky), when they should not lie anywhere.
+   */
+  neighborArea?: { rows: [number, number]; cols: [number, number] };
+  /**
+   * Irregular assembled blocks: a rows × cols rectangle with `missing` pieces taken off its outline
+   * (ragged sides, notches; the block stays one simply connected piece).
+   */
+  blocks?: { rows: number; cols: number; missing: number }[];
+}
+
+/** Cells of an irregular block: the rectangle at (r, c) with `missing` outline pieces removed. */
+function irregularBlock(cut: JigsawCut, r: number, c: number, h: number, w: number, missing: number, rng: Rng): number[] {
+  const cells = new Set<number>();
+  for (let dr = 0; dr < h; dr++) for (let dc = 0; dc < w; dc++) cells.add((r + dr) * cut.cols + c + dc);
+  const exposed = (i: number) => {
+    const row = Math.floor(i / cut.cols), col = i % cut.cols;
+    return [[-1, 0], [1, 0], [0, -1], [0, 1]].some(([a, b]) => {
+      const rr = row + a, cc = col + b;
+      return rr < r || cc < c || rr >= r + h || cc >= c + w || !cells.has(rr * cut.cols + cc);
+    });
+  };
+  for (let removed = 0, attempt = 0; removed < missing && attempt < 50 * missing; attempt++) {
+    const outline = [...cells].filter(exposed);
+    const i = outline[rng.int(outline.length)];
+    cells.delete(i);
+    try {
+      patchOutline(cut, [...cells]);
+      removed++;
+    } catch {
+      // Split, holed or touching only at a corner: keep the piece.
+      cells.add(i);
+    }
+  }
+  return [...cells].sort((a, b) => a - b);
 }
 
 /** Pick non-overlapping items (singles and rectangular patches, anchor = top-left piece first). */
@@ -44,12 +82,40 @@ export function pickItems(cut: JigsawCut, spec: ItemSpec, seed: number): (number
       break;
     }
   }
+  for (const b of spec.blocks ?? []) {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const r = rng.int(cut.rows - b.rows + 1), c = rng.int(cut.cols - b.cols + 1);
+      const idx = irregularBlock(cut, r, c, b.rows, b.cols, b.missing, rng);
+      if (idx.some((i) => used.has(i))) continue;
+      idx.forEach((i) => used.add(i));
+      items.push(idx);
+      break;
+    }
+  }
+  // Top-left cell of an h × w block: anywhere, or inside the neighbour area.
+  const area = spec.neighborArea;
+  const blockAt = (h: number, w: number): [number, number] => {
+    if (!area) return [rng.int(cut.rows - h + 1), rng.int(cut.cols - w + 1)];
+    const r0 = Math.floor(area.rows[0] * cut.rows), r1 = Math.max(r0, Math.ceil(area.rows[1] * cut.rows) - h);
+    const c0 = Math.floor(area.cols[0] * cut.cols), c1 = Math.max(c0, Math.ceil(area.cols[1] * cut.cols) - w);
+    return [Math.min(cut.rows - h, r0 + rng.int(r1 - r0 + 1)), Math.min(cut.cols - w, c0 + rng.int(c1 - c0 + 1))];
+  };
   for (const len of spec.neighborRuns ?? []) {
     for (let attempt = 0; attempt < 200; attempt++) {
       const horizontal = rng.bool();
-      const r = rng.int(cut.rows - (horizontal ? 0 : len - 1)), c = rng.int(cut.cols - (horizontal ? len - 1 : 0));
+      const [r, c] = blockAt(horizontal ? 1 : len, horizontal ? len : 1);
       const idx: number[] = [];
       for (let k = 0; k < len; k++) idx.push(horizontal ? r * cut.cols + c + k : (r + k) * cut.cols + c);
+      if (idx.some((i) => used.has(i))) continue;
+      idx.forEach((i) => { used.add(i); items.push(i); });
+      break;
+    }
+  }
+  for (const [h, w] of spec.neighborBlocks ?? []) {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const [r, c] = blockAt(h, w);
+      const idx: number[] = [];
+      for (let dr = 0; dr < h; dr++) for (let dc = 0; dc < w; dc++) idx.push((r + dr) * cut.cols + c + dc);
       if (idx.some((i) => used.has(i))) continue;
       idx.forEach((i) => { used.add(i); items.push(i); });
       break;
@@ -483,7 +549,7 @@ export function quadError(found: Quad, truth: Quad): number {
 
 /** Metrics where lower is better; everything else is higher-is-better. Timing is report-only. */
 const LOWER_IS_BETTER = new Set(['warnings', 'meanError', 'maxError', 'falseWarnings', 'hiddenRate', 'boxError', 'segErrors']);
-const REPORT_ONLY = new Set(['ms', 'items', 'regions', 'scenes', 'confidentRate', 'outlineIoU', 'boundaryF']);
+const REPORT_ONLY = new Set(['ms', 'items', 'regions', 'scenes', 'confidentRate', 'outlineIoU', 'boundaryF', 'shapeFits', 'shapeFitsTrue', 'ambFixed', 'ambBroken', 'ambConfirmed', 'confMoved', 'consistencyMs']);
 
 export type MetricRecord = Record<string, number>;
 

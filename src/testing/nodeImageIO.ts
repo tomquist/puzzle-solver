@@ -45,3 +45,9 @@ export const DEBUG_IMAGES = !!process.env.DEBUG_IMAGES;
  * the graph-cut outline refinement on / off (unset: the pipeline's default).
  */
 export const SEGMENT_OPTIONS: { graphCut?: boolean } = process.env.GRAPH_CUT === undefined ? {} : { graphCut: process.env.GRAPH_CUT !== '0' };
+
+/**
+ * Consistency pass of analyzeScan for A/B runs of the benchmark and the feedback tools:
+ * CONSISTENCY=1 / 0 turns it on / off (unset: the pipeline's default).
+ */
+export const CONSISTENCY: boolean | undefined = process.env.CONSISTENCY === undefined ? undefined : process.env.CONSISTENCY !== '0';

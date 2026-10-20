@@ -8,3 +8,7 @@ playwright-report/
 .DS_Store
 .claude/worktrees/
 /test-corpus/puzzle-map/
+# Private feedback files and their placement truth (the user's photos and the puzzle's commercial
+# picture): never commit anything from there except its README.
+/test-corpus/private/*
+!/test-corpus/private/README.md

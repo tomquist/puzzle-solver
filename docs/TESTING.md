@@ -16,6 +16,7 @@ so changes can be made and judged without manual photo-taking feedback loops.
 | PWA / offline, slow phone | Playwright | Manifest, icons, service worker, offline reload of the production build; 4× CPU throttling keeps progress and taps responsive | `npm run test:e2e`, CI |
 | Real-photo corpus | `npm run bench -- --corpus` | Real photos confirmed by the user still match | locally / CI when present |
 | Feedback replay | `npm run bench` (`bench/feedback.eval.ts`) | Users' feedback files (`test-corpus/feedback/`): reviewed marks stay fixed; answer keys score found / separate / false regions | CI (gate) |
+| Private placement truth | `npm run bench` (`bench/private.eval.ts`) | Full feedback files of the user's own puzzle (with its commercial picture) in the ignored `test-corpus/private/`, each with a `<file>.truth.json` of true cells and turns: top-1 / top-3 cell, rotation, confident share and precision, found / merged — report only | locally when present (skipped otherwise) |
 | Other puzzles | `npm run corpus:fetch-puzzlemap`, then `npm run bench` (`bench/puzzlemap.eval.ts`) | Real photos of 643 labelled pieces of other puzzles (Puzzle-Map dataset, 7 reference pictures) are placed in their reference: top-1 / top-3 cell and turn | locally when fetched (skipped otherwise) |
 
 ## Synthetic ground truth
@@ -97,6 +98,21 @@ catches mistakes nobody marked, such as a regression that drops pieces on an eas
 Freely licensed table photos of other puzzles (`feedback/flickr-*.json`, test-corpus/CREDITS.md)
 are wrapped into the same format with `npm run feedback:from-photo` and carry only an answer key:
 stress tests for other tables, motifs, oblique views and small pieces.
+
+### Private placement truth
+
+Matching on the user's own puzzle can only be measured with its picture, which is a publisher's
+artwork: full feedback files (reference included) stay in `test-corpus/private/`, which is ignored
+by version control and must never be committed, copied elsewhere in the repository or attached to
+an issue. Next to each file, `<file>.truth.json` (format in `scripts/feedback/truth.ts` and
+test-corpus/private/README.md) says where every piece really belongs: a point in the photo, the
+true cell and the turn to upright (`Placement.rotationDeg` convention), or the cells of an
+assembled block; doubtful items are marked `unsure` and count neither way. Truth comes from the
+photos themselves, never from the app's placements — e.g. a block placed and checked by eye, then
+taken apart ("exploded" photo) and each loose piece identified in the block photo by its print and
+outline. `bench/private.eval.ts` replays every such file through the current pipeline and prints
+its scores next to those of the result stored in the file, plus every misplaced piece; it gates
+nothing.
 
 ### Other puzzles: Puzzle-Map
 
