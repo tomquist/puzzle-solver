@@ -272,6 +272,40 @@ export function patchOutline(cut: JigsawCut, indices: readonly number[]): Point[
   return out;
 }
 
+/**
+ * Cells a set of pieces encloses (missing pieces of an assembled block: grid cells inside its
+ * bounding box that cannot reach the box's border through other non-member cells).
+ */
+export function enclosedCells(cut: JigsawCut, indices: readonly number[]): number[] {
+  const rows = indices.map((i) => cut.pieces[i].row), cols = indices.map((i) => cut.pieces[i].col);
+  const r0 = Math.min(...rows), r1 = Math.max(...rows), c0 = Math.min(...cols), c1 = Math.max(...cols);
+  const member = new Set(indices);
+  const outside = new Set<number>();
+  const stack: number[] = [];
+  for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) {
+      const i = r * cut.cols + c;
+      if ((r === r0 || r === r1 || c === c0 || c === c1) && !member.has(i)) { outside.add(i); stack.push(i); }
+    }
+  }
+  while (stack.length > 0) {
+    const i = stack.pop()!;
+    const r = Math.floor(i / cut.cols), c = i % cut.cols;
+    for (const [dr, dc] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+      const rr = r + dr, cc = c + dc, j = rr * cut.cols + cc;
+      if (rr < r0 || rr > r1 || cc < c0 || cc > c1 || member.has(j) || outside.has(j)) continue;
+      outside.add(j);
+      stack.push(j);
+    }
+  }
+  const out: number[] = [];
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+    const i = r * cut.cols + c;
+    if (!member.has(i) && !outside.has(i)) out.push(i);
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Photo of loose pieces
 // ---------------------------------------------------------------------------------------------
@@ -1159,7 +1193,8 @@ export function renderPiecesPhoto(
   let edgeCount = 0;
   const items: Item[] = pieces.map((entry) => {
     const indices = Array.isArray(entry) ? entry : [entry];
-    const union = patchOutline(cut, indices);
+    // (An assembled block with missing pieces inside: its outer outline; the pieces are drawn one by one.)
+    const union = patchOutline(cut, [...indices, ...(indices.length > 1 ? enclosedCells(cut, indices) : [])]);
     let px = 0, py = 0;
     for (const i of indices) for (const c of cut.pieces[i].corners) { px += c.x; py += c.y; }
     const pivot = { x: px / (4 * indices.length), y: py / (4 * indices.length) };

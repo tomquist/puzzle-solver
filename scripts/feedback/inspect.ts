@@ -429,6 +429,8 @@ export function formatSummary(r: FeedbackReplay): string {
     const bg = r.background;
     lines.push(`  table Lab (${bg.color.map((x) => x.toFixed(0)).join(',')}) sigma (${bg.sigma.map((x) => x.toFixed(1)).join(',')}) noise ${bg.noise.toFixed(1)} smoothing ${bg.smoothing} threshold ${bg.threshold.toFixed(1)} separability ${bg.separability.toFixed(2)} outline contrast ${bg.outlineContrast.toFixed(1)} lighting ${bg.lightingRatio.toFixed(2)}`);
     lines.push(`  table fit ${(100 * bg.bandFit).toFixed(0)}% of border, palette ${bg.palette.length ? bg.palette.map((p) => `Lab(${p.color.map((x) => x.toFixed(0)).join(',')}) ${(100 * p.interior).toFixed(0)}% inside`).join(', ') : 'none'}, jpeg blockiness ${(r.diagnostics?.blockiness ?? 1).toFixed(2)}`);
+    const g = r.diagnostics?.grain;
+    if (g) lines.push(`  grain model: coherence ${g.coherence.toFixed(2)}, grain-free sigma (${g.sigma.map((x) => x.toFixed(1)).join(',')}), ${(100 * g.coverage).toFixed(0)}% of the photo`);
   }
   if (r.marks.length > 0) {
     lines.push('');

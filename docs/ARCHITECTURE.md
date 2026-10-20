@@ -245,6 +245,14 @@ refined by fitting lines to edge points. Rectified size honours the physical asp
 optionally a low-order polynomial for lighting gradients); foreground = colour distance (+
 gradient) thresholded with Otsu; morphology + hole filling; connected components; regions far
 larger than the median single piece are patches (or touching pieces), tiny ones are fragments.
+Optionally (`SegmentOptions.grain`, off by default, `GRAIN=1` in the benchmark and feedback tools)
+on a strongly grained table (`pieces/grain.ts`; texture coherently oriented in most tiles of about
+a piece) the table colour is measured along the grain line through each pixel – the robust mean of
+grain-like table pixels within about half a piece before or after it, as a residual from the smooth
+and local table model – and the photo is segmented again against it with the grain-free spread:
+stripes of grain no longer grow onto the pieces as ragged spikes or join them, while print near
+the wood's colour stands out (off by default: see segment.ts GRAIN_DEFAULT). Assembled patches keep the table they enclose open in their masks
+(the cells of missing pieces).
 
 **Piece shape** – smoothed contour; corner candidates from curvature/convex-hull; best 4-corner
 combination by rectangularity and area; sides classified flat/tab/blank from the deviation profile;
@@ -260,8 +268,18 @@ score and its margin over the best distinct alternative. Patches use the same ma
 sliding search and their dominant orientation; irregular-cut puzzles use the sliding search too.
 The scale comes from the scan's median piece size; a photo without any single piece (e.g. one
 large assembled block) measures it from the patch's own seams (`pieces/patchPitch.ts`: thin-line
-responses projected across the grid directions form a comb with the piece size as period), which
-also tells such a lone block from a single piece in segmentation.
+responses projected across the grid directions form a comb with the piece size as period; for
+cells wider than tall the two directions' periods differ by the cells' aspect), which
+also tells such a lone block from a single piece in segmentation. In a small puzzle (≤ 64 cells) a
+patch without a size reference is also searched at every size up to the whole puzzle. A patch
+covers the cells its mask has print over. One cell, one piece (`match/claims.ts`): a confident
+loose piece on a cell a patch covers is a contradiction – the less confident placement gives way –
+and when the scan's confident placements and the user's placed cells leave at most three cells
+free, the pieces without a confident place are assigned to them (the corner under a box picture's
+badge, the last pieces of a puzzle). A region whose size says it is not what it is matched as – a
+single piece far from one piece's area (merged pieces, table attached, half a piece), or a small
+patch of touching loose pieces – is placed at most ambiguously, also when its neighbours would
+place it (groups).
 
 **Fits** – two regions fit when their best placements are adjacent cells with consistent
 rotations (location), and/or when complementary sides (tab ↔ blank) have matching profiles and

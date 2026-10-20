@@ -8,7 +8,7 @@ import type { CellRef, RegionMatch } from '../../model/types';
 import { DEBUG_IMAGES, loadTestAsset, savePng } from '../../testing/nodeImageIO';
 import { generateJigsaw, perturbReference, renderPiecesPhoto, Rng, type JigsawCut, type PieceTruth } from '../../testing/synth';
 import { matchRegionsDetailed } from './colorCorrection';
-import { capForBorder, CONFIDENT_THRESHOLD, matchConfidence, matchRegionDetailed, outlineFactor, patchBodySize, scorePlacement, type MatchDetail } from './matchRegion';
+import { capForBorder, capForSize, CONFIDENT_THRESHOLD, matchConfidence, matchRegionDetailed, outlineFactor, patchBodySize, scorePlacement, type MatchDetail } from './matchRegion';
 import { buildReferenceIndex, cellAt, matchRegion, matchRegions, type MatchInput, type ReferenceIndex } from './index';
 import { accuracy, angleError, inputFromTruth, renderScenario, type Accuracy } from './testkit';
 
@@ -445,11 +445,68 @@ describe('matchRegion — outline reliability', () => {
     expect(woodTable.match.candidates[0].confidence).toBeGreaterThan(0.85);
   });
 
+  it('keeps regions that are clearly not one piece from being confident', () => {
+    // A mask of `area` pixels; the scan's body size 100 px.
+    const mask = (area: number) => ({ width: 100, height: Math.ceil(area / 100), data: new Uint8Array(Math.ceil(area / 100) * 100).fill(1, 0, area) });
+    const one = detail(0.95);
+    capForSize(one, { kind: 'piece', mask: mask(10000), expectedBodySize: 100 });
+    expect(one.match.status).toBe('confident');
+    // Two pieces merged, or a piece with a patch of table: 1.7 pieces.
+    const merged = detail(0.95);
+    capForSize(merged, { kind: 'piece', mask: mask(17000), expectedBodySize: 100 });
+    expect(merged.match.status).toBe('ambiguous');
+    expect(merged.match.candidates[0].confidence).toBeLessThan(CONFIDENT_THRESHOLD);
+    // Half a piece.
+    const half = detail(0.95);
+    capForSize(half, { kind: 'piece', mask: mask(5000), expectedBodySize: 100 });
+    expect(half.match.status).toBe('ambiguous');
+    // A small patch of touching (loose) pieces vs. an assembled one, and a large touching block.
+    const pair = detail(0.95);
+    capForSize(pair, { kind: 'patch', mask: mask(22000), expectedBodySize: 100, outline: { issues: ['touching_pieces'] } });
+    expect(pair.match.status).toBe('ambiguous');
+    const assembled = detail(0.95);
+    capForSize(assembled, { kind: 'patch', mask: mask(22000), expectedBodySize: 100 });
+    expect(assembled.match.status).toBe('confident');
+    const block = detail(0.95);
+    capForSize(block, { kind: 'patch', mask: mask(80000), expectedBodySize: 100, outline: { issues: ['touching_pieces'] } });
+    expect(block.match.status).toBe('confident');
+  });
+
   it('discounts doubtful segmentation', () => {
     expect(outlineFactor({ kind: 'piece' })).toBe(1);
     expect(outlineFactor({ kind: 'piece', outline: { issues: ['touching_pieces'], solidity: 0.9 } })).toBe(1);
     expect(outlineFactor({ kind: 'piece', outline: { issues: ['low_contrast', 'shape_uncertain'] } })).toBeCloseTo(0.855, 6);
     expect(outlineFactor({ kind: 'piece', outline: { solidity: 0.5 } })).toBeCloseTo(0.85, 6);
     expect(outlineFactor({ kind: 'patch', outline: { issues: ['shape_uncertain'], solidity: 0.5 } })).toBe(1);
+  });
+});
+
+describe('matchRegion — an 18-piece portrait puzzle (6 rows × 3 columns, cells 1.6× wider than tall)', () => {
+  it('places a lone block when the seams are spaced differently in the two directions', () => {
+    const star = loadTestAsset('starry-night');
+    const w = Math.round(0.79 * star.height), x0 = Math.round((star.width - w) / 2);
+    const picture = createRGBA(w, star.height);
+    for (let y = 0; y < star.height; y++) picture.data.set(star.data.subarray((y * star.width + x0) * 4, (y * star.width + x0 + w) * 4), y * w * 4);
+    const grid = { rows: 6, cols: 3 };
+    const cut = generateJigsaw(grid.rows, grid.cols, picture.width, picture.height, 44);
+    // A box picture of high resolution: its cells are ~2.4× the pieces' size on the photo.
+    const index = buildReferenceIndex(perturbReference(resizeRGBA(picture, picture.width * 1.6, picture.height * 1.6), { seed: 44 }), grid, 'grid');
+    const block = cut.pieces.map((p) => p.index).filter((i) => i !== 0 && i !== 17);
+    const cellGeo = Math.sqrt((cut.width / cut.cols) * (cut.height / cut.rows));
+    const size = 160;
+    for (const rotation of [12, 196]) {
+      const { photo, truth } = renderPiecesPhoto(picture, cut, [block], {
+        seed: 5, rotation, scale: size / cellGeo, background: [196, 208, 218], noiseSigma: 3, blurSigma: 0.7, illumination: 0.1, supersample: 2,
+      });
+      const input = inputFromTruth(photo, cut, truth[0], 1, { withBodySize: false, orientationError: 1 });
+      expect(input.kind).toBe('patch');
+      // (The seams of three columns are too few for a reliable size; the whole range of sizes of an
+      // 18-piece puzzle is searched as well.)
+      const m = matchRegion(index, input);
+      const expected = block.map((p) => `${cut.pieces[p].row},${cut.pieces[p].col}`).sort();
+      expect((m.coveredCells ?? []).map((x) => `${x.row},${x.col}`).sort(), `rotation ${rotation}`).toEqual(expected);
+      expect(angleError(m.candidates[0].rotationDeg, truth[0].rotationDeg)).toBeLessThan(5);
+      expect(m.status).toBe('confident');
+    }
   });
 });

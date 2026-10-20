@@ -84,6 +84,11 @@ export interface SegmentOptions {
    * clearly take for table; not on dark tables (default false).
    */
   graphCut?: boolean;
+  /**
+   * Model a grained wood table along its grain (grain.ts) when its texture is clearly oriented
+   * (default false: see segment.ts GRAIN_DEFAULT).
+   */
+  grain?: boolean;
   /** Run the photo-quality assessment (default true). */
   assessQuality?: boolean;
   /** When given, milliseconds per stage are added to it (e.g. `background`, `threshold`, `shapes`). */
@@ -132,6 +137,8 @@ export interface SegmentDiagnostics {
   refArea?: number;
   refBody?: number;
   regions?: RegionDiagnostics[];
+  /** The grain model, when used: orientation coherence, grain-free sigma (Lab) and coverage. */
+  grain?: { coherence: number; sigma: [number, number, number]; coverage: number };
 }
 
 /** One detected region with its masks and pixels, ready for matching. */

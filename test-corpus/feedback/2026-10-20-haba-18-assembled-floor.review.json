@@ -1,0 +1,13 @@
+{
+  "reviewed": "2026-10-20",
+  "marks": {
+    "1": { "verdict": "ok", "note": "the ladybug / tree-trunk piece belongs in the bottom-right corner (r5c2: straight bottom and right edges; the box picture has the 18 badge there); the app put it at r4c2, the hazelnut piece's cell" }
+  },
+  "objects": [
+    { "x": 300, "y": 700, "note": "the puzzle assembled but for four pieces (all six rows; holes at r2c1, r4c1, r4c2, r5c2)" },
+    { "x": 1405, "y": 912, "note": "ladybug corner piece" },
+    { "x": 1228, "y": 1456, "note": "pink dress piece; touches the blue-fairy piece" },
+    { "x": 1549, "y": 1344, "note": "blue fairy and lantern" },
+    { "x": 882, "y": 1757, "note": "hazelnut piece" }
+  ]
+}

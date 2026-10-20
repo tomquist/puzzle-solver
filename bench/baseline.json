@@ -613,6 +613,60 @@
         "neighborPrecision": 1,
         "neighborRecall": 1,
         "hiddenRate": 0
+      },
+      "starry-portrait-18-holes": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
+      },
+      "starry-portrait-18-lone-block": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 0.5,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 0,
+        "assembledRecall": 0.5,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
+      },
+      "starry-portrait-18-woodgrain": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 0.458,
+        "kindAccuracy": 0.917,
+        "top1": 0.958,
+        "top3": 0.958,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 0.909,
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 0.909,
+        "hiddenRate": 0
       }
     },
     "box": {
@@ -729,6 +783,22 @@
         "objectRecall": 1,
         "objectClean": 1,
         "objectPrecision": 0.7
+      },
+      "2026-10-20-haba-18-assembled-floor.json": {
+        "objectRecall": 1,
+        "objectClean": 1,
+        "objectPrecision": 1
+      },
+      "2026-10-20-haba-18-oak-grain.json": {
+        "falseRemoved": 1,
+        "objectRecall": 0.944,
+        "objectClean": 0.944,
+        "objectPrecision": 0.895
+      },
+      "2026-10-20-haba-18-two-holes-floor.json": {
+        "objectRecall": 1,
+        "objectClean": 1,
+        "objectPrecision": 1
       },
       "flickr-chrisrycroft-birds-oak-partial.json": {
         "objectRecall": 0.5,

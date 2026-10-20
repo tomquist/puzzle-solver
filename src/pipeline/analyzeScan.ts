@@ -14,6 +14,8 @@ import {
   findFits,
   matchRegionsDetailed,
   patchBodySize,
+  placeByElimination,
+  resolveCellClaims,
   sampleEdgeStrips,
   scorePlacement,
   shapeFits,
@@ -57,7 +59,7 @@ export interface AnalyzeScanOptions {
   /** Side comparison for the fit hints (default {@link DEFAULT_SIDE_COMPARISON}). */
   sides?: SideComparison;
   /** Segmentation switches (A/B runs of the benchmark). */
-  segment?: Pick<SegmentOptions, 'graphCut'>;
+  segment?: Pick<SegmentOptions, 'graphCut' | 'grain'>;
   /**
    * Make the placements consistent with the shape fits between the scan's pieces before the fit
    * hints and groups are derived (match/consistency.ts; default {@link DEFAULT_CONSISTENCY}).
@@ -161,9 +163,20 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
     });
     timings.consistency = now() - tc;
   }
+  // A confident loose piece on a cell a patch covers: the weaker placement gives way; the last free
+  // cells go to the pieces without a confident place (claims.ts).
+  resolveCellClaims(regions, matches);
+  {
+    const inputById = new Map<number, MatchInput>(inputs.map((inp) => [inp.regionId, inp]));
+    const detailById = new Map<number, MatchDetail>(details.map((d) => [d.match.regionId, d]));
+    placeByElimination(regions, matches, index.grid, opts.placedCells ?? [], (id, cell, rotationDeg) => {
+      const inp = inputById.get(id), d = detailById.get(id);
+      return inp && d ? scorePlacement(index, inp, d, cell, rotationDeg, { placedCells: opts.placedCells }) : null;
+    });
+  }
   // Groups first (they may place weak members of assembled grids), then the fit hints.
   // Without a single piece to measure, the patches' seams give the piece size.
-  const pitches = inputs.map(patchBodySize).filter((b): b is number => b !== undefined).sort((a, b) => a - b);
+  const pitches = inputs.map((inp) => patchBodySize(inp, index.cellW / index.cellH)).filter((b): b is number => b !== undefined).sort((a, b) => a - b);
   const bodySize = seg.medianBodySize ?? (pitches.length > 0 ? pitches[pitches.length >> 1] : undefined);
   const groups = buildGroups(regions, matches, findFits(regions, matches, index.grid, fitOptions), index.grid, {
     cellW: index.cellW,

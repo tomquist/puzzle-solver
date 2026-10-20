@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { Point } from '../../cv/geometry';
+import { polygonArea } from '../../cv/polygon';
 import type { RGBAImage } from '../../cv/image';
 import type { DetectedRegion, PieceShape, RegionMatch } from '../../model/types';
 import { loadTestAsset } from '../../testing/nodeImageIO';
@@ -14,7 +15,7 @@ function regionOf(t: PieceTruth, id: number, shape?: PieceShape): DetectedRegion
     kind: t.pieces.length > 1 ? 'patch' : 'piece',
     bbox: t.bbox,
     contour: t.outline,
-    area: t.bbox.width * t.bbox.height * 0.8,
+    area: polygonArea(t.outline),
     touchesBorder: false,
     shape,
     orientationDeg: 0,
@@ -126,6 +127,30 @@ describe('buildGroups', () => {
     }
     // The loose piece is not part of it.
     expect(groups.some((x) => x.regionIds.includes(7) && x.kind === 'assembled')).toBe(false);
+  });
+
+  it('does not make a region that is clearly not one piece confident through its neighbours', () => {
+    const grid = [at(9, 11), at(9, 12), at(9, 13), at(10, 11), at(10, 12), at(10, 13)];
+    const { photo, truth } = renderPiecesPhoto(ref, cut, [grid], { seed: 8, scale: 1.3, noiseSigma: 3, blurSigma: 0.7 });
+    const members = truth[0].members!.map((_, k) => memberTruth(truth[0], k));
+    const inputs = members.map((t, i) => {
+      const inp = inputFromTruth(photo, cut, t, i + 1, { withShape: true });
+      inp.orientationDeg = orientationOf(t);
+      return inp;
+    });
+    const regions = members.map((t, i) => {
+      const r = regionOf(t, i + 1, inputs[i].shape);
+      r.orientationDeg = inputs[i].orientationDeg;
+      return r;
+    });
+    const matches = matchRegions(index, inputs);
+    matches[4] = { regionId: 5, candidates: [], status: 'unmatched' };
+    // Its outline takes in table: 1.8 times a piece's area.
+    regions[4].area *= 1.8;
+    buildGroups(regions, matches, findFits(regions, matches, index.grid), index.grid, { cellW: index.cellW, cellH: index.cellH, bodySize: inputs[0].expectedBodySize });
+    // Placed where its neighbours say, but not confidently.
+    expect({ row: matches[4].candidates[0].row, col: matches[4].candidates[0].col }).toEqual({ row: members[4].row, col: members[4].col });
+    expect(matches[4].status).toBe('ambiguous');
   });
 
   it('links loose pieces of neighbouring cells and leaves unrelated ones alone', () => {
