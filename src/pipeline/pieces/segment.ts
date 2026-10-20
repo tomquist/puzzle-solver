@@ -1427,6 +1427,14 @@ function peelShadowHalo(c: Candidate, img: RGBAImage, fit: BackgroundFit, noise:
   return { ...peeled, group: c.group, merged: c.merged };
 }
 
+/**
+ * Wood-grain table model (SegmentOptions.grain) when the option is not given: off. On the HABA oak
+ * photo it gives cleaner outlines and finds every piece, but touching pieces merged or cut by a
+ * sunlit table patch were then placed confidently and wrongly (confident precision 1 → 0.81), and
+ * sunlit wood shows more false fragments; wrong confident placements cost users more.
+ */
+const GRAIN_DEFAULT = false;
+
 /** Graph-cut refinement (SegmentOptions.graphCut) when the option is not given. */
 const GRAPH_CUT_DEFAULT = false;
 /** Depth (body sizes, 3–48 px) from which region pixels stay piece in the graph cut. */
@@ -1888,7 +1896,7 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
   // Grained wood: the table colour along the grain through each pixel, around the pieces found so
   // far (grain.ts), and segment again (this pass takes the local table model's place below).
   let grainUsed = false;
-  if (p.ref.refBody > 0 && opts.grain !== false) {
+  if (p.ref.refBody > 0 && (opts.grain ?? GRAIN_DEFAULT)) {
     const exclude = createMask(W, H);
     for (const c of p.cands) {
       if (c.area < 0.25 * p.ref.refArea) continue;

@@ -86,7 +86,7 @@ export interface SegmentOptions {
   graphCut?: boolean;
   /**
    * Model a grained wood table along its grain (grain.ts) when its texture is clearly oriented
-   * (default true).
+   * (default false: see segment.ts GRAIN_DEFAULT).
    */
   grain?: boolean;
   /** Run the photo-quality assessment (default true). */

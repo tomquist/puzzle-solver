@@ -487,10 +487,10 @@ describe('segmentPieces on real-photo conditions', () => {
     expect(seg.regions.length).toBeLessThanOrEqual(truth.length + 1);
   });
 
-  it('models a strongly grained table along its grain, and only such a table', () => {
+  it('models a strongly grained table along its grain (option), and only such a table', () => {
     const grained = scene('great-wave', 'wood', 2, { background: [150, 108, 70], pattern: { kind: 'wood' } });
     const dg: SegmentDiagnostics = {};
-    const seg = segmentPieces(grained.photo, { diagnostics: dg });
+    const seg = segmentPieces(grained.photo, { diagnostics: dg, grain: true });
     expect(dg.grain).toBeDefined();
     expect(dg.grain!.coherence).toBeGreaterThan(0.6);
     // The grain explains most of the table's lightness spread.
@@ -501,8 +501,12 @@ describe('segmentPieces on real-photo conditions', () => {
     // Plank seams on a plain floor are no grain.
     const planks = scene('great-wave', 'wood', 2, { background: [196, 172, 140], backgroundTexture: 0, pattern: { kind: 'planks', width: 320, gap: 12, tiles: true } });
     const dp: SegmentDiagnostics = {};
-    segmentPieces(planks.photo, { diagnostics: dp });
+    segmentPieces(planks.photo, { diagnostics: dp, grain: true });
     expect(dp.grain).toBeUndefined();
+    // Off unless asked for.
+    const doff: SegmentDiagnostics = {};
+    segmentPieces(grained.photo, { diagnostics: doff });
+    expect(doff.grain).toBeUndefined();
   });
 
   it('takes a large soft shadow reaching in from the border for table', () => {

@@ -6,6 +6,7 @@
  *   UPDATE_BASELINE=1 npm run bench   # accept the current numbers as the new baseline
  *   DEBUG_IMAGES=1 npm run bench      # also write overlays to .debug/bench/
  *   GRAPH_CUT=1 npm run bench         # A/B: with the graph-cut outline refinement (0: without)
+ *   GRAIN=1 npm run bench             # A/B: with the wood-grain table model (0: without)
  *   CONSISTENCY=1 npm run bench       # A/B: with the consistency pass of the placements (0: without)
  *
  * outlineIoU / boundaryF (report only): outline accuracy of the regions matched to a truth item.

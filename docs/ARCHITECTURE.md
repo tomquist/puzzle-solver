@@ -245,12 +245,14 @@ refined by fitting lines to edge points. Rectified size honours the physical asp
 optionally a low-order polynomial for lighting gradients); foreground = colour distance (+
 gradient) thresholded with Otsu; morphology + hole filling; connected components; regions far
 larger than the median single piece are patches (or touching pieces), tiny ones are fragments.
-On a strongly grained table (`pieces/grain.ts`; texture coherently oriented in most tiles of about
+Optionally (`SegmentOptions.grain`, off by default, `GRAIN=1` in the benchmark and feedback tools)
+on a strongly grained table (`pieces/grain.ts`; texture coherently oriented in most tiles of about
 a piece) the table colour is measured along the grain line through each pixel – the robust mean of
 grain-like table pixels within about half a piece before or after it, as a residual from the smooth
 and local table model – and the photo is segmented again against it with the grain-free spread:
 stripes of grain no longer grow onto the pieces as ragged spikes or join them, while print near
-the wood's colour stands out. Assembled patches keep the table they enclose open in their masks
+the wood's colour stands out (off by default: pieces it leaves merged or cut by sunlit table were
+placed confidently and wrongly). Assembled patches keep the table they enclose open in their masks
 (the cells of missing pieces).
 
 **Piece shape** – smoothed contour; corner candidates from curvature/convex-hull; best 4-corner
