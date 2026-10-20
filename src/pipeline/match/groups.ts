@@ -18,6 +18,12 @@ export interface GroupOptions {
   bodySize?: number;
 }
 
+/** Region area (body sizes squared) a single piece plausibly has (tabs and blanks, size spread). */
+export const ONE_PIECE_AREA: [number, number] = [0.6, 1.5];
+/** Confidence cap of a placement resting on a region that is clearly not one piece. */
+export const NOT_ONE_PIECE_CAP = 0.5;
+export const onePieceArea = (ratio: number): boolean => ratio >= ONE_PIECE_AREA[0] && ratio <= ONE_PIECE_AREA[1];
+
 /** Regions closer than this (fraction of the body size) count as touching. */
 const TOUCH_GAP = 0.1;
 /** Minimum shared-border length (fraction of the body size) for an assembled joint. */
@@ -239,6 +245,9 @@ export function buildGroups(regions: DetectedRegion[], matches: RegionMatch[], f
           const dr = cell.row - tl.row, dc = cell.col - tl.col;
           b.match.coveredCells = old.map((q) => ({ row: q.row + dr, col: q.col + dc }));
         }
+        // A region that is clearly not one piece (pieces merged, a piece with table attached) is
+        // not placed confidently by its neighbour: its outline is no evidence of the joint.
+        if (b.region.kind === 'piece' && body > 0 && !onePieceArea(b.region.area / (body * body))) inferred.confidence = Math.min(inferred.confidence, NOT_ONE_PIECE_CAP);
         b.match.status = inferred.confidence >= ANCHOR_CONFIDENCE ? 'confident' : 'ambiguous';
         union(i, j);
         consistency[j] = Math.min(consistency[j], 0.8);

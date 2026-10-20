@@ -1429,9 +1429,10 @@ function peelShadowHalo(c: Candidate, img: RGBAImage, fit: BackgroundFit, noise:
 
 /**
  * Wood-grain table model (SegmentOptions.grain) when the option is not given: off. On the HABA oak
- * photo it gives cleaner outlines and finds every piece, but touching pieces merged or cut by a
- * sunlit table patch were then placed confidently and wrongly (confident precision 1 → 0.81), and
- * sunlit wood shows more false fragments; wrong confident placements cost users more.
+ * photo it gives cleaner outlines and finds every piece, but leaves two touching pieces merged and
+ * one cut by a sunlit table patch; matching keeps such regions ambiguous (capForSize), so its
+ * confident placements stay right, but one piece fewer is placed right at all, and segmentation
+ * on grained wood takes about twice as long. Two Flickr wood photos gain clearly.
  */
 const GRAIN_DEFAULT = false;
 

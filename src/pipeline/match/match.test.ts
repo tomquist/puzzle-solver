@@ -8,7 +8,7 @@ import type { CellRef, RegionMatch } from '../../model/types';
 import { DEBUG_IMAGES, loadTestAsset, savePng } from '../../testing/nodeImageIO';
 import { generateJigsaw, perturbReference, renderPiecesPhoto, Rng, type JigsawCut, type PieceTruth } from '../../testing/synth';
 import { matchRegionsDetailed } from './colorCorrection';
-import { capForBorder, CONFIDENT_THRESHOLD, matchConfidence, matchRegionDetailed, outlineFactor, patchBodySize, scorePlacement, type MatchDetail } from './matchRegion';
+import { capForBorder, capForSize, CONFIDENT_THRESHOLD, matchConfidence, matchRegionDetailed, outlineFactor, patchBodySize, scorePlacement, type MatchDetail } from './matchRegion';
 import { buildReferenceIndex, cellAt, matchRegion, matchRegions, type MatchInput, type ReferenceIndex } from './index';
 import { accuracy, angleError, inputFromTruth, renderScenario, type Accuracy } from './testkit';
 
@@ -443,6 +443,33 @@ describe('matchRegion — outline reliability', () => {
     capForBorder(woodTable, { outline: { borderTable: 0.17 } }, 0.17);
     expect(woodTable.match.status).toBe('confident');
     expect(woodTable.match.candidates[0].confidence).toBeGreaterThan(0.85);
+  });
+
+  it('keeps regions that are clearly not one piece from being confident', () => {
+    // A mask of `area` pixels; the scan's body size 100 px.
+    const mask = (area: number) => ({ width: 100, height: Math.ceil(area / 100), data: new Uint8Array(Math.ceil(area / 100) * 100).fill(1, 0, area) });
+    const one = detail(0.95);
+    capForSize(one, { kind: 'piece', mask: mask(10000), expectedBodySize: 100 });
+    expect(one.match.status).toBe('confident');
+    // Two pieces merged, or a piece with a patch of table: 1.7 pieces.
+    const merged = detail(0.95);
+    capForSize(merged, { kind: 'piece', mask: mask(17000), expectedBodySize: 100 });
+    expect(merged.match.status).toBe('ambiguous');
+    expect(merged.match.candidates[0].confidence).toBeLessThan(CONFIDENT_THRESHOLD);
+    // Half a piece.
+    const half = detail(0.95);
+    capForSize(half, { kind: 'piece', mask: mask(5000), expectedBodySize: 100 });
+    expect(half.match.status).toBe('ambiguous');
+    // A small patch of touching (loose) pieces vs. an assembled one, and a large touching block.
+    const pair = detail(0.95);
+    capForSize(pair, { kind: 'patch', mask: mask(22000), expectedBodySize: 100, outline: { issues: ['touching_pieces'] } });
+    expect(pair.match.status).toBe('ambiguous');
+    const assembled = detail(0.95);
+    capForSize(assembled, { kind: 'patch', mask: mask(22000), expectedBodySize: 100 });
+    expect(assembled.match.status).toBe('confident');
+    const block = detail(0.95);
+    capForSize(block, { kind: 'patch', mask: mask(80000), expectedBodySize: 100, outline: { issues: ['touching_pieces'] } });
+    expect(block.match.status).toBe('confident');
   });
 
   it('discounts doubtful segmentation', () => {

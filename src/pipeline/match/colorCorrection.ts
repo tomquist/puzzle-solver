@@ -5,7 +5,7 @@
  * colours to reference colours, and the remaining regions are matched again with it.
  */
 import type { RegionMatch } from '../../model/types';
-import { capForBorder, matchRegionDetailed, type MatchDetail } from './matchRegion';
+import { capForBorder, capForSize, matchRegionDetailed, type MatchDetail } from './matchRegion';
 import { buildTemplate, DEFAULT_SCORE, type ColorCorrection, type ScoreParams } from './template';
 import type { MatchInput, MatchOptions, ReferenceIndex } from './types';
 
@@ -122,6 +122,9 @@ export function matchRegionsDetailed(index: ReferenceIndex, inputs: MatchInput[]
   // every piece of a photo, so the scan's typical border tells what is normal).
   const borders = inputs.filter((inp) => inp.kind === 'piece' && inp.outline?.borderTable !== undefined).map((inp) => inp.outline!.borderTable!).sort((a, b) => a - b);
   const scanMedian = borders.length >= 3 ? borders[borders.length >> 1] : undefined;
-  out.forEach((d, i) => capForBorder(d, inputs[i], scanMedian));
+  out.forEach((d, i) => {
+    capForBorder(d, inputs[i], scanMedian);
+    capForSize(d, inputs[i]);
+  });
   return out;
 }

@@ -251,8 +251,7 @@ a piece) the table colour is measured along the grain line through each pixel �
 grain-like table pixels within about half a piece before or after it, as a residual from the smooth
 and local table model – and the photo is segmented again against it with the grain-free spread:
 stripes of grain no longer grow onto the pieces as ragged spikes or join them, while print near
-the wood's colour stands out (off by default: pieces it leaves merged or cut by sunlit table were
-placed confidently and wrongly). Assembled patches keep the table they enclose open in their masks
+the wood's colour stands out (off by default: see segment.ts GRAIN_DEFAULT). Assembled patches keep the table they enclose open in their masks
 (the cells of missing pieces).
 
 **Piece shape** – smoothed contour; corner candidates from curvature/convex-hull; best 4-corner
@@ -277,7 +276,10 @@ covers the cells its mask has print over. One cell, one piece (`match/claims.ts`
 loose piece on a cell a patch covers is a contradiction – the less confident placement gives way –
 and when the scan's confident placements and the user's placed cells leave at most three cells
 free, the pieces without a confident place are assigned to them (the corner under a box picture's
-badge, the last pieces of a puzzle).
+badge, the last pieces of a puzzle). A region whose size says it is not what it is matched as – a
+single piece far from one piece's area (merged pieces, table attached, half a piece), or a small
+patch of touching loose pieces – is placed at most ambiguously, also when its neighbours would
+place it (groups).
 
 **Fits** – two regions fit when their best placements are adjacent cells with consistent
 rotations (location), and/or when complementary sides (tab ↔ blank) have matching profiles and

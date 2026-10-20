@@ -14,6 +14,7 @@ import { findSimilarity, type Point } from '../../cv/geometry';
 import { cellKey, type CellRef, type MatchStatus, type Placement, type RegionMatch, type SideKind } from '../../model/types';
 import { buildTemplate, colourDistanceMap, DEFAULT_SCORE, makePhotoSource, scoreAt, scoreMap, type ColorCorrection, type Mapping, type PhotoSource, type ScoreParams, type Template } from './template';
 import { estimatePatchPitch } from '../pieces/patchPitch';
+import { NOT_ONE_PIECE_CAP, onePieceArea } from './groups';
 import type { MatchInput, MatchOptions, RefLevel, ReferenceIndex } from './types';
 
 /** A similarity hypothesis to search. */
@@ -435,6 +436,30 @@ export function outlineFactor(input: Pick<MatchInput, 'kind' | 'outline'>): numb
   if (input.kind === 'piece' && issues.includes('shape_uncertain')) f *= 0.95;
   if (input.kind === 'piece' && o.solidity !== undefined && o.solidity < 0.65) f *= 0.85;
   return f;
+}
+
+/** Patches of at most this many pieces (by area) that touch other pieces may be loose pieces lying together. */
+const SMALL_TOUCHING_PATCH = 3.5;
+
+/**
+ * Cap of the confidence for a region whose size says it is not what it is matched as (in place,
+ * at most ambiguous): a single piece far from one piece's area (two pieces merged, a piece with
+ * table attached, half a piece), or a small patch flagged as touching pieces – two or three loose
+ * pieces lying together, matched as if they were assembled. Their template is no piece of the
+ * picture; a confident wrong place is worse than an ambiguous one. Uses the scan's body size.
+ */
+export function capForSize(detail: MatchDetail, input: Pick<MatchInput, 'kind' | 'mask' | 'outline' | 'expectedBodySize'>): void {
+  const body = input.expectedBodySize;
+  const c = detail.match.candidates[0];
+  if (!c || !body || body <= 0) return;
+  let area = 0;
+  for (let i = 0; i < input.mask.data.length; i++) area += input.mask.data[i];
+  const r = area / (body * body);
+  const bad = input.kind === 'piece' ? !onePieceArea(r) : input.kind === 'patch' && r <= SMALL_TOUCHING_PATCH && (input.outline?.issues ?? []).includes('touching_pieces');
+  if (!bad || c.confidence <= NOT_ONE_PIECE_CAP) return;
+  c.confidence = NOT_ONE_PIECE_CAP;
+  for (const o of detail.match.candidates.slice(1)) o.confidence = Math.min(o.confidence, NOT_ONE_PIECE_CAP);
+  if (detail.match.status === 'confident') detail.match.status = 'ambiguous';
 }
 
 /** Border-table excess above which one outline counts as including shadow / table. */
