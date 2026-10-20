@@ -12,6 +12,7 @@ function angleError(a: number, b: number): number {
 }
 import {
   cellCenter,
+  enclosedCells,
   generateJigsaw,
   mulberry32,
   patchOutline,
@@ -87,6 +88,15 @@ describe('generateJigsaw', () => {
     const sum = idx.reduce((s, i) => s + polygonSignedArea(cut.pieces[i].outline), 0);
     expect(polygonSignedArea(outline)).toBeCloseTo(sum, 3);
     expect(() => patchOutline(cut, [0, 2])).toThrow();
+  });
+
+  it('finds the cells an assembled block encloses (its holes)', () => {
+    // A 3 × 3 block at rows 0–2, columns 0–2 of the 8-column cut without its middle piece, and an
+    // L of pieces (no hole: the missing corner is open to the outside).
+    const at = (r: number, c: number) => r * cut.cols + c;
+    const ring = [at(0, 0), at(0, 1), at(0, 2), at(1, 0), at(1, 2), at(2, 0), at(2, 1), at(2, 2)];
+    expect(enclosedCells(cut, ring)).toEqual([at(1, 1)]);
+    expect(enclosedCells(cut, [at(0, 0), at(0, 1), at(1, 0)])).toEqual([]);
   });
 });
 

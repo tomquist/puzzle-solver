@@ -36,7 +36,7 @@ export interface ItemSpec {
    * Irregular assembled blocks: a rows × cols rectangle with `missing` pieces taken off its outline
    * (ragged sides, notches; the block stays one simply connected piece).
    */
-  blocks?: { rows: number; cols: number; missing: number }[];
+  blocks?: { rows: number; cols: number; missing: number; holes?: number }[];
 }
 
 /** Cells of an irregular block: the rectangle at (r, c) with `missing` outline pieces removed. */
@@ -85,9 +85,24 @@ export function pickItems(cut: JigsawCut, spec: ItemSpec, seed: number): (number
   for (const b of spec.blocks ?? []) {
     for (let attempt = 0; attempt < 200; attempt++) {
       const r = rng.int(cut.rows - b.rows + 1), c = rng.int(cut.cols - b.cols + 1);
-      const idx = irregularBlock(cut, r, c, b.rows, b.cols, b.missing, rng);
+      let idx = irregularBlock(cut, r, c, b.rows, b.cols, b.missing, rng);
       if (idx.some((i) => used.has(i))) continue;
       idx.forEach((i) => used.add(i));
+      // Holes: pieces taken out of the block's inside (not 4-adjacent to each other) lie loose.
+      if (b.holes) {
+        const inner = idx.filter((i) => {
+          const row = Math.floor(i / cut.cols), col = i % cut.cols;
+          return [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [-1, 1], [1, -1], [1, 1]].every(([a, d]) => idx.includes((row + a) * cut.cols + col + d) && row + a >= 0 && col + d >= 0 && col + d < cut.cols);
+        });
+        const taken: number[] = [];
+        for (const i of rng.shuffle(inner)) {
+          if (taken.length >= b.holes) break;
+          if (taken.some((t) => Math.abs(Math.floor(t / cut.cols) - Math.floor(i / cut.cols)) + Math.abs((t % cut.cols) - (i % cut.cols)) < 2)) continue;
+          taken.push(i);
+        }
+        idx = idx.filter((i) => !taken.includes(i));
+        items.push(...taken);
+      }
       items.push(idx);
       break;
     }

@@ -2,7 +2,8 @@
  * Segmentation of a scan photo (loose pieces / assembled patches on a table) into regions.
  *
  * Pipeline: background model (CIE Lab, border band, quadratic lighting surface, iterative
- * refinement, further table colours of a patterned cloth) → per-pixel foreground score → Otsu
+ * refinement, further table colours of a patterned cloth; on strongly grained wood the table colour
+ * along the grain, grain.ts, around the pieces of a first pass) → per-pixel foreground score → Otsu
  * threshold on the log score with hysteresis, plus a texture cue → close / fill holes / drop specks
  * (no opening: the thin dark cardboard rim often is the only evidence of a piece whose print matches
  * the table, and filling the closed rim recovers it) → connected components → outline tracing and
@@ -29,6 +30,7 @@ import type { DetectedRegion, PieceShape, QualityIssue, RegionKind } from '../..
 import { backgroundAt, fitBackground, fitLocalTable, foregroundScore, tableChromaDistance, tableChromasAt, type BackgroundFit } from './background';
 import { assessPhoto, assessRegions } from './quality';
 import { estimatePatchPitch } from './patchPitch';
+import { fitGrainTable, grainCoherence, GRAIN_MIN_COHERENCE, type GrainTable } from './grain';
 import { refineByGraphCut } from './refine';
 import { analyzePieceShape, bodyOrientation, orientationHistogram } from './shape';
 import type { BackgroundModel, RegionDiagnostics, SegmentOptions, Segmentation, SegmentedRegion } from './types';
@@ -1798,8 +1800,8 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
   const diag = opts.diagnostics;
 
   /** Score → threshold → texture → morphology → candidates → reference size → strands removed. */
-  const pass = (model: BackgroundFit) => {
-    const score = foregroundScore(scored, model);
+  const pass = (model: BackgroundFit, grain?: GrainTable) => {
+    const score = foregroundScore(scored, model, grain);
     lap('score');
     const th = chooseThreshold(score);
     let fg = hysteresis(score, th.high, th.low);
@@ -1883,9 +1885,37 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
   };
 
   let p = pass(fit);
+  // Grained wood: the table colour along the grain through each pixel, around the pieces found so
+  // far (grain.ts), and segment again (this pass takes the local table model's place below).
+  let grainUsed = false;
+  if (p.ref.refBody > 0 && opts.grain !== false) {
+    const exclude = createMask(W, H);
+    for (const c of p.cands) {
+      if (c.area < 0.25 * p.ref.refArea) continue;
+      const { x: bx, y: by, width: bw, height: bh } = c.bbox;
+      for (let y = 0; y < bh; y++) {
+        for (let x = 0; x < bw; x++) if (c.mask.data[y * bw + x]) exclude.data[(y + by) * W + x + bx] = 1;
+      }
+    }
+    const coherence = grainCoherence(scored, exclude, p.ref.refBody);
+    if (coherence >= GRAIN_MIN_COHERENCE) {
+      // Shadow zones and light at the scale of a few pieces (the local table model) stay the smooth
+      // model's part: the grain is the residual from both.
+      const local = fit.palette.length === 0 ? fitLocalTable(scored, fit, exclude, Math.max(2 * p.ref.refBody, Math.min(W, H) / 10)) : null;
+      const model: BackgroundFit = local ? { ...fit, local } : fit;
+      const grain = fitGrainTable(scored, exclude, p.ref.refBody, fit.sigma, (x, y) => backgroundAt(model, x, y), 0);
+      if (diag && grain) diag.grain = { coherence: grain.coherence, sigma: grain.sigma, coverage: grain.coverage };
+      if (grain) {
+        fit = model;
+        p = pass(fit, grain);
+        grainUsed = true;
+      }
+    }
+    lap('grain');
+  }
   // Shadow zones and local lighting the smooth surface cannot follow: learn them from the table
   // around the pieces found so far (coarse grid, cells of at least two pieces) and segment again.
-  if (p.ref.refBody > 0 && fit.palette.length === 0) {
+  if (!grainUsed && p.ref.refBody > 0 && fit.palette.length === 0) {
     // Excluded (on a 4× coarser grid): anything piece-shaped and every blob with a fair share of
     // strong pixels (pieces, and patches of weak pieces whose print is speckled with them). Smooth
     // weak blobs, which may be the shadow zone itself, stay in the estimate (a cell spans several
@@ -2099,7 +2129,10 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
       issues: [],
     };
     if (shape) region.shape = shape;
-    return { region, mask: c.mask, image: cropRGBA(photo, c.bbox), borderTable: 0 };
+    // An assembled patch keeps the table it encloses open (the cells of missing pieces): matching
+    // then neither compares that table with the picture nor reports those cells as covered.
+    const mask = kind === 'patch' && ra > 0 ? openTableHoles(c, preClose, TABLE_HOLE * ra, W) ?? c.mask : c.mask;
+    return { region, mask, image: cropRGBA(photo, c.bbox), borderTable: 0 };
   });
 
   // Region-level structural issues.

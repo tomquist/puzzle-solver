@@ -24,6 +24,7 @@ import { labelComponents } from '../../cv/components';
 import { createGray, createMask, type GrayImage, type Mask, type RGBAImage } from '../../cv/image';
 import { dilate } from '../../cv/morphology';
 import type { BackgroundModel, LocalTableGrid } from './types';
+import type { GrainTable } from './grain';
 import { median, quantile } from './util';
 
 const NT = 6;
@@ -31,6 +32,8 @@ const NT = 6;
 const W_L = 0.5;
 /** Lowest (L* + 16) ratio still explained as a cast shadow (≈ 50 % darkening in linear light). */
 const RHO_MIN = 0.8;
+/** Highest (L* + 16) ratio explained as more light on the table along the grain (grain model only). */
+const RHO_MAX = 1.25;
 /** Cost (in sigmas) of explaining a pixel as the deepest accepted shadow; shallower shadows cost less. */
 const SHADOW_PENALTY = 2.5;
 /**
@@ -1074,12 +1077,51 @@ function findPalette(s: Samples, fit: BackgroundFit, tex: Float32Array): void {
 }
 
 /**
+ * The per-pixel score's distance of a Lab pixel to a table colour (as in {@link foregroundScore}:
+ * shadow-tolerant, with the extra cost of darkening beyond RHO_DEEP); `is*` are inverse sigmas.
+ */
+function pieceDistance(L: number, A: number, B: number, bL: number, ba: number, bb: number, isL: number, isa: number, isb: number): number {
+  const dL = (L - bL) * isL, da = (A - ba) * isa, db = (B - bb) * isb;
+  let d2 = W_L * dL * dL + da * da + db * db;
+  if (L < bL) {
+    const ref = bL + 16;
+    const raw = ref > 1 ? (L + 16) / ref : 1;
+    const rho = raw < RHO_MIN ? RHO_MIN : raw;
+    const sL = (L + 16 - rho * ref) * isL, sa = (A - rho * ba) * isa, sb = (B - rho * bb) * isb;
+    const pen = (SHADOW_PENALTY / (1 - RHO_MIN)) * (1 - rho) + (raw < RHO_DEEP && bL >= DEEP_MIN_TABLE_L ? DEEP_SHADOW_SLOPE * (RHO_DEEP - raw) : 0);
+    const s2 = W_L * sL * sL + sa * sa + sb * sb + pen * pen;
+    if (s2 < d2) d2 = s2;
+  } else if (L > bL) {
+    d2 = Math.min(d2, brighterTable2(L, A, B, bL, ba, bb, isL, isa, isb));
+  }
+  return Math.sqrt(d2);
+}
+
+/**
+ * Squared cost of explaining a pixel brighter than the table colour along the grain as that table
+ * in more light (a sunlit spot or stripe the grain lines run through; the smooth model's spread
+ * covers such light, the grain model's does not): (L* + 16) and chroma scaled by up to RHO_MAX,
+ * with a cost growing to SHADOW_PENALTY there, like a shadow's.
+ */
+function brighterTable2(L: number, A: number, B: number, bL: number, ba: number, bb: number, isL: number, isa: number, isb: number): number {
+  const ref = bL + 16;
+  if (!(ref > 1)) return Infinity;
+  const rho = Math.min(RHO_MAX, (L + 16) / ref);
+  const sL = (L + 16 - rho * ref) * isL, sa = (A - rho * ba) * isa, sb = (B - rho * bb) * isb;
+  const pen = (SHADOW_PENALTY * (rho - 1)) / (RHO_MAX - 1);
+  return W_L * sL * sL + sa * sa + sb * sb + pen * pen;
+}
+
+/**
  * Foreground score against a table with several colours (see {@link foregroundScore}): distance to
  * the nearest table colour or blend of two. The table colours are evaluated once per 8-px run
  * (lighting changes slowly).
  */
-function paletteScore(photo: RGBAImage, model: BackgroundFit, out: GrayImage): GrayImage {
+function paletteScore(photo: RGBAImage, model: BackgroundFit, out: GrayImage, grain?: GrainTable): GrayImage {
   const { width: w, height: h, data: d } = photo;
+  // Table colour along the grain where known (it is the local table, whichever colour it has).
+  const gLab = grain?.lab, gf = grain?.factor ?? 1, gw = grain?.width ?? 0, gh = grain?.height ?? 0;
+  const gis = grain ? [1 / grain.sigma[0], 1 / grain.sigma[1], 1 / grain.sigma[2]] : [0, 0, 0];
   const nc = model.palette.length + 1;
   const sig = [model.sigma, ...model.palette.map((p) => p.sigma)];
   const inv = sig.map((s) => [1 / s[0], 1 / s[1], 1 / s[2]]);
@@ -1113,6 +1155,13 @@ function paletteScore(photo: RGBAImage, model: BackgroundFit, out: GrayImage): G
         i = t | 0;
         const fz = lut[i] + (t - i) * (lut[i + 1] - lut[i]);
         const L = 116 * fy - 16, A = 500 * (fx - fy), B = 200 * (fy - fz);
+        if (gLab) {
+          const gi = (Math.min(gh - 1, (y / gf) | 0) * gw + Math.min(gw - 1, (x / gf) | 0)) * 3;
+          if (gLab[gi] === gLab[gi]) {
+            out.data[y * w + x] = pieceDistance(L, A, B, gLab[gi], gLab[gi + 1], gLab[gi + 2], gis[0], gis[1], gis[2]);
+            continue;
+          }
+        }
         let best = Infinity;
         for (let a = 0; a < nc; a++) {
           const c = cols[a], q = inv[a];
@@ -1137,13 +1186,18 @@ function paletteScore(photo: RGBAImage, model: BackgroundFit, out: GrayImage): G
  * extra cost for darkening beyond RHO_DEEP so dark table-coloured pieces stay strong; Lab via
  * lookup tables).
  */
-export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayImage {
+export function foregroundScore(photo: RGBAImage, model: BackgroundFit, grain?: GrainTable): GrayImage {
   const { width: w, height: h, data: d } = photo;
   const out = createGray(w, h);
-  if (model.palette.length > 0) return paletteScore(photo, model, out);
+  if (model.palette.length > 0) return paletteScore(photo, model, out, grain);
   const o = out.data;
   const [kL, ka, kb] = model.coefficients;
-  const isL = 1 / model.sigma[0], isa = 1 / model.sigma[1], isb = 1 / model.sigma[2];
+  const isL0 = 1 / model.sigma[0], isa0 = 1 / model.sigma[1], isb0 = 1 / model.sigma[2];
+  let isL = isL0, isa = isa0, isb = isb0;
+  // Table colour along the grain where known (grain.ts), with its grain-free spread.
+  const gLab = grain?.lab, gf = grain?.factor ?? 1, gw = grain?.width ?? 0, gh = grain?.height ?? 0;
+  const gisL = grain ? 1 / grain.sigma[0] : 0, gisa = grain ? 1 / grain.sigma[1] : 0, gisb = grain ? 1 / grain.sigma[2] : 0;
+  let onGrain = false;
   const us = new Float32Array(w);
   for (let x = 0; x < w; x++) us[x] = norm(x, w);
   const lut = F_LUT, lin = LIN;
@@ -1187,6 +1241,19 @@ export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayIma
         ba += corr[x * 3 + 1];
         bb += corr[x * 3 + 2];
       }
+      if (gLab) {
+        const gi = (Math.min(gh - 1, (y / gf) | 0) * gw + Math.min(gw - 1, (x / gf) | 0)) * 3;
+        const gL = gLab[gi];
+        onGrain = gL === gL;
+        if (onGrain) {
+          bL = gL;
+          ba = gLab[gi + 1];
+          bb = gLab[gi + 2];
+          isL = gisL; isa = gisa; isb = gisb;
+        } else {
+          isL = isL0; isa = isa0; isb = isb0;
+        }
+      }
       const dL = (L - bL) * isL, da = (A - ba) * isa, db = (B - bb) * isb;
       let d2 = wl * dL * dL + da * da + db * db;
       if (bL >= CLIP_TABLE_L && d[p] >= 254 && d[p + 1] >= 254 && d[p + 2] >= 254) {
@@ -1200,6 +1267,8 @@ export function foregroundScore(photo: RGBAImage, model: BackgroundFit): GrayIma
         const pen = pen0 * (1 - rho) + (raw < rhoDeep && bL >= DEEP_MIN_TABLE_L ? deep * (rhoDeep - raw) : 0);
         const s2 = wl * sL * sL + sa * sa + sb * sb + pen * pen;
         if (s2 < d2) d2 = s2;
+      } else if (onGrain && L > bL) {
+        d2 = Math.min(d2, brighterTable2(L, A, B, bL, ba, bb, isL, isa, isb));
       }
       o[row + x] = Math.sqrt(d2);
     }

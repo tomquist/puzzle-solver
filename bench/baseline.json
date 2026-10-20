@@ -613,6 +613,60 @@
         "neighborPrecision": 1,
         "neighborRecall": 1,
         "hiddenRate": 0
+      },
+      "starry-portrait-18-holes": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
+      },
+      "starry-portrait-18-lone-block": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 1,
+        "kindAccuracy": 1,
+        "top1": 0.5,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 0,
+        "assembledRecall": 0.5,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
+      },
+      "starry-portrait-18-woodgrain": {
+        "segRecall": 1,
+        "segPrecision": 1,
+        "shapeRate": 0.542,
+        "kindAccuracy": 0.944,
+        "top1": 1,
+        "top3": 1,
+        "rotationOk": 1,
+        "confidentPrecision": 1,
+        "fitPrecision": 1,
+        "fitRecall": 1,
+        "warnings": 0,
+        "assembledRecall": 1,
+        "assembledPrecision": 1,
+        "neighborPrecision": 1,
+        "neighborRecall": 1,
+        "hiddenRate": 0
       }
     },
     "box": {
@@ -730,10 +784,26 @@
         "objectClean": 1,
         "objectPrecision": 0.7
       },
+      "2026-10-20-haba-18-assembled-floor.json": {
+        "objectRecall": 1,
+        "objectClean": 1,
+        "objectPrecision": 1
+      },
+      "2026-10-20-haba-18-oak-grain.json": {
+        "falseRemoved": 1,
+        "objectRecall": 1,
+        "objectClean": 0.889,
+        "objectPrecision": 0.944
+      },
+      "2026-10-20-haba-18-two-holes-floor.json": {
+        "objectRecall": 1,
+        "objectClean": 1,
+        "objectPrecision": 0.75
+      },
       "flickr-chrisrycroft-birds-oak-partial.json": {
-        "objectRecall": 0.5,
-        "objectClean": 0.5,
-        "objectPrecision": 0.083
+        "objectRecall": 0.75,
+        "objectClean": 0.75,
+        "objectPrecision": 0.231
       },
       "flickr-electric-eye-oblique-wood-pieces.json": {
         "objectRecall": 1,
@@ -741,9 +811,9 @@
         "objectPrecision": 0.957
       },
       "flickr-electric-eye-sunlit-wood-pieces.json": {
-        "objectRecall": 0.219,
-        "objectClean": 0.156,
-        "objectPrecision": 0.067
+        "objectRecall": 0.438,
+        "objectClean": 0.313,
+        "objectPrecision": 0.144
       },
       "flickr-tatters-peacock-white-cloth-1000pc.json": {
         "objectRecall": 1,

@@ -102,17 +102,34 @@ const pitchMemo = new WeakMap<MatchInput['mask'], number | null>();
  * with a detected shape, e.g. a photo of one large assembled block). Undefined when the scan gives
  * a body size, the region is no patch, or the seams show no reliable period.
  */
-export function patchBodySize(input: MatchInput): number | undefined {
+export function patchBodySize(input: MatchInput, aspect = 1): number | undefined {
   if (input.kind !== 'patch' || input.shape || (input.expectedBodySize ?? 0) > 0) return undefined;
   let pitch = pitchMemo.get(input.mask);
   if (pitch === undefined) {
-    const est = estimatePatchPitch(input.image, input.mask, input.orientationDeg);
+    const est = estimatePatchPitch(input.image, input.mask, input.orientationDeg, aspect);
     let area = 0;
     for (let i = 0; i < input.mask.data.length; i++) area += input.mask.data[i];
     pitch = est && area >= PITCH_MIN_PIECES * est.pitch * est.pitch ? est.pitch : null;
     pitchMemo.set(input.mask, pitch);
   }
   return pitch ?? undefined;
+}
+
+/** Grids of at most this many cells: a patch without a size reference may be any of their sizes. */
+const SMALL_PUZZLE_CELLS = 64;
+
+/**
+ * Piece counts tried for a patch without a size reference: a few pieces (a patch of a large
+ * puzzle), and in a small puzzle every size up to the whole puzzle in steps of about 15 % in body
+ * size (its seams, only a few, may not show the size: a lone block of an 18-piece puzzle).
+ */
+export function patchCounts(grid: { rows: number; cols: number }): number[] {
+  const counts = [2, 3, 4, 6];
+  const cells = grid.rows * grid.cols;
+  if (cells > SMALL_PUZZLE_CELLS) return counts;
+  for (let n = 8; n < cells; n = Math.max(n + 1, Math.round(n * 1.32))) counts.push(n);
+  if (counts[counts.length - 1] < cells) counts.push(cells);
+  return counts.filter((n) => n <= cells);
 }
 
 /** Build the similarity hypotheses for a region (`pitch`: the patch's own body size estimate, if any). */
@@ -148,7 +165,7 @@ function makeHypotheses(index: ReferenceIndex, input: MatchInput, src: PhotoSour
   if (shape) bodySizes = [shape.bodySize];
   else if (input.expectedBodySize && input.expectedBodySize > 0) bodySizes = [input.expectedBodySize];
   // A patch without a size reference: a few pieces (by area), and the size its seams show.
-  else if (input.kind === 'patch') bodySizes = [...[2, 3, 4, 6].map((n) => Math.sqrt(src.area / n)), ...(pitch ? PITCH_SCALES.map((f) => f * pitch) : [])];
+  else if (input.kind === 'patch') bodySizes = [...patchCounts(index.grid).map((n) => Math.sqrt(src.area / n)), ...(pitch ? PITCH_SCALES.map((f) => f * pitch) : [])];
   else {
     const b = Math.sqrt(src.area);
     bodySizes = [b * 0.88, b, b * 1.12];
@@ -559,7 +576,7 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   const empty: MatchDetail = { match: { regionId: input.regionId, candidates: [], status: 'unmatched' } };
   // Body size estimate for the erosion radius and the seams. Without a scan-level size reference a
   // patch measures its own pieces (the square root of its area would be the size of the whole patch).
-  const pitch = patchBodySize(input);
+  const pitch = patchBodySize(input, index.cellW / index.cellH);
   const roughBody = input.shape?.bodySize ?? input.expectedBodySize ?? pitch ?? Math.sqrt(Math.max(1, input.mask.data.reduce((s, v) => s + v, 0)));
   const erode = Math.max(2, Math.round(roughBody * 0.045));
   // Assembled patches: ignore the seams and gaps between their pieces (not in the printed picture).
@@ -688,7 +705,7 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
 export function scorePlacement(index: ReferenceIndex, input: MatchInput, detail: MatchDetail, cell: CellRef, rotationDeg: number, opts: MatchOptions = {}): Placement | null {
   if (!detail.src || !detail.params) return null;
   const sp = detail.params;
-  const { hyps } = makeHypotheses(index, input, detail.src, patchBodySize(input));
+  const { hyps } = makeHypotheses(index, input, detail.src, patchBodySize(input, index.cellW / index.cellH));
   const cache = new TemplateCache(detail.src);
   const L = index.levels.length;
   const ci = Math.max(0, index.levels.findIndex((l) => l.prefix && l.ppc >= 6));
@@ -796,7 +813,7 @@ function coveredCellsOf(index: ReferenceIndex, input: MatchInput, c: Candidate):
     return ix >= 0 && iy >= 0 && ix < m.width && iy < m.height && m.data[iy * m.width + ix] === 1;
   };
   // Reference-space extent of the region.
-  const ext = Math.hypot(m.width, m.height) / s;
+  const ext = Math.hypot(m.width, m.height) * s;
   const r0 = Math.max(0, Math.floor((c.ref.y - ext) / cellH)), r1 = Math.min(index.grid.rows - 1, Math.ceil((c.ref.y + ext) / cellH));
   const c0 = Math.max(0, Math.floor((c.ref.x - ext) / cellW)), c1 = Math.min(index.grid.cols - 1, Math.ceil((c.ref.x + ext) / cellW));
   const out: CellRef[] = [];

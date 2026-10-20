@@ -1,0 +1,12 @@
+{
+  "reviewed": "2026-10-20",
+  "marks": {
+    "1": { "verdict": "wrong", "note": "the blue fairy / lantern piece is placed right (r2c1, the left-hand hole) and turned right (64 deg); the wrong patch placement (rows 1-4 only, so it seemed to cover r2c1 already) made the place look wrong" },
+    "2": { "verdict": "wrong", "note": "the pink-dress piece is placed right (r4c1, the lower hole) and turned right (38 deg); same cause as M1" }
+  },
+  "objects": [
+    { "x": 560, "y": 1000, "note": "the puzzle assembled but for two pieces (holes at r2c1 and r4c1), turned ~12 deg" },
+    { "x": 1472, "y": 1372, "note": "blue fairy and lantern" },
+    { "x": 276, "y": 1455, "note": "pink dress" }
+  ]
+}

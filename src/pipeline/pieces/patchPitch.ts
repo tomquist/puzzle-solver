@@ -44,10 +44,11 @@ function combStrength(prof: Float64Array, p: number): number {
 /**
  * Estimate the body size of an assembled patch from the periodicity of its seams (see module
  * documentation). `angleDeg` is the patch's grid orientation in the photo (clockwise from +x; any
- * multiple of 90° gives the same result). Returns null for patches too small to show a few seams
- * in both directions.
+ * multiple of 90° gives the same result); `aspect` the cells' width over height in the picture
+ * (1: square). The size is the geometric mean of the two seam spacings (√(cell area) on the
+ * photo). Returns null for patches too small to show a few seams in both directions.
  */
-export function estimatePatchPitch(image: RGBAImage, mask: Mask, angleDeg: number): PatchPitch | null {
+export function estimatePatchPitch(image: RGBAImage, mask: Mask, angleDeg: number, aspect = 1): PatchPitch | null {
   const { width: w, height: h } = image;
   const a = (angleDeg * Math.PI) / 180, ca = Math.cos(a), sa = Math.sin(a);
   let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity, area = 0;
@@ -105,23 +106,31 @@ export function estimatePatchPitch(image: RGBAImage, mask: Mask, angleDeg: numbe
     pu[bu[i]] += ru[i] - mu;
     pv[bv[i]] += rv[i] - mv;
   }
-  // Comb strength of both directions together at period p (memoised on the scan grid).
-  const memo = new Map<number, number>();
-  const comb = (p: number): number => {
-    const key = Math.round(p * 1000);
+  // Comb strength of both directions together at size p (memoised on the scan grid). Cells
+  // `aspect` times wider than tall have seams √aspect·p apart one way and p/√aspect the other;
+  // which way the photo's u axis runs is open, so both are tried.
+  const memo = new Map<string, number>();
+  const one = (prof: Float64Array, dir: number, p: number): number => {
+    const key = `${dir}:${Math.round(p * 1000)}`;
     let s = memo.get(key);
     if (s === undefined) {
-      s = Math.sqrt(combStrength(pu, p) * combStrength(pv, p));
+      s = combStrength(prof, p);
       memo.set(key, s);
     }
     return s;
   };
+  const ratios = aspect === 1 ? [1] : [Math.sqrt(aspect), 1 / Math.sqrt(aspect)];
+  const comb = (p: number, r: number): number => Math.sqrt(one(pu, 0, p * r) * one(pv, 1, p / r));
   const pitches: number[] = [], score: number[] = [];
   for (let p = pMin; p <= pMax; p *= PITCH_STEP) {
-    let s = 0;
-    for (let k = 1; k <= HARMONICS; k++) s += comb(p / k);
+    let best = 0;
+    for (const r of ratios) {
+      let s = 0;
+      for (let k = 1; k <= HARMONICS; k++) s += comb(p / k, r);
+      best = Math.max(best, s);
+    }
     pitches.push(p);
-    score.push(s / HARMONICS);
+    score.push(best / HARMONICS);
   }
   let best = 0;
   for (let i = 1; i < score.length; i++) if (score[i] > score[best]) best = i;

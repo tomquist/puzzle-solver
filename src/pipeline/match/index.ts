@@ -14,4 +14,5 @@ export { enforceConsistency, impliedPlacement, type ConsistencyChange, type Cons
 export { sampleEdgeStrips, type EdgeStrips } from './edgeStrips';
 export { dtwDistance, profileMismatchDtw, stripMismatch } from './sideCompare';
 export { buildGroups, type GroupOptions } from './groups';
+export { placeByElimination, resolveCellClaims, type CellClaimChange, type EliminationChange } from './claims';
 export type { MatchInput, MatchOptions, ReferenceIndex, RefLevel } from './types';

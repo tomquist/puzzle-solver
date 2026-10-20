@@ -18,6 +18,7 @@
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import type { RGBAImage } from '../src/cv/image';
+import { resizeRGBA } from '../src/cv/resize';
 import { rectifyQuad } from '../src/cv/warp';
 import { analyzeScan, DEFAULT_SIDE_COMPARISON } from '../src/pipeline/analyzeScan';
 import { detectBox, suggestRectifiedSize } from '../src/pipeline/box';
@@ -40,6 +41,8 @@ interface Scenario {
   clean?: boolean;
   /** Recolour the painting (reference and pieces alike), e.g. part of it in dark wood tones. */
   tone?: (img: RGBAImage) => RGBAImage;
+  /** Reference resolution relative to the painting (a high-resolution box picture: cells much larger than the pieces on the photo). */
+  referenceScale?: number;
 }
 
 const gain = (rng: Rng, spread: number): RGB => [rng.uniform(1 - spread, 1 + spread), rng.uniform(1 - spread, 1 + spread), rng.uniform(1 - spread, 1 + spread)];
@@ -86,6 +89,14 @@ function greyLowerPart(img: RGBAImage, grey: RGB, detail = 0.2): RGBAImage {
       for (let c = 0; c < 3; c++) out.data[i + c] = d[i + c] * (1 - t) + t * grey[c] * (1 + detail * (l - 0.4));
     }
   }
+  return out;
+}
+
+/** The painting's middle as a portrait picture (aspect 0.79, as a 2378 × 3000 box picture). */
+function portraitCrop(img: RGBAImage): RGBAImage {
+  const w = Math.round(0.79 * img.height), x0 = Math.round((img.width - w) / 2);
+  const out = { width: w, height: img.height, data: new Uint8ClampedArray(w * img.height * 4) };
+  for (let y = 0; y < img.height; y++) out.data.set(img.data.subarray((y * img.width + x0) * 4, (y * img.width + x0 + w) * 4), y * w * 4);
   return out;
 }
 
@@ -294,6 +305,33 @@ const SCENARIOS: Scenario[] = [
     painting: 'starry-night', grid: { rows: 16, cols: 20 }, items: { singles: 0, blocks: [{ rows: 8, cols: 7, missing: 11 }] }, seeds: [38, 39],
     render: (rng) => ({ ...standard(rng), background: [196, 208, 218], illumination: 0.15, rotation: rng.uniform(25, 35) + 180 * rng.int(2) }),
   },
+  // From real feedback (an 18-piece children's puzzle, 6 rows × 3 columns of a portrait picture:
+  // cells 1.6× wider than tall, pieces ~3× a 1000-piece puzzle's on the photo): the puzzle
+  // assembled but for two pieces taken out of its middle, which lie beside it. The block covers
+  // its 16 cells, not the holes, and the loose pieces fit into the holes. The box picture's cells are
+  // ~2.4× the pieces' size on the photo (as in the user's photos).
+  {
+    name: 'starry-portrait-18-holes',
+    painting: 'starry-night', grid: { rows: 6, cols: 3 }, seeds: [40, 41], tone: portraitCrop, referenceScale: 1.6,
+    items: { singles: 0, blocks: [{ rows: 6, cols: 3, missing: 0, holes: 2 }] },
+    render: (rng) => ({ ...standard(rng), background: [200, 196, 190], illumination: 0.15, scale: 0.5, rim: {}, shadow: 0.35, shadowOffset: [5, 4], shadowBlur: 3 }),
+  },
+  // The same puzzle as one block (two pieces off its outline) and nothing else: no loose piece gives
+  // the piece size, so the block measures it from its own seams, whose spacing differs by 1.6×
+  // between the two directions.
+  {
+    name: 'starry-portrait-18-lone-block',
+    painting: 'starry-night', grid: { rows: 6, cols: 3 }, seeds: [44, 45], tone: portraitCrop, referenceScale: 1.6,
+    items: { singles: 0, blocks: [{ rows: 6, cols: 3, missing: 2 }] },
+    render: (rng) => ({ ...standard(rng), background: [196, 208, 218], illumination: 0.15, scale: 0.5, rotation: rng.uniform(-20, 20) }),
+  },
+  // The same puzzle's pieces loose on grained wood (thick cardboard with a rim and a cast shadow).
+  {
+    name: 'starry-portrait-18-woodgrain',
+    painting: 'starry-night', grid: { rows: 6, cols: 3 }, seeds: [42, 43], tone: portraitCrop, referenceScale: 1.6,
+    items: { singles: 12 },
+    render: (rng) => ({ ...standard(rng), background: [150, 108, 70], pattern: { kind: 'wood' }, illumination: 0.15, scale: 0.5, rim: {}, shadow: 0.35, shadowOffset: [5, 4], shadowBlur: 3 }),
+  },
 ];
 
 const COLUMNS = [
@@ -317,7 +355,7 @@ const source = (s: Scenario) => {
 
 /** The reference the app would build: the painting itself, or the rectified box photo. */
 function makeReference(s: Scenario, seed: number): RGBAImage {
-  const src = source(s);
+  const src = s.referenceScale ? resizeRGBA(source(s), source(s).width * s.referenceScale, source(s).height * s.referenceScale) : source(s);
   if (!s.viaBoxPhoto) return perturbReference(src, { seed });
   const box = renderBoxPhoto(perturbReference(src, { seed }), { seed, width: 2000, height: 1500 });
   const detection = detectBox(box.photo);
