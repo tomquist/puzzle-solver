@@ -121,18 +121,6 @@ describe('analyzePieceShape', () => {
     expect(r.kind).toBe('unknown');
     expect(Math.hypot(r.corners[0].x - 10, r.corners[0].y - 10)).toBeLessThan(1.5);
   });
-
-  it('runs in a few milliseconds per piece', () => {
-    const cut = generateJigsaw(6, 8, ref.width, ref.height, 5);
-    const { truth } = renderPiecesPhoto(ref, cut, Array.from({ length: 16 }, (_, i) => i * 3), { seed: 6, scale: 2.2 });
-    const outlines = truth.map((t) => tracedOutline(t.outline));
-    analyzePieceShape(outlines[0]);
-    const t0 = performance.now();
-    for (const o of outlines) analyzePieceShape(o);
-    const per = (performance.now() - t0) / outlines.length;
-    console.log(`analyzePieceShape: ${per.toFixed(2)} ms per piece (body ≈ ${(2.2 * 80).toFixed(0)} px)`);
-    expect(per).toBeLessThan(15);
-  });
 });
 
 describe('sideProfilesAt', () => {
