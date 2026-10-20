@@ -693,6 +693,20 @@
         "objectClean": 0.833,
         "objectPrecision": 1
       },
+      "2026-10-20-blue-table-block-50pc-1500pc.json": {
+        "falseRemoved": 0,
+        "objectRecall": 1,
+        "objectClean": 1,
+        "objectPrecision": 0.333
+      },
+      "2026-10-20-blue-table-exploded-45-1500pc.json": {
+        "objectRecall": 1,
+        "objectClean": 1,
+        "objectPrecision": 1
+      },
+      "2026-10-20-blue-table-half-exploded-1500pc.json": {
+        "falseRemoved": 0.4
+      },
       "flickr-chrisrycroft-birds-oak-partial.json": {
         "objectRecall": 0.5,
         "objectClean": 0.5,
