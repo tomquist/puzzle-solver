@@ -113,8 +113,14 @@ export function CameraCapture({
   const { ios, coarse } = usePlatform();
   const tips = TIPS[context];
   const sessionRef = useRef<CameraSession | undefined>(undefined);
+  /**
+   * Bumped by every start and stop, and on unmount: a camera that finishes opening after the user
+   * stopped it or left the screen is closed right away instead of staying on unseen.
+   */
+  const generation = useRef(0);
 
   const stop = useCallback(() => {
+    generation.current++;
     sessionRef.current?.stop();
     sessionRef.current = undefined;
     setCam({ kind: 'off' });
@@ -123,20 +129,56 @@ export function CameraCapture({
   }, []);
 
   const start = useCallback(async () => {
+    const gen = ++generation.current;
     setCam({ kind: 'starting' });
     try {
       const session = await openCamera();
+      if (gen !== generation.current) {
+        session.stop();
+        return;
+      }
       sessionRef.current?.stop();
       sessionRef.current = session;
       setCam({ kind: 'live', session });
     } catch (e) {
+      if (gen !== generation.current) return;
       const message = e instanceof CameraError ? e.message : CAMERA_ERROR_TEXT.unknown;
       setCam({ kind: 'error', message });
     }
   }, []);
 
-  // Stop the tracks when leaving the screen.
-  useEffect(() => () => sessionRef.current?.stop(), []);
+  // Stop the tracks when leaving the screen (also a camera still opening).
+  useEffect(
+    () => () => {
+      generation.current++;
+      sessionRef.current?.stop();
+      sessionRef.current = undefined;
+    },
+    [],
+  );
+
+  // A hidden page (another browser tab, the app in the background, the phone locked) keeps no
+  // camera on: stop it, and open it again when the page comes back if it was on.
+  const resume = useRef(false);
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        if (sessionRef.current || cam.kind === 'starting') {
+          resume.current = true;
+          stop();
+        }
+      } else if (resume.current) {
+        resume.current = false;
+        void start();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', onVisibility);
+    };
+  }, [cam.kind, start, stop]);
 
   // Auto-start only when the user already allowed the camera (never prompt unexpectedly), and not
   // on iOS where the native camera gives better photos.
