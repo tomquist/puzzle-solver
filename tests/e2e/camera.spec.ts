@@ -49,3 +49,50 @@ test('camera tips: "Don’t show again" is remembered, Tips brings them back', a
   await expect(page.locator('video.camera-video')).toBeVisible();
   await expect(tips).toBeVisible();
 });
+
+/** Count the camera tracks that are still running (getUserMedia wrapped to remember its streams). */
+async function trackStreams(page: import('@playwright/test').Page, delayMs = 0) {
+  await page.addInitScript((delay) => {
+    const streams: MediaStream[] = [];
+    (window as unknown as { __streams: MediaStream[] }).__streams = streams;
+    const original = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    navigator.mediaDevices.getUserMedia = async (c) => {
+      const s = await original(c);
+      streams.push(s);
+      if (delay) await new Promise((r) => setTimeout(r, delay));
+      return s;
+    };
+  }, delayMs);
+  return () => page.evaluate(() => (window as unknown as { __streams: MediaStream[] }).__streams.flatMap((s) => s.getTracks()).filter((t) => t.readyState === 'live').length);
+}
+
+async function setHidden(page: import('@playwright/test').Page, hidden: boolean) {
+  await page.evaluate((h) => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (h ? 'hidden' : 'visible') });
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => h });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, hidden);
+}
+
+test('the camera turns off while the page is hidden and comes back with it', async ({ page }) => {
+  const live = await trackStreams(page);
+  await page.goto('/?pipeline=mock#/new');
+  await expect(page.locator('video.camera-video')).toBeVisible();
+  expect(await live()).toBe(1);
+  await setHidden(page, true); // another tab, the app in the background, the phone locked
+  await expect.poll(live).toBe(0);
+  await setHidden(page, false);
+  await expect(page.locator('video.camera-video')).toBeVisible();
+  await expect.poll(live).toBe(1);
+});
+
+test('the camera turns off when leaving the screen, also while it is still opening', async ({ page }) => {
+  const live = await trackStreams(page, 1500);
+  await page.goto('/?pipeline=mock#/new');
+  await expect(page.getByTestId('wizard-photo')).toBeVisible();
+  // Leave before the (slowed) camera has opened.
+  await page.evaluate(() => (location.hash = '#/'));
+  await expect(page.getByRole('heading', { name: 'Find where every piece goes' })).toBeVisible();
+  await page.waitForTimeout(2500);
+  expect(await live()).toBe(0);
+});
