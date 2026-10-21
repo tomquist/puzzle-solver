@@ -19,6 +19,7 @@ export default defineConfig({
   plugins: [react()],
   define: {
     __APP_VERSION__: JSON.stringify(appVersion()),
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
   },
   worker: {
     format: 'es',

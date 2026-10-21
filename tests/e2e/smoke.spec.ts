@@ -16,6 +16,8 @@ test('create a puzzle, scan pieces, see results, and find it again after reload'
   // Home: empty state.
   await page.goto('/?pipeline=mock');
   await expect(page.getByRole('heading', { name: 'Find where every piece goes' })).toBeVisible();
+  // The running build and when it was made (Home; also at the foot of Settings).
+  await expect(page.getByTestId('app-version')).toHaveText(/^Version \S+ · built .+\d/);
   await shot(page, info, '01-home-empty');
 
   // Wizard step 1: box photo via the file input.

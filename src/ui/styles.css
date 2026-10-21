@@ -4197,3 +4197,9 @@ body:has(.selection-bar) .snackbar {
   stroke-width: calc(var(--u, 1px) * 2);
   vector-effect: non-scaling-stroke;
 }
+
+/* The running build, at the foot of Home and Settings. */
+.app-version {
+  margin-top: 24px;
+  text-align: center;
+}
