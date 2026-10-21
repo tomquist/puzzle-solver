@@ -50,6 +50,12 @@ to be analysed. Everything runs locally in the browser – no server, no upload.
    rotations, offset by the touching cells' grid step along the anchor's axes, per-axis cell size
    from the box picture's cell aspect), clicks in at the seam, holds and fades back (`FitAnimation`:
    Web Animations transforms, paused while the view moves; reduced motion: a static docked ghost).
+   A group's cells are placed in the photo from anchors (`ui/lib/cellSpots.ts`: a member piece's
+   body centre at its cell; a patch's outline centre where the matcher put it, stepping by the
+   scan's median piece size – the outline's area per cell counts its rim's tabs and holes, and
+   its centre is not its cells' middle), and the touching cell is moved onto the patch's real rim
+   (`rimPoint`: rays across the joining side find its edge and its tab or blank), so a piece
+   docks against the patch even at its far edge; the connection line ends at the same point.
    The details sheet adds the box
    picture around the target, the piece type (corner/edge/interior), the rotation needed and the
    other candidates. The reference shows numbered markers at the matched locations. Photo and

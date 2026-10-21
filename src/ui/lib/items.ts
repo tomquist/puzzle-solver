@@ -31,6 +31,18 @@ export interface ItemPlacement {
   /** Clockwise rotation from photo to upright (ARCHITECTURE §3); undefined when unknown. */
   rotationDeg?: number;
   confidence: number;
+  /** Photo points whose spot in the box is known (where the item's cells lie: cellSpots). */
+  anchors?: PlacementAnchor[];
+}
+
+/** A member's photo centre and where it goes: a piece's cell, or where the matcher put a patch. */
+export interface PlacementAnchor {
+  /** A piece's body centre, a patch's outline centre. */
+  at: Point;
+  cell?: CellRef;
+  /** Reference px (patches). */
+  x?: number;
+  y?: number;
 }
 
 export interface ScanItem {
@@ -151,6 +163,13 @@ export function buildScanItems(result: ScanResult, grid: GridSpec): ScanItems {
     members.forEach((m) => consumed.add(m.id));
     if (g.confidence < MIN_GROUP_CONFIDENCE || g.cells.length === 0) continue;
     const firstMatch = matchFor(result, members[0].id);
+    const inGroup = new Set(g.cells.map(cellKey));
+    const anchors = members.flatMap((m): PlacementAnchor[] => {
+      const c = matchFor(result, m.id)?.candidates[0];
+      if (!c) return [];
+      if (m.kind !== 'piece') return [{ at: regionCenter(m), x: c.x, y: c.y }];
+      return inGroup.has(cellKey(c)) ? [{ at: regionCenter(m), cell: { row: c.row, col: c.col } }] : [];
+    });
     const item: ScanItem = {
       key: `g${g.id}`,
       kind: 'assembled',
@@ -166,6 +185,7 @@ export function buildScanItems(result: ScanResult, grid: GridSpec): ScanItems {
           y: g.y,
           rotationDeg: g.rotationDeg ?? firstMatch?.candidates[0]?.rotationDeg,
           confidence: g.confidence,
+          anchors,
         },
       ],
       center: members.length === 1 ? regionCenter(members[0]) : meanCenter(members),
@@ -188,7 +208,8 @@ export function buildScanItems(result: ScanResult, grid: GridSpec): ScanItems {
     const match = m!;
     const candidates: ItemPlacement[] = match.candidates.map((p) => {
       const cells = cellsForPlacement(match, p);
-      return { cells, bounds: boundsOf(cells), x: p.x, y: p.y, rotationDeg: p.rotationDeg, confidence: p.confidence };
+      const anchor: PlacementAnchor = r.kind === 'piece' ? { at: regionCenter(r), cell: cells[0] } : { at: regionCenter(r), x: p.x, y: p.y };
+      return { cells, bounds: boundsOf(cells), x: p.x, y: p.y, rotationDeg: p.rotationDeg, confidence: p.confidence, anchors: [anchor] };
     });
     const status: ItemStatus = match.status === 'confident' ? 'confident' : 'ambiguous';
     const item: ScanItem = {

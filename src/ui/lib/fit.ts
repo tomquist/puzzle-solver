@@ -6,26 +6,22 @@
  * Conventions: `rotationDeg` is the clockwise turn from the photo to upright (ARCHITECTURE §3); an
  * item's puzzle axes in the photo are sideVector('right' / 'bottom', rotationDeg). One grid step
  * along the puzzle's columns is `w` photo px, along its rows `h` (cells need not be square: the
- * box picture's cell aspect decides, at the item's piece size).
+ * box picture's cell aspect decides, at the item's piece size). Where an item's cells lie in the
+ * photo – from its member pieces, where the matcher put a patch, and a patch's real rim at the
+ * joining side – is cellSpots' part.
  */
 import type { Point } from '../../cv/geometry';
 import type { CellRef, PuzzleSide } from '../../model/types';
+import { cellAxes, cellPoint, rimPoint, type CellItem } from './cellSpots';
 import { sideVector } from './overlay';
 import { signedDeg, turnedWords } from './rotation';
 import { bezierPoint, type Route } from './route';
 
-export interface FitItem {
+export interface FitItem extends CellItem {
   key: string;
   label: number | string;
   /** Pieces in the item (an assembled group > 1): the smaller one moves. */
   pieces: number;
-  /** Photo centre: the piece's body centre, a group's mean member centre (≈ the mean of its cells). */
-  center: Point;
-  /** Its cells in the finished puzzle. */
-  cells: CellRef[];
-  rotationDeg: number;
-  /** One piece's size in the photo (body size; a group's cell size). */
-  cellPx: number;
 }
 
 export interface FitPose {
@@ -48,23 +44,7 @@ export interface FitPose {
   seam?: { center: Point; along: Point; length: number };
 }
 
-/** Cell width and height in photo px for a piece size (mean side) and a cell aspect w / h. */
-export function cellAxes(cellPx: number, aspect: number): { w: number; h: number } {
-  const r = aspect > 0 && Number.isFinite(aspect) ? aspect : 1;
-  return { w: (cellPx * 2 * r) / (1 + r), h: (cellPx * 2) / (1 + r) };
-}
-
-/** Photo centre of one of an item's cells (offset from its centre along its puzzle axes). */
-export function cellPoint(item: FitItem, cell: CellRef, aspect: number): Point {
-  const { w, h } = cellAxes(item.cellPx, aspect);
-  const meanRow = item.cells.reduce((s, c) => s + c.row, 0) / item.cells.length;
-  const meanCol = item.cells.reduce((s, c) => s + c.col, 0) / item.cells.length;
-  const right = sideVector('right', item.rotationDeg);
-  const down = sideVector('bottom', item.rotationDeg);
-  const dc = (cell.col - meanCol) * w;
-  const dr = (cell.row - meanRow) * h;
-  return { x: item.center.x + right.x * dc + down.x * dr, y: item.center.y + right.y * dc + down.y * dr };
-}
+export { cellAxes, cellPoint };
 
 /** The closest pair of cells of two items (grid distance; ties: the first in reading order). */
 export function touchingCells(a: CellRef[], b: CellRef[]): [CellRef, CellRef] {
@@ -83,6 +63,7 @@ export function touchingCells(a: CellRef[], b: CellRef[]): [CellRef, CellRef] {
 }
 
 const SIDES: Record<string, PuzzleSide> = { '0,1': 'right', '0,-1': 'left', '1,0': 'bottom', '-1,0': 'top' };
+const OPPOSITE: Record<PuzzleSide, PuzzleSide> = { top: 'bottom', right: 'left', bottom: 'top', left: 'right' };
 
 /**
  * The fit of `a` and `b` (see the file comment). The smaller item moves (b on a tie): it turns by
@@ -96,15 +77,16 @@ export function fitPose(a: FitItem, b: FitItem, aspect: number): FitPose | undef
   const m = mover === 'b' ? b : a;
   const anchor = mover === 'b' ? a : b;
   const [anchorCell, moverCell] = touchingCells(anchor.cells, m.cells);
-  const anchorPoint = cellPoint(anchor, anchorCell, aspect);
-  const pivot = cellPoint(m, moverCell, aspect);
+  const dc = moverCell.col - anchorCell.col;
+  const dr = moverCell.row - anchorCell.row;
+  const side = SIDES[`${dr},${dc}`];
+  // The touching cells, on the items' real rims where they join.
+  const anchorPoint = side ? rimPoint(anchor, anchorCell, side, aspect) : cellPoint(anchor, anchorCell, aspect);
+  const pivot = side ? rimPoint(m, moverCell, OPPOSITE[side], aspect) : cellPoint(m, moverCell, aspect);
   const { w, h } = cellAxes(anchor.cellPx, aspect);
   const right = sideVector('right', anchor.rotationDeg);
   const down = sideVector('bottom', anchor.rotationDeg);
-  const dc = moverCell.col - anchorCell.col;
-  const dr = moverCell.row - anchorCell.row;
   const docked = { x: anchorPoint.x + right.x * dc * w + down.x * dr * h, y: anchorPoint.y + right.y * dc * w + down.y * dr * h };
-  const side = SIDES[`${dr},${dc}`];
   const seam = side
     ? {
         center: { x: (anchorPoint.x + docked.x) / 2, y: (anchorPoint.y + docked.y) / 2 },

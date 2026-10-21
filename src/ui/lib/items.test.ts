@@ -105,6 +105,14 @@ describe('assembled groups', () => {
     expect(itemCounts(r.items)).toEqual({ items: 3, pieces: 5, assembled: 2, unsure: 2 });
   });
 
+  it('anchors placements where their members go (pieces at their cell, patches where matched)', () => {
+    // Group 1: region 2 is matched at (1, 1); region 1 has no match, so no anchor.
+    expect(r.items.find((i) => i.key === 'g1')!.candidates[0].anchors).toEqual([{ at: { x: 225, y: 25 }, cell: { row: 1, col: 1 } }]);
+    // Group 2: the patch's outline centre and where the matcher put it (not the cells' middle).
+    expect(r.items.find((i) => i.key === 'g2')!.candidates[0].anchors).toEqual([{ at: { x: 425, y: 25 }, x: 65, y: 65 }]);
+    expect(r.items.find((i) => i.key === 'r3')!.candidates[0].anchors).toEqual([{ at: { x: 325, y: 25 }, cell: { row: 5, col: 5 } }]);
+  });
+
   it('treats patches of older scans (no groups) as assembled items', () => {
     const old = buildScanItems({ ...result, groups: undefined }, grid);
     const p = old.items.find((i) => i.key === 'r4')!;
