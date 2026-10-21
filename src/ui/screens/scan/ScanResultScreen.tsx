@@ -651,6 +651,7 @@ function SelectionBar({
   onClear: () => void;
 }) {
   const where = placement ? cellsText(placement) : 'No place left';
+  const fitKeys = connections.flatMap((t) => ('key' in t && canFit(t.key) ? [{ key: t.key, label: t.label }] : []));
   const turn = placement?.rotationDeg !== undefined ? turnInstruction(placement.rotationDeg).text : undefined;
   return (
     <div className={variant === 'bar' ? 'action-bar selection-bar' : 'selection-bar overlay'} data-testid="selection-bar" role="region" aria-label={`Selected: ${itemTitle(item)}`}>
@@ -670,35 +671,18 @@ function SelectionBar({
                   'text' in t ? (
                     <span key={i}>{t.text}</span>
                   ) : (
-                    <span key={i} className="mention-wrap">
-                      <button
-                        className="mention"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onSelectKey(t.key);
-                        }}
-                        aria-label={`Select #${t.label}`}
-                        data-testid={`mention-${t.key}`}
-                      >
-                        #{t.label}
-                      </button>
-                      {canFit(t.key) && (
-                        <button
-                          className="fit-play"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onFit(t.key);
-                          }}
-                          aria-label={`Show how #${t.label} fits`}
-                          aria-pressed={fitKey === t.key}
-                          data-testid={`fit-play-${t.key}`}
-                        >
-                          <svg viewBox="0 0 10 10" aria-hidden="true">
-                            <path d="M1.5 0.8 9 5 1.5 9.2Z" />
-                          </svg>
-                        </button>
-                      )}
-                    </span>
+                    <button
+                      key={i}
+                      className="mention"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSelectKey(t.key);
+                      }}
+                      aria-label={`Select #${t.label}`}
+                      data-testid={`mention-${t.key}`}
+                    >
+                      #{t.label}
+                    </button>
                   ),
                 )}
                 {beyond > 0 && (
@@ -729,6 +713,26 @@ function SelectionBar({
           <IconClose />
         </button>
       </div>
+      {/* "Show the fit": one big button per connection, in a row that scrolls sideways when they
+          don't fit (the card stays one row taller at most). */}
+      {fitKeys.length > 0 && (
+        <div className="fit-row" role="group" aria-label="Show how they fit" data-testid="fit-row">
+          {fitKeys.map((c) => (
+            <button
+              key={c.key}
+              className={`fit-pill${fitKey === c.key ? ' on' : ''}`}
+              onClick={() => onFit(c.key)}
+              aria-pressed={fitKey === c.key}
+              data-testid={`fit-play-${c.key}`}
+            >
+              <svg viewBox="0 0 10 10" aria-hidden="true">
+                <path d="M1.5 0.8 9 5 1.5 9.2Z" />
+              </svg>
+              Show fit with #{c.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

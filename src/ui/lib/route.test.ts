@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Point } from '../../cv/geometry';
 import { sideVector } from './overlay';
-import { insideBox, routeLink, sampleRoute, type BodyBox, type RouteEnd } from './route';
+import { doublesBack, insideBox, insidePolygon, polylineLength, routeLink, sampleRoute, type BodyBox, type RouteEnd } from './route';
 
 /** A square piece of body size 40 at `c`, needing `rot` to be upright, joining on `side`. */
 function piece(c: Point, rot: number, side: 'top' | 'right' | 'bottom' | 'left'): RouteEnd & { box: BodyBox } {
@@ -50,6 +50,50 @@ describe('routed connection lines', () => {
     staysOut(piece({ x: 0, y: 0 }, 90, 'right'), piece({ x: 200, y: 30 }, 0, 'left'));
     // Close together, B's joining side facing away.
     staysOut(piece({ x: 0, y: 0 }, 0, 'right'), piece({ x: 70, y: 10 }, 180, 'left'));
+  });
+
+  it('never doubles back: ends facing away from each other, a short gap', () => {
+    // Both joining sides face away: the line has to go round, but as one wide arc.
+    const a = piece({ x: 0, y: 0 }, 0, 'left');
+    const b = piece({ x: 150, y: 0 }, 0, 'right');
+    const r = staysOut(a, b);
+    const pts = sampleRoute(r, 32);
+    expect(doublesBack(pts, 14)).toBe(false);
+    expect(polylineLength(pts) / Math.hypot(r.to.x - r.from.x, r.to.y - r.from.y)).toBeLessThan(3);
+  });
+
+  it('no hairpin for a small patch lying in a notch of a big one (a real scan)', () => {
+    // #8 (a small patch, turned 118°) joins the left side of #10 (a big patch); #8 lies in a notch of
+    // #10's cell block, so the block box overlaps it – only the real outline tells them apart.
+    const a: RouteEnd & { box: BodyBox } = {
+      center: { x: 759, y: 1084 },
+      reach: 87,
+      dir: { x: 0.47, y: 0.88 },
+      size: 174,
+      box: { center: { x: 759, y: 1084 }, right: { x: -0.47, y: -0.88 }, down: { x: 0.88, y: -0.47 }, halfW: 87, halfH: 87 },
+    };
+    const outline = [
+      { x: 1106, y: 640 },
+      { x: 1660, y: 640 },
+      { x: 1660, y: 1860 },
+      { x: 1106, y: 1860 },
+    ];
+    const b: RouteEnd & { box: BodyBox } = {
+      center: { x: 1174, y: 1120 },
+      reach: 68,
+      dir: { x: -0.997, y: 0.078 },
+      size: 136,
+      box: { center: { x: 1252, y: 1250 }, right: { x: -0.997, y: 0.078 }, down: { x: -0.078, y: -0.997 }, halfW: 407, halfH: 611, outlines: [outline] },
+    };
+    const r = routeLink(a, b)!;
+    const pts = sampleRoute(r, 32);
+    const straight = Math.hypot(r.to.x - r.from.x, r.to.y - r.from.y);
+    expect(doublesBack(pts, 50)).toBe(false);
+    expect(polylineLength(pts) / straight).toBeLessThan(1.5);
+    expect(pts.filter((p) => insideBox(p, a.box, 1))).toEqual([]);
+    // Never climbs far above the two ends (the old route went up past a third piece).
+    expect(Math.min(...pts.map((p) => p.y))).toBeGreaterThan(Math.min(r.from.y, r.to.y) - 120);
+    expect(pts.slice(4, -4).filter((p) => insidePolygon(p, outline))).toEqual([]);
   });
 
   it('keeps the path direction from a to b (the flow follows it)', () => {

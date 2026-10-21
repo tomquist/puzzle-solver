@@ -2721,9 +2721,6 @@ canvas.crop {
   box-shadow: 0 0 0 calc(var(--u, 1px) * 1.5) rgba(0, 0, 0, 0.6), 0 0 calc(var(--u, 1px) * 10) var(--sel);
   will-change: transform, opacity;
 }
-.mention-wrap {
-  white-space: nowrap;
-}
 /* While a fit is shown, everything but the two items and their line steps back. */
 .scan-overlay.fitting .link:not(.fit-link),
 .scan-overlay.fitting .label:not(.fit-end) {
@@ -2733,36 +2730,51 @@ canvas.crop {
 .scan-overlay.fitting .ring {
   opacity: 0;
 }
-/* ▶ next to a connection in the selection card. */
-.fit-play {
-  position: relative;
-  display: inline-grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  margin: 0 4px 0 6px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  background: var(--accent);
-  color: var(--accent-ink);
-  vertical-align: -4px;
+/* "Show the fit" buttons under the selection card: big pills, one per connection, scrolling
+   sideways when there are more than fit. */
+.fit-row {
+  display: flex;
+  gap: 8px;
+  max-width: 680px;
+  margin: 8px auto 0;
+  padding: 2px 2px 4px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.fit-row::-webkit-scrollbar {
+  display: none;
+}
+.fit-pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 16px 0 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.9375rem;
+  font-weight: 650;
+  white-space: nowrap;
   cursor: pointer;
 }
-.fit-play svg {
-  width: 10px;
-  height: 10px;
-  margin-left: 2px;
+.fit-pill svg {
+  width: 12px;
+  height: 12px;
   fill: currentColor;
 }
-.fit-play::before {
-  content: '';
-  position: absolute;
-  inset: -12px;
+.fit-pill.on {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
 }
-.fit-play[aria-pressed='true'] {
-  background: var(--sel);
-  color: #0b2a30;
+.selection-bar.overlay .fit-row {
+  padding-left: 2px;
 }
 
 /* Rings around the selected item (white) and the items it joins (selection colour). */
