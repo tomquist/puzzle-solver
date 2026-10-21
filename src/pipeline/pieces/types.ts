@@ -156,6 +156,11 @@ export interface SegmentedRegion {
    * are visible); 0 otherwise. Outline-reliability evidence for matching.
    */
   borderTable: number;
+  /**
+   * Patches only: the pixels of `mask` that show the table (holes and notches of missing pieces
+   * that closing and hole filling took into the patch), when there are any.
+   */
+  table?: Mask;
 }
 
 /** Result of {@link segmentPieces}. */

@@ -14,6 +14,7 @@ import { findSimilarity, type Point } from '../../cv/geometry';
 import { cellKey, type CellRef, type MatchStatus, type Placement, type RegionMatch, type SideKind } from '../../model/types';
 import { buildTemplate, colourDistanceMap, DEFAULT_SCORE, makePhotoSource, scoreAt, scoreMap, type ColorCorrection, type Mapping, type PhotoSource, type ScoreParams, type Template } from './template';
 import { estimatePatchPitch } from '../pieces/patchPitch';
+import { fitPatchLattice, latticeCells, latticePoint, type LatticeCell, type PatchLattice } from '../pieces/patchLattice';
 import { NOT_ONE_PIECE_CAP, onePieceArea } from './groups';
 import type { MatchInput, MatchOptions, RefLevel, ReferenceIndex } from './types';
 
@@ -702,8 +703,10 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   let coveredCells: CellRef[] | undefined;
   if (isPatch) {
     // Patches report the top-most, then left-most covered cell as row/col.
+    // One lattice for all candidates: it is the photo's own geometry, only its place on the grid differs.
+    const lattice = patchLatticeOf(index, input, best);
     chosen.forEach((c, i) => {
-      const cells = coveredCellsOf(index, input, c);
+      const cells = patchCoveredCells(index, input, c, lattice);
       if (i === 0) coveredCells = cells;
       if (cells.length > 0) {
         const tl = cells.reduce((a, b) => (b.row < a.row || (b.row === a.row && b.col < a.col) ? b : a));
@@ -824,37 +827,74 @@ function colourUniqueness(index: ReferenceIndex, cache: TemplateCache, best: Can
   return close / (level.scaleX * index.cellW * level.scaleY * index.cellH);
 }
 
-/** Cells whose body area is mostly covered by the region mask at the given placement. */
-function coveredCellsOf(index: ReferenceIndex, input: MatchInput, c: Candidate): CellRef[] {
+/**
+ * The patch's cell lattice in its photo crop, fitted to its seams (pieces/patchLattice.ts) from the
+ * lattice the placement `c` implies: the reference grid's lines mapped into the photo, origin at the
+ * grid crossing nearest the placement's pivot.
+ */
+export function patchLatticeOf(index: ReferenceIndex, input: MatchInput, c: Pick<Candidate, 'map' | 'ref'>): PatchLattice {
+  const { cellW, cellH } = index;
+  const { pivot, phi, s } = c.map;
+  const k = Math.round((c.ref.x + 0.5) / cellW), l = Math.round((c.ref.y + 0.5) / cellH);
+  const x = k * cellW - 0.5 - c.ref.x, y = l * cellH - 0.5 - c.ref.y;
+  const cos = Math.cos(phi), sin = Math.sin(phi);
+  const prior: PatchLattice = {
+    origin: { x: pivot.x + (cos * x + sin * y) / s - input.origin.x, y: pivot.y + (-sin * x + cos * y) / s - input.origin.y },
+    angle: -phi,
+    pa: cellW / s,
+    pb: cellH / s,
+    strength: [-1, -1],
+  };
+  return fitPatchLattice(input.image, input.mask, prior);
+}
+
+/**
+ * Reference cells of a patch's lattice cells at placement `c`. The lattice is rigid: its axes map
+ * onto the grid's (to the nearest quarter turn) and every cell steps by exactly one grid cell, so
+ * one integer offset places them all – the offset most of the cells' centres agree on through the
+ * placement transform (whose drift over a large block is what the lattice is for).
+ */
+function latticeToGrid(index: ReferenceIndex, input: MatchInput, c: Pick<Candidate, 'map' | 'ref'>, lat: PatchLattice, cells: LatticeCell[]): (CellRef & LatticeCell)[] {
   const { cellW, cellH } = index;
   const { pivot, phi, s } = c.map;
   const cos = Math.cos(phi), sin = Math.sin(phi);
-  const m = input.mask;
-  const inside = (rx: number, ry: number) => {
-    const x = rx - c.ref.x, y = ry - c.ref.y;
-    const px = pivot.x + (cos * x + sin * y) / s - input.origin.x;
-    const py = pivot.y + (-sin * x + cos * y) / s - input.origin.y;
-    const ix = Math.round(px), iy = Math.round(py);
-    return ix >= 0 && iy >= 0 && ix < m.width && iy < m.height && m.data[iy * m.width + ix] === 1;
+  // Crop point -> continuous grid coordinates (col, row).
+  const toGrid = (p: Point) => {
+    const dx = (p.x + input.origin.x - pivot.x) * s, dy = (p.y + input.origin.y - pivot.y) * s;
+    return { col: (cos * dx - sin * dy + c.ref.x + 0.5) / cellW, row: (sin * dx + cos * dy + c.ref.y + 0.5) / cellH };
   };
-  // Reference-space extent of the region.
-  const ext = Math.hypot(m.width, m.height) * s;
-  const r0 = Math.max(0, Math.floor((c.ref.y - ext) / cellH)), r1 = Math.min(index.grid.rows - 1, Math.ceil((c.ref.y + ext) / cellH));
-  const c0 = Math.max(0, Math.floor((c.ref.x - ext) / cellW)), c1 = Math.min(index.grid.cols - 1, Math.ceil((c.ref.x + ext) / cellW));
-  const out: CellRef[] = [];
-  const K = 6;
-  for (let row = r0; row <= r1; row++) {
-    for (let col = c0; col <= c1; col++) {
-      let hit = 0;
-      for (let j = 0; j < K; j++) {
-        for (let i = 0; i < K; i++) {
-          const rx = (col + 0.1 + (0.8 * (i + 0.5)) / K) * cellW - 0.5;
-          const ry = (row + 0.1 + (0.8 * (j + 0.5)) / K) * cellH - 0.5;
-          if (inside(rx, ry)) hit++;
-        }
-      }
-      if (hit >= 0.7 * K * K) out.push({ row, col });
-    }
+  const o = toGrid(latticePoint(lat, 0, 0)), ea = toGrid(latticePoint(lat, 1, 0)), eb = toGrid(latticePoint(lat, 0, 1));
+  const da = { col: ea.col - o.col, row: ea.row - o.row }, db = { col: eb.col - o.col, row: eb.row - o.row };
+  // Signed permutation: which grid axis each lattice axis runs along.
+  const aOnCol = Math.abs(da.col) >= Math.abs(da.row);
+  const sa = Math.sign(aOnCol ? da.col : da.row) || 1;
+  const sb = Math.sign(aOnCol ? db.row : db.col) || 1;
+  const step = (i: number, j: number) => (aOnCol ? { col: sa * i, row: sb * j } : { col: sb * j, row: sa * i });
+  const votes = new Map<string, number>();
+  for (const q of cells) {
+    const g = toGrid(latticePoint(lat, q.i + 0.5, q.j + 0.5));
+    const st = step(q.i, q.j);
+    const key = `${Math.floor(g.row) - st.row},${Math.floor(g.col) - st.col}`;
+    votes.set(key, (votes.get(key) ?? 0) + q.coverage);
   }
-  return out;
+  let bestKey = '', bestN = 0;
+  for (const [key, n] of votes) if (n > bestN) [bestKey, bestN] = [key, n];
+  if (!bestKey) return [];
+  const [tr, tc] = bestKey.split(',').map(Number);
+  const out: (CellRef & LatticeCell)[] = [];
+  for (const q of cells) {
+    const st = step(q.i, q.j);
+    const row = tr + st.row, col = tc + st.col;
+    if (row >= 0 && col >= 0 && row < index.grid.rows && col < index.grid.cols) out.push({ ...q, row, col });
+  }
+  return out.sort((p, q) => p.row - q.row || p.col - q.col);
 }
+
+/**
+ * Cells of a patch at placement `c` (its similarity `map` with the pivot at reference point `ref`):
+ * the covered cells of its seam-fitted lattice (by default fitted from this placement), on the grid.
+ */
+export function patchCoveredCells(index: ReferenceIndex, input: MatchInput, c: Pick<Candidate, 'map' | 'ref'>, lat = patchLatticeOf(index, input, c)): CellRef[] {
+  return latticeToGrid(index, input, c, lat, latticeCells(lat, input.mask, input.table)).map(({ row, col }) => ({ row, col }));
+}
+

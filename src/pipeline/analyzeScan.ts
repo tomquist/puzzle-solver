@@ -116,6 +116,7 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
     shape: s.region.shape,
     orientationDeg: s.region.orientationDeg,
     expectedBodySize: seg.medianBodySize,
+    table: s.table,
     outline: {
       borderTable: s.borderTable,
       issues: s.region.issues.map((i) => i.code),

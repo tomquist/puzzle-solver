@@ -572,6 +572,51 @@ function openTableHoles(c: Candidate, preClose: Mask, minHole: number, W: number
 }
 
 /**
+ * Smallest blob (piece areas) of table inside a patch's mask that {@link tableInside} reports:
+ * a hole of a missing piece whose neighbours' tabs reach into it shows less than half a piece of
+ * table (too little for {@link TABLE_HOLE}), but far more than specks of table-coloured print.
+ */
+const TABLE_SPECK = 0.04;
+
+/**
+ * The pixels of a patch's mask (at `bbox`) that look like the table: below the strong foreground
+ * threshold `high` (the table in a hole between pieces lies in their shadow, which the hysteresis
+ * ties to them), not found by texture, and the table's colour, possibly darkened by a shadow (as
+ * in {@link borderTableFraction}; weak print of another colour stays print), in blobs of at least
+ * `minArea` px once thin gaps along the seams are opened away; undefined when there are none.
+ * These are the holes and notches of missing pieces the segmentation took into the patch (too
+ * small for {@link TABLE_HOLE}, shadowed, or open to the table through a narrow gap), for deciding
+ * which cells the patch covers.
+ */
+function tableInside(photo: RGBAImage, model: BackgroundFit, mask: Mask, bbox: Rect, score: GrayImage, high: number, texOnly: Mask, minArea: number): Mask | undefined {
+  const { width: w, height: h } = mask;
+  const W = score.width;
+  let bg = createMask(w, h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x, j = (y + bbox.y) * W + x + bbox.x;
+      if (!mask.data[i] || score.data[j] >= high || texOnly.data[j]) continue;
+      const lab = rgbToLab(photo.data[j * 4], photo.data[j * 4 + 1], photo.data[j * 4 + 2]);
+      const tb = backgroundAt(model, x + bbox.x, y + bbox.y);
+      const rho = (lab[0] + 16) / (tb[0] + 16);
+      if (rho > 0.5 && rho < 1.08 && Math.abs(lab[1] - rho * tb[1]) < 5 && Math.abs(lab[2] - rho * tb[2]) < 5) bg.data[i] = 1;
+    }
+  }
+  bg = open(bg, 2);
+  const { labels, stats } = labelComponents(bg, 4);
+  const keep = new Uint8Array(stats.length + 1);
+  let any = false;
+  for (const st of stats) {
+    if (st.area < minArea) continue;
+    keep[st.label] = 1;
+    any = true;
+  }
+  if (!any) return undefined;
+  for (let i = 0; i < bg.data.length; i++) bg.data[i] = keep[labels[i]];
+  return bg;
+}
+
+/**
  * A part's mask (at `bbox`) with the opened holes it encloses given back (print inside one piece;
  * table between several pieces stays open): `cluster` as it was, `opened` its mask with the holes.
  */
@@ -2141,7 +2186,8 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
     // An assembled patch keeps the table it encloses open (the cells of missing pieces): matching
     // then neither compares that table with the picture nor reports those cells as covered.
     const mask = kind === 'patch' && ra > 0 ? openTableHoles(c, preClose, TABLE_HOLE * ra, W) ?? c.mask : c.mask;
-    return { region, mask, image: cropRGBA(photo, c.bbox), borderTable: 0 };
+    const table = kind === 'patch' && ra > 0 ? tableInside(photo, fit, mask, c.bbox, score, th.high, texOnly, TABLE_SPECK * ra) : undefined;
+    return { region, mask, image: cropRGBA(photo, c.bbox), borderTable: 0, ...(table ? { table } : {}) };
   });
 
   // Region-level structural issues.

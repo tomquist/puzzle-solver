@@ -63,6 +63,11 @@ export interface MatchInput {
   expectedBodySize?: number;
   /** How trustworthy the region's outline is (from segmentation); unreliable outlines cap the confidence. */
   outline?: OutlineEvidence;
+  /**
+   * Same size as mask: region pixels that show the table (a hole between a patch's pieces that the
+   * segmentation filled). They count as not covered when a patch's cells are decided.
+   */
+  table?: Mask;
 }
 
 /** Segmentation evidence about a region's outline (all optional). */
