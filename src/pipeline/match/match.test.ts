@@ -181,10 +181,9 @@ describe('matchRegion — Starry Night 20×16 (320 pieces)', () => {
       expect(input.expectedBodySize).toBeUndefined();
       expect(Math.abs(patchBodySize(input)! / 70 - 1)).toBeLessThan(0.08);
       const { value: m, ms } = timed(() => matchRegion(index, input));
-      const expected = new Set(block.map((p) => `${cut.pieces[p].row},${cut.pieces[p].col}`));
-      const covered = (m.coveredCells ?? []).map((x) => `${x.row},${x.col}`);
-      const inter = covered.filter((k) => expected.has(k)).length;
-      expect(inter / (expected.size + covered.length - inter), `rotation ${rotation}`).toBeGreaterThanOrEqual(0.9);
+      // Exactly its pieces, also on the ragged rim (the cells come from the block's own seams).
+      const expected = block.map((p) => `${cut.pieces[p].row},${cut.pieces[p].col}`).sort();
+      expect((m.coveredCells ?? []).map((x) => `${x.row},${x.col}`).sort(), `rotation ${rotation}`).toEqual(expected);
       expect(angleError(m.candidates[0].rotationDeg, truth[0].rotationDeg)).toBeLessThan(5);
       expect(m.status).toBe('confident');
       report(`Starry 20×16, ragged block of 45 at ${rotation}°`, { n: 1, top1: 1, top3: 1, rotation: 1 }, ms);

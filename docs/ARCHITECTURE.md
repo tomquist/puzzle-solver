@@ -289,8 +289,15 @@ large assembled block) measures it from the patch's own seams (`pieces/patchPitc
 responses projected across the grid directions form a comb with the piece size as period; for
 cells wider than tall the two directions' periods differ by the cells' aspect), which
 also tells such a lone block from a single piece in segmentation. In a small puzzle (≤ 64 cells) a
-patch without a size reference is also searched at every size up to the whole puzzle. A patch
-covers the cells its mask has print over. One cell, one piece (`match/claims.ts`): a confident
+patch without a size reference is also searched at every size up to the whole puzzle. A patch's
+cells come from its own cell lattice (`pieces/patchLattice.ts`): starting from the grid its
+placement implies, the angle, both pitches and the phases are fitted to the dark cut lines and
+the straight outline edges (folded seam profiles; an axis without a clear seam peak keeps the
+placement's), and a cell counts when the middle half of its body is patch that does not show the
+table (segmentation reports the table inside a patch: shadowed holes and notches of missing
+pieces). The lattice is rigid, so one integer offset puts all its cells on the grid – a small
+angle or scale error of the placement over a large block no longer drops rim pieces or counts
+holes. One cell, one piece (`match/claims.ts`): a confident
 loose piece on a cell a patch covers is a contradiction – the less confident placement gives way –
 and when the scan's confident placements and the user's placed cells leave at most three cells
 free, the pieces without a confident place are assigned to them (the corner under a box picture's
