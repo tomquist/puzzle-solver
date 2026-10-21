@@ -9,7 +9,8 @@
 import type { Point } from '../../cv/geometry';
 import type { CellRef, DetectedRegion, PuzzleSide } from '../../model/types';
 import type { ItemLink, ItemPlacement, ScanItem } from './items';
-import { groupCellCenter, groupCellSize, regionSize, sideVector } from './overlay';
+import { cellAxes, cellItemOf, cellPoint, rimPoint, scaleAspect, type CellScale } from './cellSpots';
+import { regionSize, sideVector } from './overlay';
 
 /** A piece's (or patch's) body as a rotated box in photo coordinates. */
 export interface BodyBox {
@@ -219,8 +220,8 @@ export function routeLink(a: RouteEnd, b: RouteEnd): Route | null {
 /**
  * One end of a connection line for an item of the scan: a piece leaves through its joining side
  * (its body as the box to stay out of); an assembled group through the joining side of its
- * touching cell (the group's cell block as the box); without a known side or turn, straight from
- * its centre, `fallbackReach` out.
+ * touching cell – where the fit animation docks (cellSpots: rimPoint) – with the group's cell
+ * block as the box; without a known side or turn, straight from its centre, `fallbackReach` out.
  */
 export function itemRouteEnd(
   item: ScanItem,
@@ -229,6 +230,7 @@ export function itemRouteEnd(
   side: PuzzleSide | undefined,
   cell: CellRef | undefined,
   fallbackReach: number,
+  scale: CellScale = {},
 ): RouteEnd {
   const rot = placement?.rotationDeg;
   if (side && rot !== undefined) {
@@ -241,36 +243,46 @@ export function itemRouteEnd(
         const size = regionSize(region);
         return { center: item.center, reach: size / 2, dir, size, box: { center: item.center, right, down, halfW: size / 2, halfH: size / 2 } };
       }
-    } else if (cell && placement && placement.cells.length > 0) {
-      const members = item.regionIds.map((id) => regions.get(id)).filter((m): m is DetectedRegion => !!m);
-      const px = groupCellSize(members, placement.cells.length);
-      const { row0, col0, row1, col1 } = placement.bounds;
-      const mid = groupCellCenter(item.center, placement.cells, { row: (row0 + row1) / 2, col: (col0 + col1) / 2 }, rot, px);
-      // Its real outline (a patch's cell block can have notches – another item may lie in one).
-      const outlines = members.map((m) => thin(m.contour, 64)).filter((o) => o.length > 2);
-      return {
-        center: groupCellCenter(item.center, placement.cells, cell, rot, px),
-        reach: px / 2,
-        dir,
-        size: px,
-        box: { center: mid, right, down, halfW: ((col1 - col0 + 1) * px) / 2, halfH: ((row1 - row0 + 1) * px) / 2, outlines },
-      };
+    } else if (cell && placement) {
+      const ci = cellItemOf(item, placement, regions, scale);
+      if (ci) {
+        const aspect = scaleAspect(scale);
+        const { w, h } = cellAxes(ci.cellPx, aspect);
+        const { row0, col0, row1, col1 } = placement.bounds;
+        const across = side === 'top' || side === 'bottom' ? h : w;
+        return {
+          center: rimPoint(ci, cell, side, aspect),
+          reach: across / 2,
+          dir,
+          size: ci.cellPx,
+          // Its real outline too (a patch's cell block can have notches – another item may lie in one).
+          box: {
+            center: cellPoint(ci, { row: (row0 + row1) / 2, col: (col0 + col1) / 2 }, aspect),
+            right,
+            down,
+            halfW: ((col1 - col0 + 1) * w) / 2,
+            halfH: ((row1 - row0 + 1) * h) / 2,
+            outlines: item.regionIds.flatMap((id) => (regions.get(id) ? [thin(regions.get(id)!.contour, 64)] : [])).filter((o) => o.length > 2),
+          },
+        };
+      }
     }
   }
   return { center: item.center, reach: fallbackReach };
 }
 
-/** The routed line of a link between two items (from a to b), or null when they coincide. */
+/** The routed line of a link between two items (from a to b), or null when they coincide. `scale`: see cellItemOf. */
 export function linkRoute(
   l: ItemLink,
   a: { item: ScanItem; placement: ItemPlacement | undefined },
   b: { item: ScanItem; placement: ItemPlacement | undefined },
   regions: Map<number, DetectedRegion>,
   fallbackReach: (key: string) => number,
+  scale: CellScale = {},
 ): Route | null {
   return routeLink(
-    itemRouteEnd(a.item, a.placement, regions, l.sideA, l.cellA, fallbackReach(l.a)),
-    itemRouteEnd(b.item, b.placement, regions, l.sideB, l.cellB, fallbackReach(l.b)),
+    itemRouteEnd(a.item, a.placement, regions, l.sideA, l.cellA, fallbackReach(l.a), scale),
+    itemRouteEnd(b.item, b.placement, regions, l.sideB, l.cellB, fallbackReach(l.b), scale),
   );
 }
 

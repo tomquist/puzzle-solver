@@ -32,9 +32,9 @@ import { useHoldToPeek } from '../../hooks/useHoldToPeek';
 import { usePrefersReducedMotion } from '../../hooks/usePieceCutout';
 import { useBitmap, useObjectUrl, useStoredBlob } from '../../hooks/useObjectUrl';
 import { usePrefs, useWakeLock } from '../../hooks/usePrefs';
+import { cellItemOf, scaleAspect, type CellScale } from '../../lib/cellSpots';
 import { fitDescription, fitPose, glidePath, type FitItem } from '../../lib/fit';
 import { formatDate, plural } from '../../lib/format';
-import { itemPieceSize } from '../../lib/framing';
 import {
   cellsText,
   connectionsOf,
@@ -150,13 +150,21 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
   const [fit, setFit] = useState<{ a: string; b: string; n: number }>();
   useEffect(() => setFit(undefined), [selected?.key]);
   const regionById = useMemo(() => new Map(result.regions.map((r) => [r.id, r])), [result]);
-  const cellAspect = reference ? cellSize(puzzle.grid, reference.width, reference.height) : undefined;
-  const aspect = cellAspect ? cellAspect.w / cellAspect.h : 1;
+  // Where a group's cells lie in the photo: from the box picture's cell size and the pieces' size
+  // (the fit and the connection lines alike).
+  const refW = reference?.width;
+  const refH = reference?.height;
+  const bodySize = result.quality.metrics.medianBodySize;
+  const cellScale = useMemo<CellScale>(
+    () => ({ refCell: refW && refH ? cellSize(puzzle.grid, refW, refH) : undefined, bodySize }),
+    [puzzle.grid, refW, refH, bodySize],
+  );
+  const aspect = scaleAspect(cellScale);
   const fitItem = (key: string): FitItem | undefined => {
     const item = byKey.get(key);
     const p = item ? placementOf(item) : undefined;
-    if (!item || !p || p.rotationDeg === undefined || !p.cells.length) return undefined;
-    return { key, label: item.label, pieces: item.pieceCount, center: item.center, cells: p.cells, rotationDeg: p.rotationDeg, cellPx: itemPieceSize(item, result.regions) };
+    const cells = item && p ? cellItemOf(item, p, regionById, cellScale) : undefined;
+    return item && cells ? { ...cells, key, label: item.label, pieces: item.pieceCount } : undefined;
   };
   const canFit = (key: string) => !!selected && !!fitItem(selected.key) && !!fitItem(key);
   const fitShow = useMemo(() => {
@@ -169,7 +177,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
     const anchorKey = pose.mover === 'a' ? fit.b : fit.a;
     const link = links.find((l) => (l.a === fit.a && l.b === fit.b) || (l.a === fit.b && l.b === fit.a));
     const ends = (k: string) => ({ item: byKey.get(k)!, placement: placementOf(byKey.get(k)!) });
-    const route = link ? linkRoute(link, ends(link.a), ends(link.b), regionById, () => 10) : null;
+    const route = link ? linkRoute(link, ends(link.a), ends(link.b), regionById, () => 10, cellScale) : null;
     const mover = byKey.get(moverKey)!;
     return {
       ...fit,
@@ -179,7 +187,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
       text: fitDescription(pose, { label: mover.label, pieces: mover.pieceCount }, { label: byKey.get(anchorKey)!.label }),
     };
     // fitItem reads the placements (placementOf) and the photo's regions.
-  }, [fit, links, byKey, placementOf, regionById, aspect, result]);
+  }, [fit, links, byKey, placementOf, regionById, cellScale, result]);
   const playFit = (partner: string) => {
     if (!selected) return;
     if (reducedMotion && fit?.b === partner) return setFit(undefined);
@@ -283,6 +291,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
         onClear={clearSelection}
         onLinkTap={(a, b) => selected && playFit(a === selected.key ? b : a)}
         fitPair={fitShow && (fullscreen === 'photo') === inFullscreen ? [fitShow.a, fitShow.b] : undefined}
+        cellScale={cellScale}
       />
       {fitShow && (fullscreen === 'photo') === inFullscreen && (
         <FitAnimation

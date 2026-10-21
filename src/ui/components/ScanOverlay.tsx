@@ -22,6 +22,7 @@ import { useLineFlow } from '../hooks/useLineFlow';
 import { labelCenter, labelTail, labelWidth, placeLabels } from '../lib/labels';
 import { flowDirections, linkId, linkLevel, selectionLevels } from '../lib/linkGraph';
 import { polygonPath } from '../lib/overlay';
+import type { CellScale } from '../lib/cellSpots';
 import { linkRoute, type Route } from '../lib/route';
 import { upVector } from '../lib/rotation';
 
@@ -65,6 +66,7 @@ export function ScanOverlay({
   onClear,
   onLinkTap,
   fitPair,
+  cellScale,
 }: {
   result: ScanResult;
   items: OverlayItem[];
@@ -88,6 +90,8 @@ export function ScanOverlay({
   onLinkTap?: (a: string, b: string) => void;
   /** Two items whose fit is being shown: everything else steps back. */
   fitPair?: [string, string];
+  /** Cell sizes of the scan, to place a group's cells in the photo (cellSpots) – as the fit does. */
+  cellScale?: CellScale;
 }) {
   const { width, height } = result;
   const byId = useMemo(() => new Map(result.regions.map((r) => [r.id, r])), [result]);
@@ -168,12 +172,12 @@ export function ScanOverlay({
       const a = overlayByKey.get(l.a);
       const b = overlayByKey.get(l.b);
       if (!a || !b) continue;
-      const r = linkRoute(l, a, b, byId, (k) => (geo.get(k)?.ring ?? 10) * 0.6);
+      const r = linkRoute(l, a, b, byId, (k) => (geo.get(k)?.ring ?? 10) * 0.6, cellScale);
       if (r) m.set(linkId(l), r);
     }
     return m;
     // overlayByKey follows from the items.
-  }, [links, items, byId, geo]);
+  }, [links, items, byId, geo, cellScale]);
 
   // Selection: the selected item (level 0), the items it joins (1) and theirs (2–3, capped).
   const selected = selectedKey && overlayByKey.has(selectedKey) ? selectedKey : undefined;
