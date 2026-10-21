@@ -57,10 +57,14 @@ to be analysed. Everything runs locally in the browser – no server, no upload.
    with ×, Esc or back) that shares the selection.
    Overlay strokes inside the zoom view are sized with `--u` (one screen px in content units, set
    by `ZoomPanView`): `vector-effect: non-scaling-stroke` does not undo its CSS scale. Every change
-   of a line's dash offset repaints the overlay, so the flow moves in steps of about one screen px
-   on a shared beat (5 or 10 a second), pauses while the view moves (`data-moving`) and behind the
-   full-screen view, and rests after ~13 s (~18 s after a selection); on a 4× throttled CPU with
-   87 items and 52 lines this keeps 60 fps (a per-frame flow dropped to 15–30 fps). At the fit
+   of a line's dash offset restyles and repaints it, so the flow is a timer (`useLineFlow`) that
+   steps the offset by about one screen px 5 or 10 times a second (a CSS animation would restyle
+   every frame, also while panning or scrolling), holds still while the view moves (`data-moving`),
+   the page scrolls or the full-screen view covers it, and rests after ~13 s (~18 s after a
+   selection). Pan and pinch move the content with a transform written straight to the element:
+   no React render and no change of `--u` per move; the new scale is committed (one render) when
+   the gesture ends, so strokes and labels scale with the photo for that moment. On a 4× throttled
+   CPU with the 87-item scan this keeps pinch, pan and page scroll at 53–60 fps. At the fit
    zoom a one-finger drag on a picture scrolls the page (`touch-action: pan-y`); zoomed in, it pans.
    The guided placing mode shows one item at a time: the photo around it as it lies (3–4 piece
    sizes, corner marks, the pink "top" bar labelled "top"; tap for a close-up), the turn, and the

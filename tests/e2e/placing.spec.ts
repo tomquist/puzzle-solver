@@ -61,8 +61,9 @@ async function lineStyle(link: Locator) {
     const scale = svg.getBoundingClientRect().width / svg.viewBox.baseVal.width;
     const cs = getComputedStyle(el);
     const dash = cs.strokeDasharray === 'none' ? [] : cs.strokeDasharray.split(/[ ,]+/).map((v) => parseFloat(v) * scale);
-    const flow = (el.getAnimations() as CSSAnimation[]).map((a) => a.animationName);
-    return { dash, stroke: cs.stroke, px: parseFloat(cs.strokeWidth) * scale, opacity: Number(getComputedStyle(g).opacity), flow, direction: cs.animationDirection };
+    // The flow: the dash offset (screen px) the flow timer has stepped the line to.
+    const offset = parseFloat(getComputedStyle(g).getPropertyValue('--o') || '0');
+    return { dash, stroke: cs.stroke, px: parseFloat(cs.strokeWidth) * scale, opacity: Number(getComputedStyle(g).opacity), offset };
   });
 }
 
@@ -176,8 +177,9 @@ test('result screen: select a piece to see its connections; hold the photo to se
   expect(line.px).toBeGreaterThan(1.2);
   expect(line.px).toBeLessThan(1.8);
   expect(line.opacity).toBeGreaterThan(0.7);
-  expect(line.flow).toEqual(['link-flow']);
-  expect(line.direction).toBe((await link.getAttribute('data-flow')) === 'a' ? 'reverse' : 'normal');
+  // The dots step along: backwards along the path ("rev") when it flows towards its start.
+  const sign = (await link.getAttribute('data-flow')) === 'a' ? 1 : -1;
+  await expect.poll(async () => Math.sign((await lineStyle(link)).offset)).toBe(sign);
 
   // Tap a piece on the photo: it is emphasised, its connections drawn strongly, the pieces it
   // joins outlined, everything else faded and the photo around them darkened – the photo stays
@@ -198,7 +200,8 @@ test('result screen: select a piece to see its connections; hold the photo to se
   expect(sel.px).toBeGreaterThan(2.5);
   expect(sel.px).toBeLessThan(3.5);
   expect(sel.stroke).toBe(SELECTION_COLOUR);
-  expect(sel.flow).toEqual(['link-flow-sel']);
+  const o0 = sel.offset;
+  await expect.poll(async () => (await lineStyle(active.first())).offset).not.toBe(o0);
   await expect.poll(async () => (await lineStyle(active.first())).opacity).toBe(1);
   // The joined piece: outline in the selection colour, a tint, its label fully visible.
   const joined = page.getByTestId(`item-${other}`);
@@ -478,7 +481,8 @@ test('result screen: a selection lights up its connections of connections, and l
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const still = await lineStyle(page.locator('[data-testid="link"][data-level="1"]').first());
   expect(still.dash).toHaveLength(2);
-  expect(still.flow).toEqual([]);
+  await page.waitForTimeout(600);
+  expect((await lineStyle(page.locator('[data-testid="link"][data-level="1"]').first())).offset).toBe(still.offset);
 });
 
 /** Select items until one has a "show the fit" button; returns [selected, partner]. */

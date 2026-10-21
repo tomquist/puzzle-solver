@@ -18,6 +18,7 @@ import type { Rect } from '../../cv/image';
 import type { ScanResult } from '../../model/types';
 import { itemTitle, type ItemLink, type ItemPlacement, type ScanItem } from '../lib/items';
 import { topBarFor, type TopBar } from '../lib/framing';
+import { useLineFlow } from '../hooks/useLineFlow';
 import { labelCenter, labelTail, labelWidth, placeLabels } from '../lib/labels';
 import { flowDirections, linkId, linkLevel, selectionLevels } from '../lib/linkGraph';
 import { polygonPath } from '../lib/overlay';
@@ -217,10 +218,14 @@ export function ScanOverlay({
   const labelH = LABEL_H / scale;
   const gap = LABEL_GAP / scale;
   const inFit = (key: string) => !!fitPair && fitPair.includes(key);
+  // The dots flow for a while after the lines appear and after each new selection.
+  const svgRef = useRef<SVGSVGElement>(null);
+  useLineFlow(svgRef, `${selected ?? ''}|${linksKey}|${showConnections}|${showLabels}`, selected ? 18000 : 13000);
   const svgCls = ['overlay', 'scan-overlay', selected && 'has-selection', !showLabels && 'labels-off', peek && 'peek', fitPair && 'fitting'].filter(Boolean).join(' ');
 
   return (
     <svg
+      ref={svgRef}
       className={svgCls}
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="none"

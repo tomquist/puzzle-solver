@@ -83,8 +83,15 @@ export function ZoomPanView({
   const minScale = fit.scale;
   const maxScale = Math.max(fit.scale, Math.min(Math.max(fit.scale * 6, 2.5), maxZoom ?? Infinity));
   const startT = start && vw && vh ? toView(transformForRect(start, contentWidth, contentHeight, aw, ah, minScale, maxScale)) : undefined;
+  /**
+   * The transform on screen. During a gesture it runs ahead of `t`: it is written straight to the
+   * content element (no React render, no change of --u, so no style recalc of the overlays per
+   * move) and committed to `t` – one render, strokes and labels re-sized – when the gesture ends.
+   */
   const tRef = useRef(t);
-  tRef.current = t;
+  const live = useRef(false);
+  if (!live.current) tRef.current = t;
+  const content = useRef<HTMLDivElement>(null);
   const clampRef = useRef(clamp);
   clampRef.current = clamp;
 
@@ -101,13 +108,37 @@ export function ZoomPanView({
     movingTimer.current = window.setTimeout(() => delete el.dataset.moving, 200);
   }, []);
 
-  const apply = useCallback((next: ViewTransform) => {
-    interacted.current = true;
-    markMoving();
+  const settle = useCallback((next: ViewTransform) => {
     const fitScale = lastFit.current?.scale ?? 0;
     // At (or below) the fit scale the content simply stays fitted and centered.
-    setT(next.scale <= fitScale * 1.001 && lastFit.current ? lastFit.current : clampRef.current(next));
-  }, [markMoving]);
+    return next.scale <= fitScale * 1.001 && lastFit.current ? lastFit.current : clampRef.current(next);
+  }, []);
+  const apply = useCallback(
+    (next: ViewTransform) => {
+      interacted.current = true;
+      markMoving();
+      live.current = false;
+      setT(settle(next));
+    },
+    [markMoving, settle],
+  );
+  /** A gesture step: move the content now, render later (commitLive). */
+  const applyLive = useCallback(
+    (next: ViewTransform) => {
+      interacted.current = true;
+      markMoving();
+      const v = settle(next);
+      tRef.current = v;
+      live.current = true;
+      if (content.current) content.current.style.transform = `translate(${v.x}px, ${v.y}px) scale(${v.scale})`;
+    },
+    [markMoving, settle],
+  );
+  const commitLive = useCallback(() => {
+    if (!live.current) return;
+    live.current = false;
+    setT(tRef.current);
+  }, []);
 
   // Fit (or show the start rectangle) on first layout; on resize keep the zoom only if the user
   // had zoomed in.
@@ -156,11 +187,17 @@ export function ZoomPanView({
       e.preventDefault();
       const r = el.getBoundingClientRect();
       const factor = Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0018));
-      apply(zoomAt(tRef.current, factor, { x: e.clientX - r.left, y: e.clientY - r.top }, minScale, maxScale));
+      applyLive(zoomAt(tRef.current, factor, { x: e.clientX - r.left, y: e.clientY - r.top }, minScale, maxScale));
+      window.clearTimeout(wheelTimer);
+      wheelTimer = window.setTimeout(commitLive, 160);
     };
+    let wheelTimer: number | undefined;
     el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
-  }, [apply, minScale, maxScale]);
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      window.clearTimeout(wheelTimer);
+    };
+  }, [applyLive, commitLive, minScale, maxScale]);
 
   /** Whether one finger pans the image (zoomed in, or always) rather than scrolling the page. */
   const oneFingerPans = () => alwaysPan || tRef.current.scale > (lastFit.current?.scale ?? Infinity) * 1.05;
@@ -195,7 +232,7 @@ export function ZoomPanView({
       const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
       let next = zoomAt(tRef.current, dist / g.pinchDist, mid, minScale, maxScale);
       next = { ...next, x: next.x + mid.x - g.pinchMid.x, y: next.y + mid.y - g.pinchMid.y };
-      apply(next);
+      applyLive(next);
       g.pinchDist = dist;
       g.pinchMid = mid;
       return;
@@ -211,12 +248,13 @@ export function ZoomPanView({
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     }
     const cur = tRef.current;
-    apply({ scale: cur.scale, x: cur.x + p.x - g.last.x, y: cur.y + p.y - g.last.y });
+    applyLive({ scale: cur.scale, x: cur.x + p.x - g.last.x, y: cur.y + p.y - g.last.y });
     g.last = p;
   };
 
   const onPointerUp = (e: React.PointerEvent) => {
     pointers.current.delete(e.pointerId);
+    if (pointers.current.size === 0) commitLive();
     if (gesture.current.moved) suppressClick.current = true;
     if (pointers.current.size < 2) gesture.current.pinchDist = undefined;
     if (pointers.current.size === 1) {
@@ -258,11 +296,13 @@ export function ZoomPanView({
         }}
       >
         <div
+          ref={content}
           className="zoompan-content"
           style={{
             width: contentWidth,
             height: contentHeight,
-            transform: `translate(${t.x}px, ${t.y}px) scale(${t.scale})`,
+            // (Mid-gesture renders keep the live transform; --u follows only when it is committed.)
+            transform: live.current ? `translate(${tRef.current.x}px, ${tRef.current.y}px) scale(${tRef.current.scale})` : `translate(${t.x}px, ${t.y}px) scale(${t.scale})`,
             // One screen px in content units: overlay strokes are sized with it, because
             // vector-effect: non-scaling-stroke does not undo this CSS scale (Blink, WebKit).
             ['--u' as string]: `${1 / t.scale}px`,

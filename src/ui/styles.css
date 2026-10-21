@@ -2572,21 +2572,14 @@ canvas.crop {
  * A selection's own lines (level 1) are thicker, in the selection colour and livelier; the lines of
  * its connections (levels 2–3) lighter cyan and thinner. Dashes are in screen px (--u), so they
  * keep their size at any zoom.
- * Cost: every change of a dash offset repaints the photo's overlay, so the dots move in steps of
- * about one screen px on a shared beat (every 0.2 s, a selection's own lines every 0.1 s – smooth
- * at this speed, a fraction of the work of a per-frame animation), pause while the view is panned
- * or pinched (ZoomPanView's data-moving) and behind the full-screen view, and rest after a while:
- * ~13 s after the lines appear, ~18 s after a selection (it restarts the flow). With reduced
- * motion the dots stay put (the global rule).
+ * The flow is driven by useLineFlow: a timer steps the dash offset (--o, screen px) of the moving
+ * lines 5–10 times a second – no CSS animation, which would restyle the lines on every frame,
+ * also while panning or scrolling – and lets them rest after a while.
  */
 .link {
-  /* Dash and gap (screen px, before the round caps), steps of ~1 px per period, the time per
-     period (steps × beat) and how many periods before the dots rest. */
+  /* Dash and gap (screen px, before the round caps). */
   --dash: 3;
   --gap: 4.5;
-  --steps: 8;
-  --flow: 1.6s;
-  --loops: 8;
   pointer-events: none;
   opacity: 0.9;
   transition: opacity 0.15s ease;
@@ -2599,39 +2592,7 @@ canvas.crop {
 .link-line {
   stroke-linecap: round;
   stroke-dasharray: calc(var(--u, 1px) * var(--dash)) calc(var(--u, 1px) * var(--gap));
-  animation: link-flow var(--flow) steps(var(--steps)) var(--loops);
-}
-/* A selection's lines start a flow of their own (a new animation name). */
-.link.active :is(.link-under, .link-line),
-.link.level-2 :is(.link-under, .link-line),
-.link.level-3 :is(.link-under, .link-line) {
-  animation-name: link-flow-sel;
-}
-.link.rev .link-under,
-.link.rev .link-line {
-  animation-direction: reverse;
-}
-@keyframes link-flow {
-  from {
-    stroke-dashoffset: 0;
-  }
-  to {
-    stroke-dashoffset: calc(var(--u, 1px) * (var(--dash) + var(--gap)) * -1);
-  }
-}
-@keyframes link-flow-sel {
-  from {
-    stroke-dashoffset: 0;
-  }
-  to {
-    stroke-dashoffset: calc(var(--u, 1px) * (var(--dash) + var(--gap)) * -1);
-  }
-}
-.zoompan-viewport[data-moving] .link-under,
-.zoompan-viewport[data-moving] .link-line,
-body:has(.fs-view) :is(.result-photo, .result-ref) :is(.link-under, .link-line) {
-  /* Also behind the full-screen view: the page's own pictures hold still. */
-  animation-play-state: paused;
+  stroke-dashoffset: calc(var(--u, 1px) * var(--o, 0));
 }
 .link-under {
   stroke: rgba(0, 0, 0, 0.55);
@@ -2650,16 +2611,9 @@ body:has(.fs-view) :is(.result-photo, .result-ref) :is(.link-under, .link-line) 
 .link.faded {
   opacity: 0.1;
 }
-.link.faded .link-under,
-.link.faded .link-line {
-  animation: none;
-}
 .link.active {
   --dash: 5;
   --gap: 6;
-  --steps: 11;
-  --flow: 1.1s;
-  --loops: 16;
   opacity: 1;
 }
 .link.active .link-under {
@@ -2680,9 +2634,6 @@ body:has(.fs-view) :is(.result-photo, .result-ref) :is(.link-under, .link-line) 
 .link.level-3 {
   --dash: 3.5;
   --gap: 5;
-  --steps: 9;
-  --flow: 1.8s;
-  --loops: 10;
   opacity: 1;
 }
 .link.level-2 .link-under,
