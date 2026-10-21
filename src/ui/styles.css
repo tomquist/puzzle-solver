@@ -2702,6 +2702,118 @@ body:has(.fs-view) :is(.result-photo, .result-ref) :is(.link-under, .link-line) 
 .link.level-3 .link-end {
   fill: var(--sel-2);
 }
+/* A selection's own lines can be tapped: they show how the two fit together. */
+.link-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: calc(var(--u, 1px) * 18);
+  stroke-linecap: round;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+/*
+ * "Show the fit" (FitAnimation): the moving item's cut-out with a soft shadow, a dashed ghost at
+ * its real spot, a pulse at the seam. Sizes in screen px (--u). Transforms only.
+ */
+.fit-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.fit-marks {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.fit-ghost {
+  fill: rgba(0, 0, 0, 0.42);
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: calc(var(--u, 1px) * 1.5);
+  stroke-dasharray: calc(var(--u, 1px) * 4) calc(var(--u, 1px) * 3);
+  stroke-linejoin: round;
+}
+.fit-docked {
+  fill: none;
+  stroke: var(--sel);
+  stroke-width: calc(var(--u, 1px) * 2);
+  stroke-dasharray: calc(var(--u, 1px) * 5) calc(var(--u, 1px) * 3);
+  stroke-linejoin: round;
+}
+.fit-mover {
+  position: absolute;
+  will-change: transform, opacity;
+  filter: drop-shadow(0 calc(var(--u, 1px) * 6) calc(var(--u, 1px) * 7) rgba(0, 0, 0, 0.55));
+}
+.fit-mover.static {
+  opacity: 0.7;
+  filter: none;
+}
+.fit-mover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.fit-pivot {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+.fit-seam {
+  position: absolute;
+  height: calc(var(--u, 1px) * 5);
+  margin-top: calc(var(--u, 1px) * -2.5);
+  border-radius: 999px;
+  background: var(--sel);
+  box-shadow: 0 0 0 calc(var(--u, 1px) * 1.5) rgba(0, 0, 0, 0.6), 0 0 calc(var(--u, 1px) * 10) var(--sel);
+  will-change: transform, opacity;
+}
+.mention-wrap {
+  white-space: nowrap;
+}
+/* While a fit is shown, everything but the two items and their line steps back. */
+.scan-overlay.fitting .link:not(.fit-link),
+.scan-overlay.fitting .label:not(.fit-end) {
+  opacity: 0.12;
+}
+/* (The rings would sit on the docked item.) */
+.scan-overlay.fitting .ring {
+  opacity: 0;
+}
+/* ▶ next to a connection in the selection card. */
+.fit-play {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin: 0 4px 0 6px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  vertical-align: -4px;
+  cursor: pointer;
+}
+.fit-play svg {
+  width: 10px;
+  height: 10px;
+  margin-left: 2px;
+  fill: currentColor;
+}
+.fit-play::before {
+  content: '';
+  position: absolute;
+  inset: -12px;
+}
+.fit-play[aria-pressed='true'] {
+  background: var(--sel);
+  color: #0b2a30;
+}
+
 /* Rings around the selected item (white) and the items it joins (selection colour). */
 .ring {
   pointer-events: none;

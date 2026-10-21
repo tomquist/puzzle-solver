@@ -35,14 +35,22 @@ to be analysed. Everything runs locally in the browser – no server, no upload.
    bar on the edge that must end up on top (`topBarFor`, from `upVector`); connection lines are
    dotted light lines with dark-rimmed dots that flow toward the biggest unit of their cluster
    (`flowDirections` in `ui/lib/linkGraph.ts`: the item with the most pieces, then the most links;
-   each line toward its end nearer to it). Press-and-hold shows the clean photo. Tapping a piece
+   each line toward its end nearer to it), routed around the pieces (`routeLink` in
+   `ui/lib/route.ts`: each end leaves its joining side along the outward normal; a curve that would
+   still cut through a body goes round it on the shorter side). Press-and-hold shows the clean photo. Tapping a piece
    selects it: its connection lines turn thicker and cyan, the pieces it joins get cyan outlines
    and rings, their connections in turn (levels 2–3, `selectionLevels`: whole levels only, at most
    12 more items and about a quarter of all items) lighter cyan outlines and lines without rings,
    everything else fades and the photo around them darkens (one even-odd path), and a bar replaces
    the action bar with where it goes and its connections in words (each mention selects that
    piece, "· N more beyond" counts the rest); the box picture's markers and the full-screen view
-   show the same levels; the details sheet adds the box
+   show the same levels. "Show the fit" (▶ next to a mention, or a tap on a level-1 line): the
+   smaller item, cut out of the photo, glides along the routed line to its docked pose next to the
+   other one as that one lies (`fitPose` in `ui/lib/fit.ts`: turn by the difference of the two
+   rotations, offset by the touching cells' grid step along the anchor's axes, per-axis cell size
+   from the box picture's cell aspect), clicks in at the seam, holds and fades back (`FitAnimation`:
+   Web Animations transforms, paused while the view moves; reduced motion: a static docked ghost).
+   The details sheet adds the box
    picture around the target, the piece type (corner/edge/interior), the rotation needed and the
    other candidates. The reference shows numbered markers at the matched locations. Photo and
    picture open in a full-screen view (Fullscreen API where available, else a fixed layer; closes

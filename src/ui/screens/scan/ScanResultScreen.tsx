@@ -13,6 +13,7 @@ import type { QualityIssue, ScanRecord } from '../../../model/types';
 import { describeCell } from '../../../pipeline/grid';
 import { haptic } from '../../../platform/device';
 import { Banner, EmptyState, ErrorState, Snackbar, Spinner, type SnackbarMessage } from '../../components/Feedback';
+import { FitAnimation } from '../../components/FitAnimation';
 import { FullscreenView, leaveFullscreenView } from '../../components/FullscreenView';
 import { IconCheck, IconChevron, IconClose, IconEye, IconEyeOff, IconFullscreen, IconPuzzle, IconScan } from '../../components/Icons';
 import { ItemDetail } from '../../components/ItemDetail';
@@ -28,9 +29,12 @@ import { useRepo } from '../../context/RepositoryContext';
 import { useAsync } from '../../hooks/useAsync';
 import { navigate } from '../../hooks/useHashRoute';
 import { useHoldToPeek } from '../../hooks/useHoldToPeek';
+import { usePrefersReducedMotion } from '../../hooks/usePieceCutout';
 import { useBitmap, useObjectUrl, useStoredBlob } from '../../hooks/useObjectUrl';
 import { usePrefs, useWakeLock } from '../../hooks/usePrefs';
+import { fitDescription, fitPose, glidePath, type FitItem } from '../../lib/fit';
 import { formatDate, plural } from '../../lib/format';
+import { itemPieceSize } from '../../lib/framing';
 import {
   cellsText,
   connectionsOf,
@@ -45,10 +49,11 @@ import {
   type ScanItem,
 } from '../../lib/items';
 import { selectionLevels } from '../../lib/linkGraph';
-import { paddedBox, unionRect } from '../../lib/overlay';
+import { cellSize, paddedBox, unionRect } from '../../lib/overlay';
 import { confidencePercent } from '../../lib/pieces';
 import { placeCells, unplaceCells } from '../../lib/progress';
 import { turnBadge, turnInstruction } from '../../lib/rotation';
+import { linkRoute } from '../../lib/route';
 import { href } from '../../lib/routes';
 import { Legend } from './Legend';
 import { useScanModel } from './useScanModel';
@@ -139,6 +144,61 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
   const beyond = levels ? [...levels.values()].filter((lv) => lv >= 2).length : 0;
   const clearSelection = useCallback(() => setSelectedKey(undefined), []);
 
+  // "Show the fit": the selected item and one of its connections (n restarts it). One at a time;
+  // a new selection ends it.
+  const reducedMotion = usePrefersReducedMotion();
+  const [fit, setFit] = useState<{ a: string; b: string; n: number }>();
+  useEffect(() => setFit(undefined), [selected?.key]);
+  const regionById = useMemo(() => new Map(result.regions.map((r) => [r.id, r])), [result]);
+  const cellAspect = reference ? cellSize(puzzle.grid, reference.width, reference.height) : undefined;
+  const aspect = cellAspect ? cellAspect.w / cellAspect.h : 1;
+  const fitItem = (key: string): FitItem | undefined => {
+    const item = byKey.get(key);
+    const p = item ? placementOf(item) : undefined;
+    if (!item || !p || p.rotationDeg === undefined || !p.cells.length) return undefined;
+    return { key, label: item.label, pieces: item.pieceCount, center: item.center, cells: p.cells, rotationDeg: p.rotationDeg, cellPx: itemPieceSize(item, result.regions) };
+  };
+  const canFit = (key: string) => !!selected && !!fitItem(selected.key) && !!fitItem(key);
+  const fitShow = useMemo(() => {
+    if (!fit) return undefined;
+    const a = fitItem(fit.a);
+    const b = fitItem(fit.b);
+    const pose = a && b ? fitPose(a, b, aspect) : undefined;
+    if (!a || !b || !pose) return undefined;
+    const moverKey = pose.mover === 'a' ? fit.a : fit.b;
+    const anchorKey = pose.mover === 'a' ? fit.b : fit.a;
+    const link = links.find((l) => (l.a === fit.a && l.b === fit.b) || (l.a === fit.b && l.b === fit.a));
+    const ends = (k: string) => ({ item: byKey.get(k)!, placement: placementOf(byKey.get(k)!) });
+    const route = link ? linkRoute(link, ends(link.a), ends(link.b), regionById, () => 10) : null;
+    const mover = byKey.get(moverKey)!;
+    return {
+      ...fit,
+      pose,
+      mover,
+      path: glidePath(pose, route ?? undefined, link?.a === moverKey, 12),
+      text: fitDescription(pose, { label: mover.label, pieces: mover.pieceCount }, { label: byKey.get(anchorKey)!.label }),
+    };
+    // fitItem reads the placements (placementOf) and the photo's regions.
+  }, [fit, links, byKey, placementOf, regionById, aspect, result]);
+  const playFit = (partner: string) => {
+    if (!selected) return;
+    if (reducedMotion && fit?.b === partner) return setFit(undefined);
+    if (view === 'picture' && !fullscreen) setView('both');
+    setFit((f) => ({ a: selected.key, b: partner, n: (f?.n ?? 0) + 1 }));
+    if (!fullscreen) photoFrame.current?.scrollIntoView({ block: 'nearest', behavior: scrollBehavior() });
+    // Frame both items and where the moving one docks, so the motion can be seen.
+    const a = fitItem(selected.key);
+    const b = fitItem(partner);
+    const pose = a && b ? fitPose(a, b, aspect) : undefined;
+    const handle = fullscreen === 'photo' ? fsView.current : fullscreen ? null : photoView.current;
+    if (pose && handle) {
+      const s = Math.max(a!.cellPx, b!.cellPx);
+      const box = unionRect([selected.bbox, byKey.get(partner)!.bbox, { x: pose.docked.x - s, y: pose.docked.y - s, width: 2 * s, height: 2 * s }])!;
+      const pad = Math.max(box.width, box.height) * 0.15;
+      handle.focusRect(paddedBox({ x: box.x - pad, y: box.y - pad, width: box.width + 2 * pad, height: box.height + 2 * pad }, 0, result.width, result.height), 4);
+    }
+  };
+
   /**
    * Bring the selected item and the items it joins into view (from the list, the details or a
    * mention in the selection bar) – in the full-screen view when it is open.
@@ -203,7 +263,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
   const labelOf = (key: string) => (visible.some((i) => i.key === key) ? byKey.get(key)?.label : undefined);
 
   // The photo and the picture with their overlays – in the page and in the full-screen view.
-  const photoContent = (scale: number, fitScale: number) => (
+  const photoContent = (scale: number, fitScale: number, inFullscreen = false) => (
     <>
       <img src={photoUrl} alt="" className="fill" draggable={false} />
       <ScanOverlay
@@ -221,7 +281,23 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
         fitScale={fitScale}
         onSelect={(key) => select(key)}
         onClear={clearSelection}
+        onLinkTap={(a, b) => selected && playFit(a === selected.key ? b : a)}
+        fitPair={fitShow && (fullscreen === 'photo') === inFullscreen ? [fitShow.a, fitShow.b] : undefined}
       />
+      {fitShow && (fullscreen === 'photo') === inFullscreen && (
+        <FitAnimation
+          key={`${fitShow.a}-${fitShow.b}-${fitShow.n}`}
+          mover={fitShow.mover}
+          regions={result.regions}
+          photo={photoBitmap}
+          width={result.width}
+          height={result.height}
+          pose={fitShow.pose}
+          path={fitShow.path}
+          reduced={reducedMotion}
+          onDone={() => setFit((f) => (f && f.n === fitShow.n ? undefined : f))}
+        />
+      )}
     </>
   );
   const pictureContent = (scale: number) =>
@@ -253,6 +329,10 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
         placed={isPlacedItem(selected)}
         connections={connectionTokens(connectionsOf(selected.key, links), labelOf)}
         beyond={beyond}
+        canFit={canFit}
+        fitKey={fitShow?.b}
+        fitText={fitShow?.text}
+        onFit={playFit}
         onSelectKey={(key) => select(key, { reveal: true })}
         onDetails={() => {
           // The details are a sheet of the page: leave the full-screen view for them.
@@ -328,7 +408,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
               >
                 {photoUrl ? (
                   <ZoomPanView contentWidth={result.width} contentHeight={result.height} handle={photoView} label="Your photo with the recognised pieces" margin={6}>
-                    {photoContent}
+                    {(scale: number, fitScale: number) => photoContent(scale, fitScale)}
                   </ZoomPanView>
                 ) : (
                   <Spinner label="Loading photo…" />
@@ -498,7 +578,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
                   insets={insets}
                   alwaysPan
                 >
-                  {photoContent}
+                  {(scale: number, fitScale: number) => photoContent(scale, fitScale, true)}
                 </ZoomPanView>
               </div>
             ) : (
@@ -545,6 +625,10 @@ function SelectionBar({
   placed,
   connections,
   beyond,
+  canFit,
+  fitKey,
+  fitText,
+  onFit,
   onSelectKey,
   onDetails,
   onClear,
@@ -556,6 +640,12 @@ function SelectionBar({
   connections: ConnectionToken[];
   /** Items highlighted beyond the direct connections (their connections in turn). */
   beyond: number;
+  /** Whether "show the fit" works for a joined item (both turns known). */
+  canFit: (key: string) => boolean;
+  /** The item whose fit is shown, and the fit in words (read out). */
+  fitKey?: string;
+  fitText?: string;
+  onFit: (key: string) => void;
   onSelectKey: (key: string) => void;
   onDetails: () => void;
   onClear: () => void;
@@ -580,18 +670,35 @@ function SelectionBar({
                   'text' in t ? (
                     <span key={i}>{t.text}</span>
                   ) : (
-                    <button
-                      key={i}
-                      className="mention"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSelectKey(t.key);
-                      }}
-                      aria-label={`Select #${t.label}`}
-                      data-testid={`mention-${t.key}`}
-                    >
-                      #{t.label}
-                    </button>
+                    <span key={i} className="mention-wrap">
+                      <button
+                        className="mention"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectKey(t.key);
+                        }}
+                        aria-label={`Select #${t.label}`}
+                        data-testid={`mention-${t.key}`}
+                      >
+                        #{t.label}
+                      </button>
+                      {canFit(t.key) && (
+                        <button
+                          className="fit-play"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onFit(t.key);
+                          }}
+                          aria-label={`Show how #${t.label} fits`}
+                          aria-pressed={fitKey === t.key}
+                          data-testid={`fit-play-${t.key}`}
+                        >
+                          <svg viewBox="0 0 10 10" aria-hidden="true">
+                            <path d="M1.5 0.8 9 5 1.5 9.2Z" />
+                          </svg>
+                        </button>
+                      )}
+                    </span>
                   ),
                 )}
                 {beyond > 0 && (
@@ -600,6 +707,9 @@ function SelectionBar({
                     · {beyond} more beyond
                   </span>
                 )}
+                <span className="visually-hidden" aria-live="polite" data-testid="fit-live">
+                  {fitText ?? ''}
+                </span>
               </span>
             )}
           </span>

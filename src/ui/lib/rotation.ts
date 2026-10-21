@@ -89,6 +89,14 @@ export function turnInstruction(rotationDeg: number): TurnInstruction {
   return { quarter, band, direction, text, exact, degrees };
 }
 
+/** The turn as a participle for sentences: "turned a quarter to the left", "turned upside down", "the same way round". */
+export function turnedWords(rotationDeg: number): string {
+  const t = turnInstruction(rotationDeg);
+  if (t.band === 'upright') return 'the same way round';
+  if (t.band === 'half') return 'turned upside down';
+  return `turned ${BAND_WORDS[t.band]} to the ${t.direction}`;
+}
+
 /** Compact words for lists: "slight turn right", "¼ turn right", "upside down", '' when upright. */
 export function turnBadge(rotationDeg: number): string {
   const t = turnInstruction(rotationDeg);
