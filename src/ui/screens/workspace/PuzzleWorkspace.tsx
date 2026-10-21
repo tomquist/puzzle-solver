@@ -1,5 +1,6 @@
 /** Puzzle workspace: header with progress and the Scan / Picture / History / Settings tabs. */
 import { Banner } from '../../components/Feedback';
+import { GridJobStrip, GridSuggestionCard } from '../../components/GridSuggestion';
 import { IconHistory, IconImage, IconScan, IconSettings } from '../../components/Icons';
 import { TopBar } from '../../components/TopBar';
 import { usePuzzle } from '../../context/PuzzleContext';
@@ -55,6 +56,8 @@ export function PuzzleWorkspace({ tab }: { tab: PuzzleTab }) {
             {matcher.message}
           </Banner>
         )}
+        <GridJobStrip />
+        {tab !== 'settings' && <GridSuggestionCard />}
         {analysing && tab !== 'scan' && (
           <a className="job-strip" href={href.puzzle(puzzle.id, 'scan')} data-testid="job-strip">
             <span className="spinner small-spinner" aria-hidden="true" />

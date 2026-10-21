@@ -12,6 +12,7 @@ import { EmptyState, ErrorState, Spinner } from '../components/Feedback';
 import { IconPuzzle } from '../components/Icons';
 import { TopBar } from '../components/TopBar';
 import { useBitmap, useObjectUrl, useStoredBlob } from '../hooks/useObjectUrl';
+import { useGridBelief, type GridBelief } from '../hooks/useGridBelief';
 import { useScanJob, type ScanJob } from '../hooks/useScanJob';
 import { emptyProgress } from '../lib/progress';
 import { href } from '../lib/routes';
@@ -49,6 +50,8 @@ export interface PuzzleContextValue {
   scanJob: ScanJob | undefined;
   startScan(photo: Blob): void;
   cancelScan(): void;
+  /** The grid as the scans measure it: status, a pending question, background updates. */
+  grid: GridBelief;
 }
 
 const PuzzleContext = createContext<PuzzleContextValue | null>(null);
@@ -172,6 +175,25 @@ export function PuzzleProvider({ id, children }: { id: string; children: ReactNo
   );
 
   const scansChanged = useCallback(() => setScansVersion((v) => v + 1), []);
+  const loadMatcher = useCallback(
+    async (p: PuzzleRecord) => {
+      if (!refBlob) throw new Error('The puzzle picture is still loading.');
+      await loadIntoPipeline(pipeline, p, refBlob);
+    },
+    [pipeline, refBlob],
+  );
+  const getProgress = useCallback(() => progressRef.current, []);
+  const grid = useGridBelief({
+    repo,
+    pipeline,
+    puzzle,
+    progress: getProgress,
+    savePuzzle,
+    saveProgress,
+    loadMatcher,
+    scansVersion,
+    scansChanged,
+  });
   const scan = useScanJob({
     repo,
     pipeline,
@@ -197,8 +219,9 @@ export function PuzzleProvider({ id, children }: { id: string; children: ReactNo
       scanJob: scan.job,
       startScan: scan.start,
       cancelScan: scan.cancel,
+      grid,
     };
-  }, [state, savePuzzle, saveProgress, updateProgress, refUrl, refBitmap, refMissing, matcher, ensureMatcher, scansVersion, scansChanged, scan.job, scan.start, scan.cancel]);
+  }, [state, savePuzzle, saveProgress, updateProgress, refUrl, refBitmap, refMissing, matcher, ensureMatcher, scansVersion, scansChanged, scan.job, scan.start, scan.cancel, grid]);
 
   if (state.kind === 'loading') {
     return (

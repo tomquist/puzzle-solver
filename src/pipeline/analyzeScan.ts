@@ -27,6 +27,7 @@ import {
   type ReferenceIndex,
   type ShapeMetric,
 } from './match';
+import { measureGridEvidence, probeGridEvidence, type CellSizeSample, type GridProbe } from './match/cellSize';
 import { resolveRegionIssues, segmentPieces, type SegmentOptions } from './pieces';
 
 /** How the fit hints compare piece sides (see `FitOptions`). */
@@ -65,6 +66,13 @@ export interface AnalyzeScanOptions {
    * hints and groups are derived (match/consistency.ts; default {@link DEFAULT_CONSISTENCY}).
    */
   consistency?: boolean;
+  /**
+   * Measure the cell size at the scale the scan shows when it is far from the grid's (match/
+   * cellSize.ts `probeGridEvidence`): re-matches a few regions, so only while the grid is not
+   * confirmed; 'wide' while it is only a guess). Off by default (the placements do not change, only
+   * `result.gridEvidence`).
+   */
+  gridProbe?: GridProbe;
 }
 
 /**
@@ -82,6 +90,8 @@ export interface AnalyzeScanOutput {
   analysedImage: RGBAImage;
   /** What the consistency pass did, when it ran. */
   consistency?: ConsistencyReport;
+  /** Per-region cell-size measurements behind `result.gridEvidence` (calibration tools). */
+  cellSizes?: CellSizeSample[];
 }
 
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -186,6 +196,17 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
   });
   const fits = findFits(regions, matches, index.grid, fitOptions);
   timings.fits = now() - t;
+  // What the scan says about the cell size, whatever the grid (match/cellSize.ts).
+  t = now();
+  let measured = measureGridEvidence(index, inputs, details);
+  if (opts.gridProbe) {
+    const probed = probeGridEvidence(index, inputs, measured.evidence, matches.filter((m) => m.status === 'confident').length, opts.gridProbe);
+    if (probed) {
+      measured = probed;
+      timings.cellSizeProbes = probed.tried;
+    }
+  }
+  timings.cellSize = now() - t;
   // A region placed confidently was evidently segmented well enough: no low-contrast warning for it.
   resolveRegionIssues(seg, new Set(matches.filter((m) => m.status === 'confident').map((m) => m.regionId)), ['low_contrast']);
   timings.total = now() - tStart;
@@ -201,8 +222,10 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
       groups,
       quality: seg.quality,
       timings,
+      gridEvidence: measured.evidence,
     },
     analysedImage: image,
     consistency,
+    cellSizes: measured.samples,
   };
 }

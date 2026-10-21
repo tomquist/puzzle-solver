@@ -90,6 +90,8 @@ interface Samples {
   /** Seam evidence across the a axis (vertical-ish seams) and across the b axis. */
   wa: Float32Array;
   wb: Float32Array;
+  /** 1 for outline pixels (their weights are the outline's, not seam responses). */
+  edge: Uint8Array;
   n: number;
 }
 
@@ -156,7 +158,7 @@ function seamSamples(image: RGBAImage, mask: Mask, angle: number, pitch: number)
     wa[k] = OUTLINE_WEIGHT * mean * na ** 4;
     wb[k] = OUTLINE_WEIGHT * mean * nb ** 4;
   }
-  return { x: xs, y: ys, wa, wb, n: m };
+  return { x: xs, y: ys, wa, wb, edge, n: m };
 }
 
 /** Seam kernel over the phase bins (zero mean) and its peak-minus-mean value. */
@@ -263,12 +265,28 @@ const range = (centre: number, rel: number, step: number): number[] => {
   return out;
 };
 
+/** Options of {@link fitPatchLattice}. */
+export interface LatticeFitOptions {
+  /** Seam samples of the patch ({@link latticeSamples}), to fit several priors without recomputing them. */
+  samples?: LatticeSamples;
+  /** Keep the prior's angle (fit pitches and phases only). */
+  fixedAngle?: boolean;
+}
+
+/** The patch's seam and outline evidence (opaque), for repeated fits. */
+export type LatticeSamples = Samples;
+
+/** Seam samples for fits around lattice `l` ({@link LatticeFitOptions.samples}). */
+export function latticeSamples(image: RGBAImage, mask: Mask, l: PatchLattice): LatticeSamples | null {
+  return seamSamples(image, mask, l.angle, Math.sqrt(l.pa * l.pb));
+}
+
 /**
  * Fit the patch's cell lattice to its seams, starting from `prior` (see module documentation).
  * The result's origin is a seam crossing near the middle of the patch.
  */
-export function fitPatchLattice(image: RGBAImage, mask: Mask, prior: PatchLattice): PatchLattice {
-  const samples = seamSamples(image, mask, prior.angle, Math.sqrt(prior.pa * prior.pb));
+export function fitPatchLattice(image: RGBAImage, mask: Mask, prior: PatchLattice, opts: LatticeFitOptions = {}): PatchLattice {
+  const samples = opts.samples ?? seamSamples(image, mask, prior.angle, Math.sqrt(prior.pa * prior.pb));
   if (!samples) return { ...prior, strength: [-1, -1] };
   // Phases are measured from the prior's seam crossing nearest the patch's middle (an angle error
   // turns the lattice about it; shifts far from the patch say nothing).
@@ -298,7 +316,7 @@ export function fitPatchLattice(image: RGBAImage, mask: Mask, prior: PatchLattic
   const trusted = (f: AxisFit | null, p: number): f is AxisFit => !!f && f.prominence >= MIN_PROMINENCE && Math.abs(near(f)) <= MAX_SHIFT * p;
   let best = at(prior.angle, PITCH_RANGE, PITCH_STEP, prior.pa, prior.pb);
   const atPrior = best;
-  if (fitA && fitB) {
+  if (fitA && fitB && !opts.fixedAngle) {
     for (let d = -ANGLE_RANGE; d <= ANGLE_RANGE + 1e-9; d += ANGLE_STEP) {
       if (Math.abs(d) < 1e-9) continue;
       const r = at(prior.angle + d * D, PITCH_RANGE, PITCH_STEP, prior.pa, prior.pb);
@@ -307,7 +325,7 @@ export function fitPatchLattice(image: RGBAImage, mask: Mask, prior: PatchLattic
   }
   const coarse = best;
   for (let d = -ANGLE_STEP; d <= ANGLE_STEP + 1e-9; d += ANGLE_FINE) {
-    if (!(fitA && fitB) && Math.abs(d) > 1e-9) continue;
+    if ((!(fitA && fitB) || opts.fixedAngle) && Math.abs(d) > 1e-9) continue;
     const r = at(coarse.angle + d * D, PITCH_STEP * 2, PITCH_FINE, coarse.fa?.pitch ?? prior.pa, coarse.fb?.pitch ?? prior.pb);
     if (r.score > best.score) best = r;
   }
@@ -376,4 +394,141 @@ export function latticeCells(l: PatchLattice, mask: Mask, table?: Mask, minCover
     }
   }
   return out;
+}
+
+/** Pitch of one lattice axis measured from its individual seams (see {@link measureLatticePitch}). */
+export interface AxisPitch {
+  /** Photo px per cell. */
+  pitch: number;
+  /** Standard error of ln(pitch). */
+  se: number;
+  /** Internal seams located. */
+  seams: number;
+  /** Seam index span (last − first located seam). */
+  span: number;
+}
+
+/** Bin width (cells) of the per-seam profiles, and the Gaussian smoothing applied to them. */
+const SEAM_BIN = 0.01;
+const SEAM_SMOOTH = 1.5;
+/** Half-width (cells) of the window around an expected seam in which its line is looked for. */
+const SEAM_WINDOW = 0.22;
+/** A seam counts when its peak stands this far (share of the peak) above the window's median. */
+const SEAM_CONTRAST = 0.35;
+/** Seams need this share of the median seam's support (pixels along it) to count. */
+const SEAM_SUPPORT = 0.35;
+/** Floor of a located seam's position error (cells): line width, pixel grid. */
+const SEAM_POS_FLOOR = 0.012;
+/** Position error (cells) assumed per seam when two seams leave no residual to measure it by. */
+const SEAM_POS_TWO = 0.03;
+
+/**
+ * The pitch along each axis of a fitted lattice, measured for the cell-size evidence
+ * (match/cellSize.ts) rather than for the cells: the lattice fit maximises one folded comb over a
+ * search grid, which places the cells well but leaves its pitch a few per cent off on faint seams
+ * (a pitch error over a few cells shifts the comb less than the seams' width). Here every internal
+ * seam is located on its own – the peak of the dark-line response projected across the axis,
+ * within ±0.22 cells of where the lattice puts it – and a weighted line through seam position over
+ * seam index gives the pitch, with a standard error from the residuals (two seams: an assumed
+ * position error). Outline pixels are left out (the rim's knobs blur its body edge). Axes the
+ * lattice fit did not trust (`strength` −1) are not measured.
+ */
+export function measureLatticePitch(image: RGBAImage, mask: Mask, l: PatchLattice): { a?: AxisPitch; b?: AxisPitch } {
+  const samples = seamSamples(image, mask, l.angle, Math.sqrt(l.pa * l.pb));
+  if (!samples) return {};
+  const ca = Math.cos(l.angle), sa = Math.sin(l.angle);
+  const axis = (onA: boolean): AxisPitch | undefined => {
+    if (l.strength[onA ? 0 : 1] < 0) return undefined;
+    const p = onA ? l.pa : l.pb;
+    const w = onA ? samples.wa : samples.wb;
+    let t0 = Infinity, t1 = -Infinity;
+    const ts = new Float32Array(samples.n);
+    for (let k = 0; k < samples.n; k++) {
+      const dx = samples.x[k] - l.origin.x, dy = samples.y[k] - l.origin.y;
+      const t = (onA ? dx * ca + dy * sa : -dx * sa + dy * ca) / p;
+      ts[k] = t;
+      if (t < t0) t0 = t;
+      if (t > t1) t1 = t;
+    }
+    const lo = Math.floor(t0) - 1;
+    const nb = Math.ceil((t1 - lo + 1) / SEAM_BIN) + 1;
+    const prof = new Float64Array(nb), support = new Float64Array(nb);
+    for (let k = 0; k < samples.n; k++) {
+      const b = Math.floor((ts[k] - lo) / SEAM_BIN);
+      support[b]++;
+      if (!samples.edge[k]) prof[b] += w[k];
+    }
+    // Smooth (Gaussian, SEAM_SMOOTH bins).
+    const rad = Math.ceil(3 * SEAM_SMOOTH);
+    const ker: number[] = [];
+    for (let j = -rad; j <= rad; j++) ker.push(Math.exp(-(j * j) / (2 * SEAM_SMOOTH * SEAM_SMOOTH)));
+    const sm = new Float64Array(nb);
+    for (let i = 0; i < nb; i++) {
+      let s = 0, ws = 0;
+      for (let j = -rad; j <= rad; j++) {
+        const q = i + j;
+        if (q < 0 || q >= nb) continue;
+        s += ker[j + rad] * prof[q];
+        ws += ker[j + rad];
+      }
+      sm[i] = s / ws;
+    }
+    // Support of a seam: patch pixels within a tenth of a cell of it (its length across the patch).
+    const seamSupport = (k: number) => {
+      const c = Math.round((k - lo) / SEAM_BIN), r = Math.round(0.1 / SEAM_BIN);
+      let s = 0;
+      for (let i = Math.max(0, c - r); i <= Math.min(nb - 1, c + r); i++) s += support[i];
+      return s;
+    };
+    const ks: number[] = [];
+    for (let k = Math.ceil(t0 + 0.5); k <= Math.floor(t1 - 0.5); k++) ks.push(k);
+    if (ks.length < 2) return undefined;
+    const sup = ks.map(seamSupport);
+    const medSup = [...sup].sort((x, y) => x - y)[sup.length >> 1];
+    const found: { k: number; pos: number; wt: number }[] = [];
+    ks.forEach((k, idx) => {
+      if (sup[idx] < SEAM_SUPPORT * medSup) return;
+      const c = Math.round((k - lo) / SEAM_BIN), r = Math.round(SEAM_WINDOW / SEAM_BIN);
+      const i0 = Math.max(1, c - r), i1 = Math.min(nb - 2, c + r);
+      let bi = i0;
+      const vals: number[] = [];
+      for (let i = i0; i <= i1; i++) {
+        vals.push(sm[i]);
+        if (sm[i] > sm[bi]) bi = i;
+      }
+      vals.sort((x, y) => x - y);
+      const med = vals[vals.length >> 1];
+      if (!(sm[bi] > 0) || (sm[bi] - med) / sm[bi] < SEAM_CONTRAST || bi === i0 || bi === i1) return;
+      const den = sm[bi - 1] - 2 * sm[bi] + sm[bi + 1];
+      const off = den < 0 ? Math.max(-0.5, Math.min(0.5, (0.5 * (sm[bi - 1] - sm[bi + 1])) / den)) : 0;
+      found.push({ k, pos: lo + (bi + 0.5 + off) * SEAM_BIN, wt: Math.sqrt(sup[idx]) });
+    });
+    if (found.length < 2) return undefined;
+    // Weighted line pos = c + (1 + δ)·k (cells of the lattice's pitch).
+    let sw = 0, sk = 0, sp = 0;
+    for (const f of found) {
+      sw += f.wt;
+      sk += f.wt * f.k;
+      sp += f.wt * f.pos;
+    }
+    const km = sk / sw, pm = sp / sw;
+    let skk = 0, skp = 0, ukk = 0;
+    for (const f of found) {
+      skk += f.wt * (f.k - km) ** 2;
+      skp += f.wt * (f.k - km) * (f.pos - pm);
+    }
+    const slope = skp / skk;
+    const kMean = found.reduce((a, f) => a + f.k, 0) / found.length;
+    for (const f of found) ukk += (f.k - kMean) ** 2;
+    let sigma: number;
+    if (found.length >= 3) {
+      let rss = 0;
+      for (const f of found) rss += f.wt * (f.pos - pm - slope * (f.k - km)) ** 2;
+      sigma = Math.max(SEAM_POS_FLOOR, Math.sqrt((rss / sw) * (found.length / (found.length - 2))));
+    } else sigma = SEAM_POS_TWO;
+    const span = found[found.length - 1].k - found[0].k;
+    return { pitch: p * slope, se: sigma / Math.sqrt(ukk) / slope, seams: found.length, span };
+  };
+  const a = axis(true), b = axis(false);
+  return { ...(a ? { a } : {}), ...(b ? { b } : {}) };
 }

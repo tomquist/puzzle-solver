@@ -33,8 +33,9 @@ import { useScanModel } from './useScanModel';
 
 export function PlacingScreen({ scanId }: { scanId: string }) {
   const repo = useRepo();
-  const { puzzle } = usePuzzle();
-  const scan = useAsync(() => repo.getScan(scanId), [repo, scanId]);
+  const { puzzle, scansVersion } = usePuzzle();
+  // Reloaded when scans change: a new grid re-derives their cells (pipeline/remap.ts).
+  const scan = useAsync(() => repo.getScan(scanId), [repo, scanId, scansVersion]);
   const back = href.scan(puzzle.id, scanId);
   if (scan.loading && !scan.data) {
     return (

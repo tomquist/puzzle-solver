@@ -11,10 +11,14 @@ puzzles are stored in the browser (IndexedDB).
 1. **New puzzle → photograph the box.** The app finds the picture on the box automatically; drag the
    corners if needed (a magnifier helps). Wrong guess? Tap *Next candidate* (whole lid vs. picture
    inside the printed frame).
-2. **Enter the details.** Number of pieces and, optionally, the finished size printed on the box.
-   The size straightens the picture to the exact shape and, with the piece count, gives the grid
-   (e.g. 1000 pieces at 70 × 50 cm → 37 × 27). Pick another suggestion or enter a custom grid if your
-   puzzle differs.
+2. **Enter the details.** Number of pieces – from the box, *about*, or *I don't know* – and,
+   optionally, the finished size printed on the box. The size straightens the picture to the exact
+   shape and, with the piece count, gives the grid (e.g. 1000 pieces at 70 × 50 cm → 37 × 27). Pick
+   another suggestion or enter a custom grid if your puzzle differs. Without a count the grid is
+   estimated and measured from your first scans. Either way the scans check the grid: boxes round
+   ("1500" for 45 × 34 = 1530), and when your pieces clearly measure another grid the app asks once
+   ("Your pieces measure 45 × 34, not 44 × 34") – *Use* moves your scans and placed pieces over,
+   *Keep* is remembered. Settings shows whether the grid is confirmed, measured or estimated.
 3. **Optional: sharper picture.** If the photo has too few pixels per piece, add close-up photos of
    parts of the box; they are aligned automatically and merged into a higher-resolution reference.
 4. **Scan pieces.** Spread 10–40 pieces on a plain background that contrasts with them, not touching,

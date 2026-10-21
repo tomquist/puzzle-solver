@@ -143,7 +143,7 @@ function PuzzleCard({ puzzle, progress }: { puzzle: PuzzleRecord; progress: Prog
       <div className="puzzle-card-body">
         <h3>{puzzle.name}</h3>
         <div className="muted small">
-          {puzzle.pieceCount} pieces · {puzzle.grid.cols} × {puzzle.grid.rows}
+          {puzzle.pieceCountKind === 'unknown' ? `${puzzle.grid.cols * puzzle.grid.rows} pieces (by the grid)` : `${puzzle.pieceCountKind === 'about' ? 'about ' : ''}${puzzle.pieceCount} pieces`} · {puzzle.grid.cols} × {puzzle.grid.rows}
         </div>
         <div className="mini-progress" aria-label={`${pct}% placed`}>
           <div className="progress-track">

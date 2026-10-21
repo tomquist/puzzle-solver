@@ -1156,6 +1156,43 @@
         "segTop3": 0.331,
         "segErrors": 1
       }
+    },
+    "grid": {
+      "starry-20x16-patches": {
+        "questionsAtTruth": 0,
+        "maxQuestions": 1,
+        "wrongQuestions": 0,
+        "finalRight": 1,
+        "firstRight": 1
+      },
+      "wave-40x25-singles": {
+        "questionsAtTruth": 0,
+        "maxQuestions": 1,
+        "wrongQuestions": 0,
+        "finalRight": 1,
+        "firstRight": 1
+      },
+      "wave-30x25-wide-cells": {
+        "questionsAtTruth": 0,
+        "maxQuestions": 1,
+        "wrongQuestions": 0,
+        "finalRight": 1,
+        "firstRight": 1
+      },
+      "starry-20x16-few-pieces": {
+        "questionsAtTruth": 0,
+        "maxQuestions": 1,
+        "wrongQuestions": 0,
+        "finalRight": 1,
+        "firstRight": 1
+      },
+      "portrait-3x6-long-cells": {
+        "questionsAtTruth": 0,
+        "maxQuestions": 1,
+        "wrongQuestions": 0,
+        "finalRight": 0.4,
+        "firstRight": 1
+      }
     }
   }
 }

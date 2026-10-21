@@ -12,6 +12,7 @@ import type { PipelineApi } from '../../worker/api';
 import { errorText } from '../components/Feedback';
 import { navigate } from './useHashRoute';
 import { placedCells } from '../lib/progress';
+import { gridProbeFor } from './useGridBelief';
 import { href } from '../lib/routes';
 
 /** Longest side scan photos are analysed and stored at (the pipeline's default analysis size). */
@@ -77,7 +78,9 @@ export function useScanJob(deps: ScanJobDeps): { job: ScanJob | undefined; start
         working(0.02, 'Preparing the puzzle picture…');
         await ensureMatcher();
         stage = 'analyse';
-        const resp = await pipeline.analyzeScan(puzzle.id, rgba, { placedCells: placedCells(progress, puzzle.grid) }, (e) =>
+        // While the grid is not confirmed, the scan also measures cells far from the grid's size.
+        const gridProbe = gridProbeFor(puzzle);
+        const resp = await pipeline.analyzeScan(puzzle.id, rgba, { placedCells: placedCells(progress, puzzle.grid), gridProbe }, (e) =>
           working(0.03 + e.progress * 0.9, e.message ?? STAGE_LABEL[e.stage] ?? 'Analysing…'),
         );
         if (run.current !== myRun) return; // cancelled

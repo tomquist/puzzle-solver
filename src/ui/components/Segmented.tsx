@@ -16,6 +16,7 @@ export function Segmented<T extends string>({
     <div className={`segmented ${size}`} role="radiogroup" aria-label={label}>
       {options.map((o) => (
         <button
+          type="button"
           key={o.value}
           role="radio"
           aria-checked={o.value === value}

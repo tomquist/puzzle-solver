@@ -10,6 +10,7 @@ import { buildReferenceIndex, type ReferenceIndex } from '../pipeline/match';
 import { assessFrame } from '../pipeline/pieces';
 import { composeHighRes, registerCloseup } from '../pipeline/stitch';
 import type { PipelineApi } from './api';
+import { gridVerdict, remapGrid } from './gridOps';
 
 interface LoadedReference {
   key: string;
@@ -63,12 +64,21 @@ export function createLocalPipeline(): PipelineApi {
       return analyzeScan(ref.index, photo, {
         placedCells: options?.placedCells,
         maxSide: options?.maxSide,
+        gridProbe: options?.gridProbe,
         onProgress,
       });
     },
 
     async assessFrame(frame) {
       return assessFrame(frame);
+    },
+
+    async assessGrid(ctx) {
+      return gridVerdict(ctx);
+    },
+
+    async remapGrid(req) {
+      return remapGrid(req);
     },
   };
 }

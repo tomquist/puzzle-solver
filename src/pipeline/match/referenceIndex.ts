@@ -111,3 +111,20 @@ export function buildReferenceIndex(reference: RGBAImage, grid: GridSpec, cut: C
   });
   return { width: W, height: H, grid: { rows: grid.rows, cols: grid.cols }, cut, cellW, cellH, channelWeights: [wl, wa, wb], levels };
 }
+
+/**
+ * The same matching index read with other cells (`cellW` × `cellH` reference px): the pyramid is
+ * the picture's and does not change, only what a cell means – its levels' pixels per cell, the
+ * template scale of a piece, the cells reported. Used to measure a scan at another scale than the
+ * puzzle's grid (match/cellSize.ts) without rebuilding the pyramid; the grid is the nearest whole one.
+ */
+export function withCells(index: ReferenceIndex, cellW: number, cellH: number): ReferenceIndex {
+  const k = cellW / index.cellW;
+  return {
+    ...index,
+    grid: { rows: Math.max(1, Math.round(index.height / cellH)), cols: Math.max(1, Math.round(index.width / cellW)) },
+    cellW,
+    cellH,
+    levels: index.levels.map((l) => ({ ...l, ppc: l.ppc * k })),
+  };
+}

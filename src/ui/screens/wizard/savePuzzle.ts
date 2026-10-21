@@ -2,6 +2,7 @@
 import { mat3Multiply, scaling } from '../../../cv/geometry';
 import type { PuzzleRecord, SourcePhoto } from '../../../model/types';
 import { makeThumbnail, rgbaToBlob } from '../../../platform/imageio';
+import { newGridState } from '../../../pipeline/gridBelief';
 import { newId, type PuzzleRepository } from '../../../storage/types';
 import type { WizardResult } from './types';
 
@@ -42,8 +43,10 @@ export async function saveNewPuzzle(repo: PuzzleRepository, r: WizardResult, onS
       createdAt: now,
       updatedAt: now,
       pieceCount: r.details.pieceCount,
+      pieceCountKind: r.details.pieceCountKind,
       physicalSize: r.details.physicalSize,
       grid: r.details.grid,
+      gridState: newGridState(r.details.gridStatus),
       cut: r.details.cut,
       reference: { blobId: referenceBlobId, width: r.reference.width, height: r.reference.height },
       thumbnailBlobId,

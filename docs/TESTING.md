@@ -17,6 +17,8 @@ so changes can be made and judged without manual photo-taking feedback loops.
 | Real-photo corpus | `npm run bench -- --corpus` | Real photos confirmed by the user still match | locally / CI when present |
 | Feedback replay | `npm run bench` (`bench/feedback.eval.ts`) | Users' feedback files (`test-corpus/feedback/`): reviewed marks stay fixed; answer keys score found / separate / false regions | CI (gate) |
 | Private placement truth | `npm run bench` (`bench/private.eval.ts`) | Full feedback files of the user's own puzzle (with its commercial picture) in the ignored `test-corpus/private/`, each with a `<file>.truth.json` of true cells and turns: top-1 / top-3 cell, rotation, confident share and precision, found / merged — report only | locally when present (skipped otherwise) |
+| Grid convergence | `npm run bench` (`bench/grid.eval.ts`) | Synthetic puzzles at known grids (square and long cells, few pieces): from the right grid no question, from a neighbouring grid, no count or a wrong count at most one question and the right final grid | CI (gate) |
+| Grid replay on real scans | `npx vite-node scripts/grid-replay.ts -- --dir <full feedback files>` | The scans of one real puzzle replayed through the grid belief from the right grid, wrong neighbours, no count and a wrong count, in the order taken and shuffled: when it first asks, whether right, how often, final grid – report only | locally |
 | Other puzzles | `npm run corpus:fetch-puzzlemap`, then `npm run bench` (`bench/puzzlemap.eval.ts`) | Real photos of 643 labelled pieces of other puzzles (Puzzle-Map dataset, 7 reference pictures) are placed in their reference: top-1 / top-3 cell and turn | locally when fetched (skipped otherwise) |
 
 ## Synthetic ground truth

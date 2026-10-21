@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { describe, expect, it } from 'vitest';
-import { cellKey, type Id, type PuzzleRecord, type ScanRecord, type ScanResult } from '../model/types';
+import { cellKey, GRID_EVIDENCE_VERSION, type Id, type PuzzleRecord, type ScanRecord, type ScanResult } from '../model/types';
 import {
   createIndexedDbRepository,
   createMemoryRepository,
@@ -299,6 +299,41 @@ describe.each(implementations)('%s repository', (_name, create) => {
     expect(copy.name).toBe('Big');
     expect(await other.listScans(copy.id)).toHaveLength(2);
     expect(sameBytes(await bytesOf(await other.getBlob(copy.reference.blobId)), await bytesOf(await repo.getBlob(original.reference.blobId)))).toBe(true);
+  });
+
+  it('keeps the grid state with the puzzle and carries its per-scan evidence over on import', async () => {
+    const repo = create();
+    const original = await addPuzzle(repo, { name: 'Grid' });
+    const scanA = await addScan(repo, original.id, 100, 'a');
+    const evidence = {
+      version: GRID_EVIDENCE_VERSION,
+      grid: { rows: 27, cols: 38 },
+      refWidth: 3800,
+      refHeight: 2700,
+      sources: [{ kind: 'patch' as const, regionIds: [1], w: { log: 4.6, se: 0.01, n: 5 }, x: [10.5], y: [20.5] }],
+    };
+    const withState: PuzzleRecord = {
+      ...original,
+      pieceCountKind: 'about',
+      gridState: {
+        status: 'unconfirmed',
+        scans: { [scanA.id]: evidence, 'deleted-scan': evidence },
+        declined: [{ rows: 27, cols: 39 }],
+        left: [],
+        suggestion: { grid: { rows: 28, cols: 38 }, odds: 40, sources: 3, scans: 2, at: 5 },
+      },
+    };
+    await repo.savePuzzle(withState);
+    expect(await repo.getPuzzle(original.id)).toEqual(withState);
+
+    const imported = await repo.importPuzzle(await repo.exportPuzzle(original.id));
+    const [newScan] = await repo.listScans(imported.id);
+    expect(imported.pieceCountKind).toBe('about');
+    expect(imported.gridState?.status).toBe('unconfirmed');
+    expect(imported.gridState?.declined).toEqual([{ rows: 27, cols: 39 }]);
+    expect(imported.gridState?.suggestion?.grid).toEqual({ rows: 28, cols: 38 });
+    // Keyed by the new scan id; evidence of a scan that is not in the file is dropped.
+    expect(imported.gridState?.scans).toEqual({ [newScan.id]: evidence });
   });
 
   it('exports a puzzle without scans or progress', async () => {

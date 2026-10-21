@@ -42,16 +42,74 @@ export interface SourcePhoto {
   toReference?: Mat3;
 }
 
+/**
+ * How sure the user is of the piece count: printed on the box ('exact'; boxes still round, "1500"
+ * for 45 × 34 = 1530), a guess ('about'), or not known at all ('unknown': `pieceCount` is then the
+ * estimated grid's rows × cols).
+ */
+export type PieceCountKind = 'exact' | 'about' | 'unknown';
+
+/**
+ * Where the grid comes from: 'estimated' (no piece count: a guess from the picture, replaced by
+ * what the scans measure without asking), 'unconfirmed' (from the piece count or the user's
+ * choice; scans may still disagree, and then the app asks once), 'confirmed' (the user accepted a
+ * measured grid, or the scans agreed strongly; only overwhelming evidence raises it again).
+ */
+export type GridStatus = 'estimated' | 'unconfirmed' | 'confirmed';
+
+/** A grid the user turned down, and how many scans had measured the grid by then. */
+export interface DeclinedGrid extends GridSpec {
+  scans?: number;
+}
+
+/** A grid change the app proposes, waiting for the user's answer. */
+export interface GridSuggestion {
+  grid: GridSpec;
+  /** Posterior odds of `grid` over the current grid when it was proposed. */
+  odds: number;
+  /** Independent sources (patches, the scans' loose pieces) behind it. */
+  sources: number;
+  /** Scans the measurement comes from. */
+  scans: number;
+  at: number;
+}
+
+/**
+ * What the scans say about the grid (pipeline/gridBelief.ts): every scan's cell-size evidence,
+ * keyed by scan id (a re-analysed scan replaces its entry, a deleted one is removed, so nothing is
+ * counted twice), and the user's answers.
+ */
+export interface GridState {
+  status: GridStatus;
+  /** Evidence per scan id. */
+  scans: Record<Id, GridEvidence>;
+  /**
+   * Grids the user turned down ("Keep"), with the number of measured scans at the time; raised
+   * again only past the high bar, from scans taken after the answer.
+   */
+  declined: DeclinedGrid[];
+  /** Grids an estimated grid moved away from without asking; not returned to without the high bar. */
+  left: GridSpec[];
+  /** A proposal on screen, until the user answers it. */
+  suggestion?: GridSuggestion;
+  /** When the grid last changed through this mechanism (or was confirmed). */
+  changedAt?: number;
+}
+
 export interface PuzzleRecord {
   id: Id;
   name: string;
   createdAt: number;
   updatedAt: number;
-  /** Number of pieces as printed on the box. */
+  /** Number of pieces as printed on the box (or the estimated grid's cells when unknown). */
   pieceCount: number;
+  /** How sure that count is (missing: 'exact', as in puzzles saved before it was recorded). */
+  pieceCountKind?: PieceCountKind;
   physicalSize?: PhysicalSize;
   /** Grid used for locating pieces (rows * cols ≈ pieceCount). */
   grid: GridSpec;
+  /** Measured evidence about the grid and its status (missing: unconfirmed, no evidence yet). */
+  gridState?: GridState;
   cut: CutStyle;
   /** The rectified (and possibly super-resolved) puzzle image used as matching reference. */
   reference: { blobId: Id; width: number; height: number };
@@ -183,6 +241,24 @@ export interface Placement {
 
 export type MatchStatus = 'confident' | 'ambiguous' | 'unmatched';
 
+/**
+ * A patch's seam-fitted cell lattice in reference px at its best placement: where its pieces are in
+ * the picture, whatever the grid – so its cells can be re-derived when the grid changes
+ * (pipeline/remap.ts).
+ */
+export interface RefLattice {
+  /** The placement it was taken at: the patch's reference position (= its candidate's x, y) and turn. */
+  at: Point;
+  rotationDeg: number;
+  /** Reference position of lattice point (0, 0). */
+  origin: Point;
+  /** Reference vector of one lattice step along its a and b axes. */
+  a: Point;
+  b: Point;
+  /** The lattice cells the patch covers, flattened i, j, coverage (0..1), … */
+  cells: number[];
+}
+
 export interface RegionMatch {
   regionId: number;
   /** Best first; typically up to 5 distinct locations. */
@@ -190,6 +266,8 @@ export interface RegionMatch {
   /** For patches: grid cells covered by the patch at the best placement. */
   coveredCells?: CellRef[];
   status: MatchStatus;
+  /** For patches: their lattice at the best placement (absent in scans saved by older versions). */
+  lattice?: RefLattice;
 }
 
 export interface FitHint {
@@ -276,6 +354,51 @@ export interface QualityReport {
   metrics: Record<string, number>;
 }
 
+/** A measurement in natural-log units with its standard error. */
+export interface LogMeasure {
+  /** ln of the measured value. */
+  log: number;
+  /** Standard error of `log`. */
+  se: number;
+  /** Cells (patches) or pieces the measurement rests on. */
+  n: number;
+}
+
+/**
+ * One independent measurement of the reference picture's cell size from a scan
+ * (pipeline/match/cellSize.ts): an assembled patch (its seams), or the scan's single pieces
+ * together. Width = along the picture's x axis, height = along y, in reference px.
+ */
+export interface CellSizeSource {
+  kind: 'patch' | 'pieces';
+  regionIds: number[];
+  w?: LogMeasure;
+  h?: LogMeasure;
+  /**
+   * Reference coordinates (px) of cell centres the source saw, along x and along y (single pieces:
+   * their body centres; patches: their lattice cells, only along axes whose seams were fitted – an
+   * axis that kept the placement's grid would only echo it). Where they sit in the cells of a grid
+   * tells how well that grid fits (phase).
+   */
+  x?: number[];
+  y?: number[];
+}
+
+/** Version of {@link GridEvidence}'s measurement; evidence of another version is ignored by the belief. */
+export const GRID_EVIDENCE_VERSION = 1;
+
+/** What a scan says about the grid: measured cell sizes, independent of the grid it was analysed with. */
+export interface GridEvidence {
+  /** Measurement version (evidence of another version is ignored). */
+  version: number;
+  /** Grid the scan was analysed with. */
+  grid: GridSpec;
+  /** Reference size the measurements refer to. */
+  refWidth: number;
+  refHeight: number;
+  sources: CellSizeSource[];
+}
+
 export interface ScanResult {
   /** Size of the analysed image; all coordinates above refer to it. */
   width: number;
@@ -288,6 +411,8 @@ export interface ScanResult {
   quality: QualityReport;
   /** Milliseconds per pipeline stage. */
   timings: Record<string, number>;
+  /** Cell-size measurements for the grid belief (absent in scans saved by older versions). */
+  gridEvidence?: GridEvidence;
 }
 
 /** Quick live-camera feedback (computed on a downscaled video frame). */
