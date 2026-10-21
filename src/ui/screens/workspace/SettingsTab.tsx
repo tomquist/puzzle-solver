@@ -17,6 +17,7 @@ import { formatBytes, parsePositive } from '../../lib/format';
 import { emptyProgress, placedCount } from '../../lib/progress';
 import { referenceResolution } from '../../lib/quality';
 import { href } from '../../lib/routes';
+import { AppVersion } from '../../components/AppVersion';
 
 export function SettingsTab() {
   const { repo, persistent, persisted, requestPersist } = useRepository();
@@ -220,6 +221,8 @@ export function SettingsTab() {
           </button>
         </div>
       </section>
+
+      <AppVersion />
 
       {confirm === 'delete' && (
         <ConfirmSheet

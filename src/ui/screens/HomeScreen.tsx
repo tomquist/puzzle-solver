@@ -11,6 +11,7 @@ import { useStoredBlobUrl } from '../hooks/useObjectUrl';
 import { formatDate } from '../lib/format';
 import { progressPercent } from '../lib/progress';
 import { href } from '../lib/routes';
+import { AppVersion } from '../components/AppVersion';
 
 export function HomeScreen() {
   const { repo, persistent } = useRepository();
@@ -93,6 +94,7 @@ export function HomeScreen() {
             </ul>
           </>
         )}
+        <AppVersion />
       </main>
     </>
   );
