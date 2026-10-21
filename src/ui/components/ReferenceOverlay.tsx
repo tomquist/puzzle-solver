@@ -1,6 +1,8 @@
 /** SVG overlay on the reference picture: grid, placed cells, numbered markers, links, coverage. */
 import type { Rect } from '../../cv/image';
 import type { CellRef, GridSpec } from '../../model/types';
+import { useRef } from 'react';
+import { useLineFlow } from '../hooks/useLineFlow';
 import type { CellBounds } from '../lib/items';
 import { flowDirections, linkId, linkLevel, SELECTION_REACH, selectionLevels } from '../lib/linkGraph';
 import { cellRect, gridPath, markerRadius, trimmedSegment } from '../lib/overlay';
@@ -69,13 +71,15 @@ export function ReferenceOverlay({
     markers.map((m) => ({ key: m.key, pieceCount: m.pieces ?? 1 })),
     links,
   );
+  const svgRef = useRef<SVGSVGElement>(null);
+  useLineFlow(svgRef, `${selected ?? ''}|${links.length}|${showConnections}`, selected ? 18000 : 13000);
   const block = (b: CellBounds) => {
     const a = cellRect({ row: b.row0, col: b.col0 }, grid!, width, height);
     const z = cellRect({ row: b.row1, col: b.col1 }, grid!, width, height);
     return { x: a.x, y: a.y, width: z.x + z.width - a.x, height: z.y + z.height - a.y };
   };
   return (
-    <svg className="overlay" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+    <svg ref={svgRef} className="overlay" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
       {grid &&
         placed.map((c) => {
           const rc = cellRect(c, grid, width, height);

@@ -26,7 +26,9 @@ puzzles are stored in the browser (IndexedDB).
    connection lines turn bright cyan, the pieces it joins are outlined, the pieces those join (two
    more steps, a few at most) more lightly, the rest of the photo darkens, and a bar at the bottom
    says where it goes and what it joins ("Joins #9 on its right side, #14 below · 3 more beyond" –
-   tap a number to jump there); *Details* compares it with the box picture
+   tap a number to jump there). The ▶ next to a number – or a tap on one of its lines – shows how
+   the two fit: the smaller one lifts off the photo, glides over, turns and clicks into place next
+   to the other one as it lies on the table; *Details* compares it with the box picture
    and marks it as placed. Press and hold the photo to see it without any labels. The corner button
    opens the photo (or the box picture) in full screen; pinch to zoom, one finger pans. On the page,
    a one-finger drag on a picture scrolls the page until you zoom in.

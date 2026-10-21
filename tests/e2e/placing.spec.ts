@@ -61,8 +61,9 @@ async function lineStyle(link: Locator) {
     const scale = svg.getBoundingClientRect().width / svg.viewBox.baseVal.width;
     const cs = getComputedStyle(el);
     const dash = cs.strokeDasharray === 'none' ? [] : cs.strokeDasharray.split(/[ ,]+/).map((v) => parseFloat(v) * scale);
-    const flow = (el.getAnimations() as CSSAnimation[]).map((a) => a.animationName);
-    return { dash, stroke: cs.stroke, px: parseFloat(cs.strokeWidth) * scale, opacity: Number(getComputedStyle(g).opacity), flow, direction: cs.animationDirection };
+    // The flow: the dash offset (screen px) the flow timer has stepped the line to.
+    const offset = parseFloat(getComputedStyle(g).getPropertyValue('--o') || '0');
+    return { dash, stroke: cs.stroke, px: parseFloat(cs.strokeWidth) * scale, opacity: Number(getComputedStyle(g).opacity), offset };
   });
 }
 
@@ -176,8 +177,9 @@ test('result screen: select a piece to see its connections; hold the photo to se
   expect(line.px).toBeGreaterThan(1.2);
   expect(line.px).toBeLessThan(1.8);
   expect(line.opacity).toBeGreaterThan(0.7);
-  expect(line.flow).toEqual(['link-flow']);
-  expect(line.direction).toBe((await link.getAttribute('data-flow')) === 'a' ? 'reverse' : 'normal');
+  // The dots step along: backwards along the path ("rev") when it flows towards its start.
+  const sign = (await link.getAttribute('data-flow')) === 'a' ? 1 : -1;
+  await expect.poll(async () => Math.sign((await lineStyle(link)).offset)).toBe(sign);
 
   // Tap a piece on the photo: it is emphasised, its connections drawn strongly, the pieces it
   // joins outlined, everything else faded and the photo around them darkened – the photo stays
@@ -198,7 +200,8 @@ test('result screen: select a piece to see its connections; hold the photo to se
   expect(sel.px).toBeGreaterThan(2.5);
   expect(sel.px).toBeLessThan(3.5);
   expect(sel.stroke).toBe(SELECTION_COLOUR);
-  expect(sel.flow).toEqual(['link-flow-sel']);
+  const o0 = sel.offset;
+  await expect.poll(async () => (await lineStyle(active.first())).offset).not.toBe(o0);
   await expect.poll(async () => (await lineStyle(active.first())).opacity).toBe(1);
   // The joined piece: outline in the selection colour, a tint, its label fully visible.
   const joined = page.getByTestId(`item-${other}`);
@@ -478,7 +481,86 @@ test('result screen: a selection lights up its connections of connections, and l
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const still = await lineStyle(page.locator('[data-testid="link"][data-level="1"]').first());
   expect(still.dash).toHaveLength(2);
-  expect(still.flow).toEqual([]);
+  await page.waitForTimeout(600);
+  expect((await lineStyle(page.locator('[data-testid="link"][data-level="1"]').first())).offset).toBe(still.offset);
+});
+
+/** Select items until one has a "show the fit" button; returns [selected, partner]. */
+async function selectWithFit(page: Page): Promise<[string, string]> {
+  const keys = await page.getByTestId('link').evaluateAll((gs) => [...new Set(gs.flatMap((g) => [g.getAttribute('data-a')!, g.getAttribute('data-b')!]))]);
+  for (const k of keys) {
+    await page.getByTestId(`label-${k}`).dispatchEvent('click');
+    const btn = page.locator('[data-testid^="fit-play-"]').first();
+    if (await btn.count()) return [k, (await btn.getAttribute('data-testid'))!.slice('fit-play-'.length)];
+  }
+  throw new Error('no connection with known turns in the mock scan');
+}
+
+/** Screen distance between where the moving item's pivot is drawn and its docked point. */
+async function dockError(page: Page) {
+  return page.evaluate(() => {
+    const mover = document.querySelector('[data-testid="fit-mover"]') as HTMLElement;
+    const pivot = mover.querySelector('[data-testid="fit-pivot"]')!.getBoundingClientRect();
+    const svg = document.querySelector('[data-testid="scan-overlay"]') as SVGSVGElement;
+    const r = svg.getBoundingClientRect();
+    const k = r.width / svg.viewBox.baseVal.width;
+    const x = r.left + Number(mover.dataset.dockedX) * k;
+    const y = r.top + Number(mover.dataset.dockedY) * k;
+    return Math.hypot(pivot.left - x, pivot.top - y);
+  });
+}
+
+test('result screen: show how two connected pieces fit together', async ({ page }, info) => {
+  await createPuzzleWithLinks(page);
+  const [key, partner] = await selectWithFit(page);
+  await expect(page.getByTestId(`item-${key}`)).toHaveClass(/\bselected\b/);
+
+  // ▶ next to the connection: the partner (or the smaller one) lifts off and glides into place.
+  await page.getByTestId(`fit-play-${partner}`).click();
+  const fit = page.getByTestId('fit');
+  await expect(fit).toHaveAttribute('data-mode', 'animate');
+  await expect(page.getByTestId('fit-mover').locator('img')).toHaveAttribute('src', /^blob:/);
+  await expect(page.getByTestId('fit-live')).toHaveText(/^(Piece|The group) #\d+ (joins .* #\d+|goes next to #\d+), (turned .*|the same way round)\.$/);
+  await expect(page.getByTestId('scan-overlay')).toHaveClass(/\bfitting\b/);
+  // Held at the docked pose (60 % in): the pivot sits where the pose says.
+  await page.getByTestId('fit-mover').evaluate((el) => {
+    for (const a of el.getAnimations()) {
+      a.pause();
+      a.currentTime = 1500;
+    }
+  });
+  expect(await dockError(page)).toBeLessThan(2);
+  await shot(page, info, '01g-fit-docked');
+  // At the start it is at its own spot.
+  await page.getByTestId('fit-mover').evaluate((el) => el.getAnimations().forEach((a) => (a.currentTime = 0)));
+  const [px, py] = await page.getByTestId('fit-pivot').evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return [r.left, r.top];
+  });
+  expect(Math.hypot(px, py)).toBeGreaterThan(0);
+  // Played to the end, it is gone again.
+  await page.getByTestId('fit-mover').evaluate((el) => el.getAnimations().forEach((a) => a.finish()));
+  await expect(fit).toHaveCount(0);
+
+  // A tap on the selection's own line plays it too.
+  const hit = page.locator(`[data-testid^="link-hit-"]`).first();
+  await hit.dispatchEvent('click');
+  await expect(fit).toHaveAttribute('data-mode', 'animate');
+  // Selecting something else ends it.
+  await page.getByTestId(`mention-${partner}`).click();
+  await expect(fit).toHaveCount(0);
+
+  // Reduced motion: no glide – a static ghost already docked; ▶ toggles it.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.getByTestId(`mention-${key}`).click();
+  await page.getByTestId(`fit-play-${partner}`).click();
+  await expect(fit).toHaveAttribute('data-mode', 'static');
+  await expect(fit.locator('.fit-docked').first()).toBeAttached();
+  expect(await page.getByTestId('fit-mover').evaluate((el) => el.getAnimations().length)).toBe(0);
+  expect(await dockError(page)).toBeLessThan(2);
+  await expect(page.getByTestId(`fit-play-${partner}`)).toHaveAttribute('aria-pressed', 'true');
+  await page.getByTestId(`fit-play-${partner}`).click();
+  await expect(fit).toHaveCount(0);
 });
 
 test('result screen: a one-finger drag on the images scrolls the page until zoomed in', async ({ page, browserName }, info) => {

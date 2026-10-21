@@ -15,12 +15,14 @@
 import { useEffect, useMemo, useRef, type MouseEvent } from 'react';
 import type { Point } from '../../cv/geometry';
 import type { Rect } from '../../cv/image';
-import type { DetectedRegion, ScanResult } from '../../model/types';
+import type { ScanResult } from '../../model/types';
 import { itemTitle, type ItemLink, type ItemPlacement, type ScanItem } from '../lib/items';
 import { topBarFor, type TopBar } from '../lib/framing';
+import { useLineFlow } from '../hooks/useLineFlow';
 import { labelCenter, labelTail, labelWidth, placeLabels } from '../lib/labels';
 import { flowDirections, linkId, linkLevel, selectionLevels } from '../lib/linkGraph';
-import { connectionCurve, groupCellCenter, groupCellSize, polygonPath, regionSize, sideVector, type CurveEnd } from '../lib/overlay';
+import { polygonPath } from '../lib/overlay';
+import { linkRoute, type Route } from '../lib/route';
 import { upVector } from '../lib/rotation';
 
 export interface OverlayItem {
@@ -61,6 +63,8 @@ export function ScanOverlay({
   fitScale,
   onSelect,
   onClear,
+  onLinkTap,
+  fitPair,
 }: {
   result: ScanResult;
   items: OverlayItem[];
@@ -80,6 +84,10 @@ export function ScanOverlay({
   fitScale?: number;
   onSelect: (key: string) => void;
   onClear?: () => void;
+  /** A tap on one of the selection's own lines (it shows how the two fit together). */
+  onLinkTap?: (a: string, b: string) => void;
+  /** Two items whose fit is being shown: everything else steps back. */
+  fitPair?: [string, string];
 }) {
   const { width, height } = result;
   const byId = useMemo(() => new Map(result.regions.map((r) => [r.id, r])), [result]);
@@ -153,6 +161,20 @@ export function ScanOverlay({
     [itemsKey, linksKey],
   );
 
+  // The connection lines, routed around the pieces (photo coordinates: not per zoom step).
+  const routes = useMemo(() => {
+    const m = new Map<string, Route>();
+    for (const l of links) {
+      const a = overlayByKey.get(l.a);
+      const b = overlayByKey.get(l.b);
+      if (!a || !b) continue;
+      const r = linkRoute(l, a, b, byId, (k) => (geo.get(k)?.ring ?? 10) * 0.6);
+      if (r) m.set(linkId(l), r);
+    }
+    return m;
+    // overlayByKey follows from the items.
+  }, [links, items, byId, geo]);
+
   // Selection: the selected item (level 0), the items it joins (1) and theirs (2–3, capped).
   const selected = selectedKey && overlayByKey.has(selectedKey) ? selectedKey : undefined;
   const levels = useMemo(
@@ -195,10 +217,15 @@ export function ScanOverlay({
   const hit = HIT / scale;
   const labelH = LABEL_H / scale;
   const gap = LABEL_GAP / scale;
-  const svgCls = ['overlay', 'scan-overlay', selected && 'has-selection', !showLabels && 'labels-off', peek && 'peek'].filter(Boolean).join(' ');
+  const inFit = (key: string) => !!fitPair && fitPair.includes(key);
+  // The dots flow for a while after the lines appear and after each new selection.
+  const svgRef = useRef<SVGSVGElement>(null);
+  useLineFlow(svgRef, `${selected ?? ''}|${linksKey}|${showConnections}|${showLabels}`, selected ? 18000 : 13000);
+  const svgCls = ['overlay', 'scan-overlay', selected && 'has-selection', !showLabels && 'labels-off', peek && 'peek', fitPair && 'fitting'].filter(Boolean).join(' ');
 
   return (
     <svg
+      ref={svgRef}
       className={svgCls}
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="none"
@@ -299,31 +326,13 @@ export function ScanOverlay({
           edge of one piece to the matching edge of the other, flowing toward the cluster's biggest
           unit (drawn from a to b; "rev" flows back). */}
       {shownLinks.map((l) => {
-        const end = (key: string, side: ItemLink['sideA'], cell: ItemLink['cellA']): CurveEnd | undefined => {
-          const o = overlayByKey.get(key);
-          if (!o) return undefined;
-          const rot = o.placement?.rotationDeg;
-          if (side && rot !== undefined) {
-            const dir = sideVector(side, rot);
-            if (o.item.kind === 'piece') {
-              const region = byId.get(o.item.regionIds[0]);
-              if (region) return { center: o.item.center, reach: regionSize(region) / 2, dir };
-            } else if (cell && o.placement && o.placement.cells.length > 0) {
-              // An assembled group: from the member piece that touches the other item.
-              const members = o.item.regionIds.map((id) => byId.get(id)).filter((m): m is DetectedRegion => !!m);
-              const px = groupCellSize(members, o.placement.cells.length);
-              return { center: groupCellCenter(o.item.center, o.placement.cells, cell, rot, px), reach: px / 2, dir };
-            }
-          }
-          return { center: o.item.center, reach: (geo.get(key)?.ring ?? labelH) * 0.6 };
-        };
-        const a = end(l.a, l.sideA, l.cellA);
-        const b = end(l.b, l.sideB, l.cellB);
-        const curve = a && b ? connectionCurve(a, b) : null;
+        const curve = routes.get(linkId(l));
         if (!curve) return null;
         const lv = lineLevel(l);
         const toward = flow.get(linkId(l));
-        const cls = ['link', lv === undefined ? selected && 'faded' : `level-${lv}`, lv === 1 && 'active', toward === 'a' && 'rev'].filter(Boolean).join(' ');
+        const cls = ['link', lv === undefined ? selected && 'faded' : `level-${lv}`, lv === 1 && 'active', toward === 'a' && 'rev', inFit(l.a) && inFit(l.b) && 'fit-link']
+          .filter(Boolean)
+          .join(' ');
         const endR = (lv === 1 ? 3.5 : lv !== undefined ? 3 : 2.5) / scale;
         return (
           <g
@@ -338,6 +347,17 @@ export function ScanOverlay({
           >
             <path className="link-under" d={curve.d} vectorEffect="non-scaling-stroke" />
             <path className="link-line" d={curve.d} vectorEffect="non-scaling-stroke" />
+            {lv === 1 && onLinkTap && (
+              <path
+                className="link-hit"
+                d={curve.d}
+                data-testid={`link-hit-${l.a}-${l.b}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onLinkTap(l.a, l.b);
+                }}
+              />
+            )}
             <circle className="link-end" cx={curve.from.x} cy={curve.from.y} r={endR} />
             <circle className="link-end" cx={curve.to.x} cy={curve.to.y} r={endR} />
           </g>
@@ -350,7 +370,7 @@ export function ScanOverlay({
           const o = overlayByKey.get(key);
           if (!o) return null;
           const r = Math.max((geo.get(key)?.ring ?? 0) + 5 / scale, 14 / scale);
-          const cls = key === selected ? 'ring selected' : 'ring linked';
+          const cls = `${key === selected ? 'ring selected' : 'ring linked'}${inFit(key) ? ' fit-end' : ''}`;
           return (
             <g key={`ring-${key}`} className={cls} data-testid={`ring-${key}`}>
               <circle className="ring-under" cx={o.item.center.x} cy={o.item.center.y} r={r} vectorEffect="non-scaling-stroke" />
@@ -372,7 +392,7 @@ export function ScanOverlay({
         return (
           <g
             key={item.key}
-            className={`label st-${itemTone(item)}${placed ? ' placed' : ''}${sel ? ` ${sel}` : ''}`}
+            className={`label st-${itemTone(item)}${placed ? ' placed' : ''}${sel ? ` ${sel}` : ''}${inFit(item.key) ? ' fit-end' : ''}`}
             aria-hidden="true"
             data-testid={`label-${item.key}`}
             onClick={(e) => tap(item.key, e)}
