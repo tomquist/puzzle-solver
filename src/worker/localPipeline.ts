@@ -9,6 +9,7 @@ import { detectBox, suggestRectifiedSize } from '../pipeline/box';
 import { buildReferenceIndex, type ReferenceIndex } from '../pipeline/match';
 import { assessFrame } from '../pipeline/pieces';
 import { composeHighRes, registerCloseup } from '../pipeline/stitch';
+import type { GridEvidence } from '../model/types';
 import type { PipelineApi } from './api';
 import { gridVerdict, remapGrid } from './gridOps';
 
@@ -17,8 +18,15 @@ interface LoadedReference {
   index: ReferenceIndex;
 }
 
+/** Deferred cell-size measurements kept at once (a scan taken while three wait drops the oldest). */
+const MAX_FOLLOW_UPS = 3;
+
 export function createLocalPipeline(): PipelineApi {
   const references = new Map<string, LoadedReference>();
+  // Deferred cell-size measurements (analyzeScan `gridFollowUp`), by token, oldest first; a few at
+  // most (each holds its scan's regions).
+  const followUps = new Map<string, Generator<void, GridEvidence, void>>();
+  let followUpSeq = 0;
 
   return {
     async detectBox(photo) {
@@ -61,12 +69,21 @@ export function createLocalPipeline(): PipelineApi {
     async analyzeScan(puzzleId, photo, options, onProgress) {
       const ref = references.get(puzzleId);
       if (!ref) throw new Error('The puzzle picture is not loaded yet. Open the puzzle again and retry.');
-      return analyzeScan(ref.index, photo, {
+      const out = analyzeScan(ref.index, photo, {
         placedCells: options?.placedCells,
         maxSide: options?.maxSide,
         gridProbe: options?.gridProbe,
+        // The result first; the cell-size measurement and probe after it, in steps.
+        deferGridEvidence: true,
         onProgress,
       });
+      let gridFollowUp: string | undefined;
+      if (out.gridFollowUp) {
+        gridFollowUp = `grid-${++followUpSeq}`;
+        followUps.set(gridFollowUp, out.gridFollowUp);
+        for (const key of followUps.keys()) if (followUps.size > MAX_FOLLOW_UPS) followUps.delete(key);
+      }
+      return { result: out.result, analysedImage: out.analysedImage, gridFollowUp };
     },
 
     async assessFrame(frame) {
@@ -79,6 +96,15 @@ export function createLocalPipeline(): PipelineApi {
 
     async remapGrid(req) {
       return remapGrid(req);
+    },
+
+    async gridFollowUpStep(token) {
+      const steps = followUps.get(token);
+      if (!steps) return { done: true };
+      const r = steps.next();
+      if (!r.done) return { done: false };
+      followUps.delete(token);
+      return { done: true, evidence: r.value };
     },
   };
 }

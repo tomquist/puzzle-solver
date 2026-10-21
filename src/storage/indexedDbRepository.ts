@@ -133,6 +133,14 @@ export function createIndexedDbRepository(dbName = 'puzzle-solver'): PuzzleRepos
     async saveScan(scan) {
       await (await getDb()).put('scans', scan);
     },
+    async updateScan(id, change) {
+      const tx = (await getDb()).transaction('scans', 'readwrite');
+      const cur = await tx.store.get(id);
+      const next = cur && change(cur);
+      if (next) await tx.store.put(next);
+      await tx.done;
+      return next;
+    },
     async deleteScan(id) {
       const tx = (await getDb()).transaction(['scans', 'blobs'], 'readwrite');
       const scan = await tx.objectStore('scans').get(id);

@@ -33,6 +33,7 @@ function createWorkerPipeline(): PipelineApi {
     assessFrame: (frame) => remote.assessFrame(transfer(frame)),
     assessGrid: (ctx) => remote.assessGrid(ctx),
     remapGrid: (req) => remote.remapGrid(req),
+    gridFollowUpStep: (token) => remote.gridFollowUpStep(token),
   };
 }
 

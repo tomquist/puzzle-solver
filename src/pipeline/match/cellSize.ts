@@ -25,10 +25,11 @@
  */
 import { GRID_EVIDENCE_VERSION, type CellSizeSource, type GridEvidence, type LogMeasure } from '../../model/types';
 import { fitPatchLattice, latticeCells, latticePoint, latticeSamples, measureLatticePitch, type AxisPitch, type PatchLattice } from '../pieces/patchLattice';
-import { matchRegionsDetailed } from './colorCorrection';
+import { runSteps, type Steps } from '../steps';
+import { matchRegionsDetailedSteps } from './colorCorrection';
 import { NOT_ONE_PIECE_CAP, onePieceArea } from './groups';
 import { withCells } from './referenceIndex';
-import { measureScale, type MatchDetail } from './matchRegion';
+import { measureScaleSteps, type MatchDetail } from './matchRegion';
 import type { MatchInput, ReferenceIndex } from './types';
 
 /**
@@ -134,18 +135,30 @@ function median(v: number[]): number {
 
 /** Raw per-region measurements of the cell size (see module documentation). */
 export function measureCellSizes(index: ReferenceIndex, inputs: MatchInput[], details: MatchDetail[]): CellSizeSample[] {
+  return runSteps(measureCellSizeSteps(index, inputs, details));
+}
+
+/**
+ * {@link measureCellSizes} in steps: the generator yields after a patch's lattice refit and seam
+ * pitch and within the print-scale sweeps (measureScaleSteps), so the app can run it after the
+ * scan's result is shown and let a new scan go first (analyzeScan `deferGridEvidence`).
+ */
+export function* measureCellSizeSteps(index: ReferenceIndex, inputs: MatchInput[], details: MatchDetail[]): Steps<CellSizeSample[]> {
   const out: CellSizeSample[] = [];
-  details.forEach((d, i) => {
+  for (let i = 0; i < details.length; i++) {
+    const d = details[i];
     const input = inputs[i];
     const top = d.match.candidates[0];
-    if (!top || !d.best || d.match.status !== 'confident' || top.confidence < MIN_CONFIDENCE || top.confidence <= NOT_ONE_PIECE_CAP) return;
+    if (!top || !d.best || d.match.status !== 'confident' || top.confidence < MIN_CONFIDENCE || top.confidence <= NOT_ONE_PIECE_CAP) continue;
     if (input.kind === 'patch') {
-      if (!d.lattice) return;
+      if (!d.lattice) continue;
       const lat = widenedLattice(input, d.lattice);
-      if (lat.strength[0] < 0 && lat.strength[1] < 0) return;
-      const m = measureScale(index, d, { aspect: true });
-      if (!m || m.clipped || m.curvature < MIN_CURVATURE) return;
+      yield;
+      if (lat.strength[0] < 0 && lat.strength[1] < 0) continue;
+      const m = yield* measureScaleSteps(index, d, { aspect: true });
+      if (!m || m.clipped || m.curvature < MIN_CURVATURE) continue;
       const pitch = measureLatticePitch(input.image, input.mask, lat);
+      yield;
       // Lattice axis a runs along the picture's x axis when it stays (anti)parallel to it once turned by the placement.
       const ang = lat.angle + d.best.map.phi;
       const aOnX = Math.abs(Math.cos(ang)) >= Math.abs(Math.sin(ang));
@@ -159,25 +172,25 @@ export function measureCellSizes(index: ReferenceIndex, inputs: MatchInput[], de
       put(pitch.a, aOnX);
       put(pitch.b, !aOnX);
       if (sample.w !== undefined || sample.h !== undefined) out.push(sample);
-      return;
+      continue;
     }
     const shape = input.shape;
-    if (input.kind !== 'piece') return;
+    if (input.kind !== 'piece') continue;
     const body = input.expectedBodySize ?? shape?.bodySize;
-    if (!body) return;
+    if (!body) continue;
     let area = 0;
     for (let k = 0; k < input.mask.data.length; k++) area += input.mask.data[k];
-    if (!onePieceArea(area / (body * body))) return;
+    if (!onePieceArea(area / (body * body))) continue;
     // A confidently placed piece tells where a cell centre is, also without trustworthy corners.
     const positionOnly: CellSizeSample = { regionId: input.regionId, kind: 'piece', s: NaN, curvature: 0, x: [top.x], y: [top.y] };
     if (!shape || shape.confidence < MIN_SHAPE_CONFIDENCE) {
       out.push(positionOnly);
-      return;
+      continue;
     }
-    const m = measureScale(index, d);
+    const m = yield* measureScaleSteps(index, d);
     if (!m || m.clipped) {
       out.push(positionOnly);
-      return;
+      continue;
     }
     const across = 0.5 * (shape.sides[0].length + shape.sides[2].length);
     const along = 0.5 * (shape.sides[1].length + shape.sides[3].length);
@@ -197,7 +210,7 @@ export function measureCellSizes(index: ReferenceIndex, inputs: MatchInput[], de
       x: [top.x],
       y: [top.y],
     });
-  });
+  }
   return out;
 }
 
@@ -255,8 +268,18 @@ export function summariseCellSizes(samples: CellSizeSample[]): CellSizeSource[] 
 }
 
 /** The scan's cell-size evidence for the grid belief. */
-export function measureGridEvidence(index: ReferenceIndex, inputs: MatchInput[], details: MatchDetail[]): { evidence: GridEvidence; samples: CellSizeSample[] } {
-  const samples = measureCellSizes(index, inputs, details);
+export function measureGridEvidence(index: ReferenceIndex, inputs: MatchInput[], details: MatchDetail[]): MeasuredEvidence {
+  return runSteps(measureGridEvidenceSteps(index, inputs, details));
+}
+
+export interface MeasuredEvidence {
+  evidence: GridEvidence;
+  samples: CellSizeSample[];
+}
+
+/** {@link measureGridEvidence} in steps (see {@link measureCellSizeSteps}). */
+export function* measureGridEvidenceSteps(index: ReferenceIndex, inputs: MatchInput[], details: MatchDetail[]): Steps<MeasuredEvidence> {
+  const samples = yield* measureCellSizeSteps(index, inputs, details);
   return {
     evidence: { version: GRID_EVIDENCE_VERSION, grid: { ...index.grid }, refWidth: index.width, refHeight: index.height, sources: summariseCellSizes(samples) },
     samples,
@@ -325,7 +348,28 @@ export function probeGridEvidence(
   evidence: GridEvidence,
   matched: number,
   mode: GridProbe = 'wide',
-): { evidence: GridEvidence; samples: CellSizeSample[]; tried: number } | undefined {
+): ProbedEvidence | undefined {
+  return runSteps(probeGridSteps(index, inputs, evidence, matched, mode));
+}
+
+/** What the probe measured, and how many re-matches it took. */
+export interface ProbedEvidence extends MeasuredEvidence {
+  tried: number;
+}
+
+/**
+ * {@link probeGridEvidence} in steps: the generator yields after every region re-matched at another
+ * scale and every part of a measurement, so the app can run it after the scan's result is shown and
+ * let a new scan go first (analyzeScan `deferGridEvidence`). The longest step is one region's
+ * match – a large patch's, up to a few seconds on a desktop.
+ */
+export function* probeGridSteps(
+  index: ReferenceIndex,
+  inputs: MatchInput[],
+  evidence: GridEvidence,
+  matched: number,
+  mode: GridProbe = 'wide',
+): Steps<ProbedEvidence | undefined> {
   const lw0 = Math.log(index.cellW), lh0 = Math.log(index.cellH);
   const implied = impliedCells(evidence.sources);
   const off = (v: number | undefined, l0: number) => (v === undefined ? 0 : v - l0);
@@ -344,22 +388,24 @@ export function probeGridEvidence(
     .map((x) => x.inp);
   if (picked.length === 0) return undefined;
   let tried = 0;
-  const run = (lw: number, lh: number, regions = picked) => {
+  // One re-match of the picked regions at cell size (lw, lh), a region per step.
+  function* run(lw: number, lh: number, regions = picked) {
     tried++;
     const view = withCells(index, Math.exp(lw), Math.exp(lh));
-    const details = matchRegionsDetailed(view, regions);
+    const details = yield* matchRegionsDetailedSteps(view, regions);
     const confident = details.filter((d) => d.match.status === 'confident').length;
     const score = details.reduce((a, d) => a + Math.max(0, d.match.candidates[0]?.score ?? 0), 0);
     return { view, details, confident, score };
-  };
+  }
+
   let lw = implied.w ?? (implied.h !== undefined ? lw0 + off(implied.h, lh0) : lw0);
   let lh = implied.h ?? (implied.w !== undefined ? lh0 + off(implied.w, lw0) : lh0);
-  let best: ReturnType<typeof run> | undefined;
+  let best: { view: ReferenceIndex; details: MatchDetail[]; confident: number; score: number } | undefined;
   if (!far) {
     // Nothing measured: the ladder (the grid's own size was just tried).
     const regions = picked.slice(0, PROBE_LADDER_REGIONS);
     for (const f of PROBE_LADDER) {
-      const r = run(lw0 + Math.log(f), lh0 + Math.log(f), regions);
+      const r = yield* run(lw0 + Math.log(f), lh0 + Math.log(f), regions);
       if (!best || r.confident > best.confident || (r.confident === best.confident && r.score > best.score)) {
         best = r;
         lw = lw0 + Math.log(f);
@@ -372,10 +418,10 @@ export function probeGridEvidence(
     if (!best || best.confident === 0) return undefined;
   }
   // Re-measure at the implied size until it holds (at most three rounds).
-  let result: { evidence: GridEvidence; samples: CellSizeSample[] } | undefined;
+  let result: MeasuredEvidence | undefined;
   for (let round = 0; round < 3; round++) {
-    const r = round === 0 && best && best.details.length === picked.length ? best : run(lw, lh);
-    result = measureGridEvidence(r.view, picked, r.details);
+    const r = round === 0 && best && best.details.length === picked.length ? best : yield* run(lw, lh);
+    result = yield* measureGridEvidenceSteps(r.view, picked, r.details);
     const next = impliedCells(result.evidence.sources);
     if (next.w === undefined && next.h === undefined) break;
     const dw = off(next.w, lw), dh = off(next.h, lh);

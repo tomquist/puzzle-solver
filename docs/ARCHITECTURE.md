@@ -330,7 +330,22 @@ centres; a patch's lattice cells along fitted axes, used only where its seam pit
 too). When the measured cell is more than 6 %
 off the grid's, a few regions are matched again with cells of the measured size (`withCells`, the
 same pyramid) – a grid from a wrong count would otherwise only be corrected in steps – and with no
-count at all, a ladder of cell sizes (0.64–10×) is tried. `gridBelief.ts` keeps one evidence entry
+count at all, a ladder of cell sizes (0.64–10×) is tried – on the first three scans at most, until
+two have measured a size (`probeModeFor`). None of this delays the scan's result: the app's
+analysis leaves it for after the result (`deferGridEvidence`; the result carries a `pending`
+placeholder the belief ignores), and `ui/lib/gridMeasurements.ts` runs it a step at a time on the
+worker (`gridFollowUpStep`; generators, `pipeline/steps.ts`, down to a few scores of a scale sweep
+or one candidate's refinement inside a region's match – about a second at most on a desktop),
+starting a second after the result and pausing while a newer scan is analysed, then saves the
+evidence into the scan (a measurement a reload cut short leaves the scan counting by its
+positions). A region re-matched at other scales reuses its photo source (`photoSourceOf`: seconds
+for a large patch). Saving the evidence does not
+reload an open result (screens showing a scan follow `cellsVersion`, bumped only when a grid change
+remaps or re-analyses scans). A scan's analysis and a grid change share the puzzle's lane
+(`ui/lib/puzzleLane.ts`): a change waits for the scan being analysed and carries it over, and a
+scan asked for during a change is analysed with the new grid; a scan started while the picture is
+still being read from storage waits for it.
+`gridBelief.ts` keeps one evidence entry
 per scan id in the puzzle (`PuzzleRecord.gridState`; re-analysis replaces, deletion removes) and
 scores whole grids: per axis, sizes (Student-t, ν = 4, floors 0.8 % patch / 3 % pieces) and
 positions (where cell centres sit in a grid's cells: wrapped normal + 30 % outliers, a source

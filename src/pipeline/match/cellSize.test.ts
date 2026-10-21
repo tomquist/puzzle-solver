@@ -2,7 +2,8 @@
  * The cell size measured from one scan (cellSize.ts) does not echo the grid the scan was analysed
  * with: the same photo analysed with the right grid, one column too few, and cells 25 % too large
  * (a wrong piece count, with the probe) measures the true cell (within its stated error),
- * and its cell centres sit in the middle of the true cells.
+ * and its cell centres sit in the middle of the true cells. Measured after the result
+ * (deferGridEvidence, as the app does), a step at a time, it is the same evidence.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { RGBAImage } from '../../cv/image';
@@ -16,6 +17,7 @@ describe('cell size of a scan', () => {
   const truth: GridSpec = { rows: 16, cols: 20 };
   let reference: RGBAImage, photo: RGBAImage;
   const evidence = new Map<string, GridEvidence>();
+  let deferred: { placeholder: GridEvidence; steps: number; evidence: GridEvidence } | undefined;
   beforeAll(() => {
     const src = loadTestAsset('starry-night');
     const cut = generateJigsaw(truth.rows, truth.cols, src.width, src.height, 21);
@@ -31,6 +33,13 @@ describe('cell size of a scan', () => {
     ] as const) {
       const index = buildReferenceIndex(reference, grid, 'grid');
       evidence.set(key, analyzeScan(index, photo, { maxSide: Math.max(photo.width, photo.height), gridProbe: probe }).result.gridEvidence!);
+      if (key === 'cells+25%') {
+        const out = analyzeScan(index, photo, { maxSide: Math.max(photo.width, photo.height), gridProbe: probe, deferGridEvidence: true });
+        let steps = 0;
+        let r = out.gridFollowUp!.next();
+        for (; !r.done; r = out.gridFollowUp!.next()) steps++;
+        deferred = { placeholder: out.result.gridEvidence!, steps, evidence: r.value };
+      }
     }
   }, 300_000);
 
@@ -60,4 +69,12 @@ describe('cell size of a scan', () => {
       expect(off[Math.floor(off.length / 2)], key).toBeLessThan(0.15);
     });
   }
+
+  it('measures after the result, in steps, to the same evidence', () => {
+    expect(deferred!.placeholder.pending).toBe(true);
+    expect(deferred!.placeholder.sources).toEqual([]);
+    // Patches' parts, pieces a few at a time, and the probe's re-matches: many short steps.
+    expect(deferred!.steps).toBeGreaterThan(5);
+    expect(deferred!.evidence).toEqual(evidence.get('cells+25%'));
+  });
 });

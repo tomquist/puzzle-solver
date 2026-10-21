@@ -397,6 +397,13 @@ export interface GridEvidence {
   refWidth: number;
   refHeight: number;
   sources: CellSizeSource[];
+  /**
+   * A placeholder while the scan's cell size is still being measured, after its result was shown
+   * (AnalyzeResponse.gridFollowUp); the grid belief leaves it out. Removed (the scan then counts by
+   * its placements' positions, as a scan from before the measurement) when the measurement cannot
+   * finish – the app was closed meanwhile.
+   */
+  pending?: boolean;
 }
 
 export interface ScanResult {

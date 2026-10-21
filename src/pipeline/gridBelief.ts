@@ -179,12 +179,16 @@ interface AxisData {
   scans: number;
 }
 
+/** Evidence the belief weighs: of this version, measured (not a placeholder), with something in it. */
+const measuredScan = (ev: GridEvidence): boolean => ev.version === GRID_EVIDENCE_VERSION && !ev.pending && ev.sources.length > 0;
+
 /** A source's measurements along one axis, in the current reference's px (older evidence is rescaled). */
 export function axisData(state: GridState, axis: 'x' | 'y', refLen: number): AxisData {
   const out: AxisData = { sizes: [], phases: [], sources: 0, scans: 0 };
   for (const ev of Object.values(state.scans)) {
     const before = out.sources;
-    if (ev.version !== GRID_EVIDENCE_VERSION) continue;
+    // A scan still being measured (after its result was shown) counts once it is.
+    if (!measuredScan(ev)) continue;
     const len = axis === 'x' ? ev.refWidth : ev.refHeight;
     const k = len > 0 ? refLen / len : 1;
     const lk = Math.log(k);
@@ -479,7 +483,7 @@ export function assessGrid(ctx: GridContext): GridAssessment {
   }
   ranked.sort((a, b) => b.logPost - a.logPost || a.grid.rows * a.grid.cols - b.grid.rows * b.grid.cols);
   const cur = ranked.find((x) => sameGrid(x.grid, ctx.grid))!;
-  const scans = Object.values(ctx.state.scans).filter((e) => e.version === GRID_EVIDENCE_VERSION && e.sources.length > 0).length;
+  const scans = Object.values(ctx.state.scans).filter(measuredScan).length;
   return { current: ctx.grid, ranked, best: ranked[0].grid, currentLogPost: cur.logPost, w, h, sourcesX: dx.sources, sourcesY: dy.sources, scansX: dx.scans, scansY: dy.scans, scans };
 }
 
@@ -573,7 +577,7 @@ export function acceptGrid(state: GridState, previous: GridSpec, at = Date.now()
 export function declineGrid(state: GridState, alt: GridSpec): GridState {
   const { suggestion: _answered, ...rest } = state;
   void _answered;
-  const scans = Object.values(state.scans).filter((e) => e.version === GRID_EVIDENCE_VERSION && e.sources.length > 0).length;
+  const scans = Object.values(state.scans).filter(measuredScan).length;
   return { ...rest, declined: [...state.declined.filter((g) => !sameGrid(g, alt)), { rows: alt.rows, cols: alt.cols, scans }] };
 }
 
@@ -583,6 +587,31 @@ export function declineGrid(state: GridState, alt: GridSpec): GridState {
  */
 export function adoptGrid(state: GridState, previous: GridSpec, at = Date.now()): GridState {
   return { ...state, status: 'unconfirmed', left: [...state.left.filter((g) => !sameGrid(g, previous)), { ...previous }], changedAt: at };
+}
+
+/**
+ * Scans that may run the probe's wide ladder while the grid is an estimate: it re-matches a few
+ * regions at up to eleven scales (tens of seconds of background work on a phone), and is only
+ * needed until some scan has measured a cell size at all – once two have, the narrow probe
+ * (re-measure at the size a scan shows when it is far from the grid's) carries the rest. And at
+ * most the first three scans try it: scans that match at no scale (a picture of sky) would
+ * otherwise pay for it every time.
+ */
+export const WIDE_PROBE_SCANS = 2;
+export const WIDE_PROBE_TRIES = 3;
+
+/**
+ * How far a new scan's measurement reaches (analyzeScan `gridProbe`): nothing extra once the grid
+ * is confirmed; the narrow probe while it is unconfirmed; the wide one while it is an estimate,
+ * fewer than {@link WIDE_PROBE_SCANS} scans measured a cell size and fewer than
+ * {@link WIDE_PROBE_TRIES} were measured at all.
+ */
+export function probeModeFor(state: GridState): 'near' | 'wide' | undefined {
+  if (state.status === 'confirmed') return undefined;
+  if (state.status !== 'estimated') return 'near';
+  const entries = Object.values(state.scans).filter((ev) => ev.version === GRID_EVIDENCE_VERSION);
+  const sized = entries.filter((ev) => measuredScan(ev) && ev.sources.some((s) => s.w || s.h)).length;
+  return sized < WIDE_PROBE_SCANS && entries.length < WIDE_PROBE_TRIES ? 'wide' : 'near';
 }
 
 /**

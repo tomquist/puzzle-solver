@@ -5,7 +5,8 @@
  * colours to reference colours, and the remaining regions are matched again with it.
  */
 import type { RegionMatch } from '../../model/types';
-import { capForBorder, capForSize, matchRegionDetailed, type MatchDetail } from './matchRegion';
+import { runSteps, type Steps } from '../steps';
+import { capForBorder, capForSize, matchRegionDetailed, matchRegionDetailedSteps, type MatchDetail } from './matchRegion';
 import { buildTemplate, DEFAULT_SCORE, type ColorCorrection, type ScoreParams } from './template';
 import type { MatchInput, MatchOptions, ReferenceIndex } from './types';
 
@@ -109,15 +110,23 @@ export function matchRegions(index: ReferenceIndex, inputs: MatchInput[], opts: 
 
 /** {@link matchRegions} with the per-region details (winning similarity, confidence features). */
 export function matchRegionsDetailed(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions = {}): MatchDetail[] {
-  const first = inputs.map((inp) => matchRegionDetailed(index, inp, opts));
+  return runSteps(matchRegionsDetailedSteps(index, inputs, opts));
+}
+
+/** {@link matchRegionsDetailed} in steps (pipeline/steps.ts): one region's match each. */
+export function* matchRegionsDetailedSteps(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions = {}): Steps<MatchDetail[]> {
+  const first: MatchDetail[] = [];
+  for (const inp of inputs) first.push(yield* matchRegionDetailedSteps(index, inp, opts));
   const correction = estimateColorCorrection(index, first);
-  const out = !correction
-    ? first
-    : inputs.map((inp, i) => {
-        const d = first[i];
-        if (d.match.status === 'confident' && d.match.candidates[0].confidence >= 0.9) return d;
-        return matchRegionDetailed(index, inp, opts, { correction, score: CORRECTED_SCORE });
-      });
+  let out = first;
+  if (correction) {
+    out = [];
+    for (let i = 0; i < inputs.length; i++) {
+      const d = first[i];
+      if (d.match.status === 'confident' && d.match.candidates[0].confidence >= 0.9) out.push(d);
+      else out.push(yield* matchRegionDetailedSteps(index, inputs[i], opts, { correction, score: CORRECTED_SCORE }));
+    }
+  }
   // Outlines that include cast shadow / table: judged against the whole scan (hard shadows affect
   // every piece of a photo, so the scan's typical border tells what is normal).
   const borders = inputs.filter((inp) => inp.kind === 'piece' && inp.outline?.borderTable !== undefined).map((inp) => inp.outline!.borderTable!).sort((a, b) => a - b);

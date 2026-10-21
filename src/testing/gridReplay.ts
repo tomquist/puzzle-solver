@@ -8,7 +8,7 @@
  * evidence, which does not depend on the grid).
  */
 import type { GridEvidence, GridSpec, GridState, PieceCountKind } from '../model/types';
-import { acceptGrid, adoptGrid, decideGrid, newGridState, sameGrid, withScanEvidence } from '../pipeline/gridBelief';
+import { acceptGrid, adoptGrid, decideGrid, newGridState, probeModeFor, sameGrid, withScanEvidence } from '../pipeline/gridBelief';
 import type { GridProbe } from '../pipeline/match/cellSize';
 import { cellChange, REMAP_LIMIT } from '../pipeline/remap';
 
@@ -35,8 +35,6 @@ export interface ReplayOutcome {
   log: string[];
 }
 
-/** The app's probe mode for a grid state (src/ui/hooks/useGridBelief.ts gridProbeFor). */
-export const probeModeFor = (st: GridState): GridProbe | undefined => (st.status === 'confirmed' ? undefined : st.status === 'estimated' ? 'wide' : 'near');
 
 const fmt = (g: GridSpec) => `${g.cols}×${g.rows}`;
 

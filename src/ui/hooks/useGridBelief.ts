@@ -12,11 +12,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { APP_VERSION } from '../../appVersion';
 import type { GridSpec, GridState, ProgressRecord, PuzzleRecord, ScanRecord } from '../../model/types';
-import { acceptGrid, adoptGrid, declineGrid, gridStateOf, sameGrid, syncEvidence } from '../../pipeline/gridBelief';
+import { acceptGrid, adoptGrid, declineGrid, gridStateOf, probeModeFor, sameGrid, syncEvidence } from '../../pipeline/gridBelief';
 import { decodeExact } from '../../platform/imageio';
 import type { PuzzleRepository } from '../../storage/types';
 import type { GridVerdict, PipelineApi } from '../../worker/api';
 import { placedCells } from '../lib/progress';
+import { inPuzzleLane } from '../lib/puzzleLane';
+import { analysingScan, queueGridMeasurement } from '../lib/gridMeasurements';
 
 /** Cell changes (ln) up to this are remapped; larger ones re-analyse the scans (as pipeline/remap.ts REMAP_LIMIT). */
 const REMAP_LIMIT = Math.log(1.08);
@@ -36,10 +38,14 @@ export interface GridBeliefDeps {
   progress: () => ProgressRecord | undefined;
   savePuzzle(p: PuzzleRecord): Promise<void>;
   saveProgress(p: ProgressRecord): Promise<void>;
+  /** The latest record (ahead of React state; see PuzzleContext). */
+  getPuzzle(): PuzzleRecord | undefined;
   /** Make the pipeline match against `p` (its grid); see PuzzleContext. */
   loadMatcher(p: PuzzleRecord): Promise<void>;
   scansVersion: number;
   scansChanged(): void;
+  /** Scans' cells changed (remapped or re-analysed): screens showing a scan reload it. */
+  cellsChanged(): void;
 }
 
 export interface GridBelief {
@@ -56,15 +62,9 @@ export interface GridBelief {
 
 const fmt = (g: GridSpec) => `${g.cols} × ${g.rows}`;
 
-/**
- * How far a new analysis measures (analyzeScan `gridProbe`): nothing extra once the grid is
- * confirmed; re-measuring at the scan's own scale when it is far from the grid's while the grid is
- * unconfirmed; also the ladder of scales (slow: several re-matches) while the grid is only an
- * estimate (no piece count).
- */
+/** How far a new analysis measures (analyzeScan `gridProbe`; pipeline/gridBelief.ts probeModeFor). */
 export function gridProbeFor(p: PuzzleRecord): 'near' | 'wide' | undefined {
-  const st = gridStateOf(p);
-  return st.status === 'confirmed' ? undefined : st.status === 'estimated' ? 'wide' : 'near';
+  return probeModeFor(gridStateOf(p));
 }
 
 export function useGridBelief(deps: GridBeliefDeps): GridBelief {
@@ -77,31 +77,44 @@ export function useGridBelief(deps: GridBeliefDeps): GridBelief {
   const puzzle = deps.puzzle;
   const state = puzzle ? gridStateOf(puzzle) : gridStateOf({});
 
-  /** Carry scans and progress to `to`, save the puzzle (`next`), re-analyse what cannot be carried. */
+  /**
+   * Carry scans and progress to `to`, save the puzzle (`next`), re-analyse what cannot be carried.
+   * In the puzzle's lane (lib/puzzleLane.ts): a scan being analysed is saved first and carried over
+   * with the rest; one asked for meanwhile is analysed with the new grid. Each re-analysis takes the
+   * lane on its own, so a new scan can go between them.
+   */
   const changeGrid = useCallback(async (next: PuzzleRecord, from: GridSpec, to: GridSpec) => {
-    const { repo, pipeline, savePuzzle, saveProgress, loadMatcher, scansChanged } = latest.current;
+    const { repo, pipeline, savePuzzle, saveProgress, loadMatcher, scansChanged, cellsChanged } = latest.current;
     busy.current = true;
     try {
-      const scans = await repo.listScans(next.id);
-      const progress = latest.current.progress();
-      const remapped = await pipeline.remapGrid({
-        scans: scans.map((s) => ({ id: s.id, result: s.result })),
-        progress: progress ?? { puzzleId: next.id, placed: {}, updatedAt: 0 },
-        from,
-        to,
-        ref: { width: next.reference.width, height: next.reference.height },
+      const { remapped, redo } = await inPuzzleLane(next.id, async () => {
+        const scans = await repo.listScans(next.id);
+        const progress = latest.current.progress();
+        const remapped = await pipeline.remapGrid({
+          scans: scans.map((s) => ({ id: s.id, result: s.result })),
+          progress: progress ?? { puzzleId: next.id, placed: {}, updatedAt: 0 },
+          from,
+          to,
+          ref: { width: next.reference.width, height: next.reference.height },
+        });
+        await savePuzzle(next);
+        const far = cellChange(from, to) > REMAP_LIMIT;
+        const redo: ScanRecord[] = [];
+        for (const s of scans) {
+          const r = remapped.scans.find((x) => x.id === s.id);
+          if (!r) continue;
+          // The stored evidence stays (it does not depend on the grid; it may have been measured
+          // since the scans were listed).
+          await repo.updateScan(s.id, (cur) => ({ ...cur, result: { ...r.result, gridEvidence: cur.result.gridEvidence } }));
+          if (far || !r.exact) redo.push(s);
+        }
+        if (progress && Object.keys(progress.placed).length > 0) await saveProgress(remapped.progress);
+        // The matcher with the new grid before anything else in the lane analyses.
+        await loadMatcher(next);
+        return { remapped, redo };
       });
-      await savePuzzle(next);
-      const far = cellChange(from, to) > REMAP_LIMIT;
-      const redo: ScanRecord[] = [];
-      for (const s of scans) {
-        const r = remapped.scans.find((x) => x.id === s.id);
-        if (!r) continue;
-        await repo.saveScan({ ...s, result: r.result });
-        if (far || !r.exact) redo.push(s);
-      }
-      if (progress && Object.keys(progress.placed).length > 0) await saveProgress(remapped.progress);
       scansChanged();
+      cellsChanged();
       const placedText =
         remapped.dropped > 0
           ? ` ${remapped.dropped} placed ${remapped.dropped === 1 ? 'piece' : 'pieces'} could not be moved to the new grid – please place ${remapped.dropped === 1 ? 'it' : 'them'} again.`
@@ -112,23 +125,29 @@ export function useGridBelief(deps: GridBeliefDeps): GridBelief {
       if (redo.length > 0) {
         // Background re-analysis at the new grid (photos as stored).
         setJob({ kind: 'updating', grid: to, done: 0, total: redo.length });
-        await loadMatcher(next);
         for (let i = 0; i < redo.length; i++) {
-          const s = (await repo.getScan(redo[i].id)) ?? redo[i];
-          const blob = await repo.getBlob(s.photoBlobId);
-          if (blob) {
+          const changedAgain = await inPuzzleLane(next.id, async () => {
+            const cur = latest.current.getPuzzle();
+            if (!cur || cur.id !== next.id || !sameGrid(cur.grid, to)) return true;
+            const s = await repo.getScan(redo[i].id);
+            const blob = s && (await repo.getBlob(s.photoBlobId));
+            if (!s || !blob) return false;
             const rgba = await decodeExact(blob);
-            const cur = latest.current.puzzle ?? next;
-            const resp = await pipeline.analyzeScan(next.id, rgba, {
-              placedCells: placedCells(latest.current.progress(), to),
-              gridProbe: gridProbeFor(cur),
-            });
-            await repo.saveScan({ ...s, result: resp.result, width: resp.result.width, height: resp.result.height, appVersion: APP_VERSION });
-          }
+            await loadMatcher(cur);
+            const resp = await analysingScan(() =>
+              pipeline.analyzeScan(next.id, rgba, { placedCells: placedCells(latest.current.progress(), to), gridProbe: gridProbeFor(cur) }),
+            );
+            await repo.updateScan(s.id, (cur) => ({ ...cur, result: resp.result, width: resp.result.width, height: resp.result.height, appVersion: APP_VERSION }));
+            // Its cell size is measured in the background, as a new scan's.
+            if (resp.gridFollowUp) queueGridMeasurement(resp.gridFollowUp, s.id, next.id);
+            return false;
+          });
+          if (changedAgain) break;
           setJob({ kind: 'updating', grid: to, done: i + 1, total: redo.length });
         }
         setJob(undefined);
         scansChanged();
+        cellsChanged();
       }
     } finally {
       busy.current = false;
@@ -142,7 +161,7 @@ export function useGridBelief(deps: GridBeliefDeps): GridBelief {
     let alive = true;
     void (async () => {
       const { repo, pipeline, savePuzzle } = latest.current;
-      const p0 = latest.current.puzzle;
+      const p0 = latest.current.getPuzzle();
       if (!p0 || busy.current || job) return;
       const scans = await repo.listScans(p0.id);
       const ref = { width: p0.reference.width, height: p0.reference.height };
@@ -154,7 +173,7 @@ export function useGridBelief(deps: GridBeliefDeps): GridBelief {
       const v = await pipeline.assessGrid({ refWidth: ref.width, refHeight: ref.height, pieceCount: p0.pieceCount, countKind: p0.pieceCountKind ?? 'exact', grid: p0.grid, state: st });
       if (!alive) return;
       setVerdict(v);
-      const p = latest.current.puzzle;
+      const p = latest.current.getPuzzle();
       if (!p || p.id !== p0.id || !sameGrid(p.grid, p0.grid) || busy.current) return;
       const d = v.decision;
       if (pending && (sameGrid(v.best, pending.grid) || (d.kind === 'suggest' && sameGrid(d.grid, pending.grid)))) st = { ...st, suggestion: pending };
@@ -180,7 +199,7 @@ export function useGridBelief(deps: GridBeliefDeps): GridBelief {
 
   const answer = useCallback(
     async (use: boolean) => {
-      const p = latest.current.puzzle;
+      const p = latest.current.getPuzzle();
       if (!p) return;
       const st = gridStateOf(p);
       const s = st.suggestion;
@@ -203,7 +222,7 @@ export function useGridBelief(deps: GridBeliefDeps): GridBelief {
 
   const setGrid = useCallback(
     async (grid: GridSpec, changes: Partial<PuzzleRecord> = {}) => {
-      const p = latest.current.puzzle;
+      const p = latest.current.getPuzzle();
       if (!p) return;
       const st = gridStateOf(p);
       const { suggestion: _dropped, ...rest } = st;

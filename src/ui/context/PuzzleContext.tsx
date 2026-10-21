@@ -43,9 +43,14 @@ export interface PuzzleContextValue {
   matcher: MatcherStatus;
   /** Resolves once the pipeline has this puzzle's reference loaded (loads it if needed). */
   ensureMatcher(): Promise<void>;
-  /** Incremented whenever scans are added/removed. */
+  /** Incremented whenever scans are added/removed or their stored data changes (also a cell-size measurement). */
   scansVersion: number;
   scansChanged(): void;
+  /**
+   * Incremented when scans' cells change under a screen showing them (a grid change remaps or
+   * re-analyses them) – not when a scan's cell size is measured, so an open result keeps its state.
+   */
+  cellsVersion: number;
   /** The running (or failed) scan analysis – kept here so it survives switching tabs. */
   scanJob: ScanJob | undefined;
   startScan(photo: Blob): void;
@@ -95,6 +100,7 @@ export function PuzzleProvider({ id, children }: { id: string; children: ReactNo
   >({ kind: 'loading' });
   const [attempt, setAttempt] = useState(0);
   const [scansVersion, setScansVersion] = useState(0);
+  const [cellsVersion, setCellsVersion] = useState(0);
   const [matcher, setMatcher] = useState<MatcherStatus>({ kind: 'loading' });
 
   useEffect(() => {
@@ -104,6 +110,7 @@ export function PuzzleProvider({ id, children }: { id: string; children: ReactNo
       ([puzzle, progress]) => {
         if (!alive) return;
         progressRef.current = puzzle ? (progress ?? emptyProgress(id)) : undefined;
+        puzzleRef.current = puzzle;
         setState(puzzle ? { kind: 'ready', puzzle, progress: progressRef.current! } : { kind: 'missing' });
       },
       (error: unknown) => alive && setState({ kind: 'error', error }),
@@ -114,14 +121,37 @@ export function PuzzleProvider({ id, children }: { id: string; children: ReactNo
   }, [repo, id, attempt]);
 
   const puzzle = state.kind === 'ready' ? state.puzzle : undefined;
+  // The latest record (ahead of React state between a save and the next render): a scan started
+  // right after a grid change must match with the new grid.
+  const puzzleRef = useRef<PuzzleRecord | undefined>(undefined);
+  const getPuzzle = useCallback(() => puzzleRef.current, []);
+  // Keyed on the picture's blob id: saving the puzzle (its grid state after every scan) does not
+  // reload the picture.
   const { blob: refBlob, missing: refMissing } = useStoredBlob(puzzle?.reference.blobId);
   const refUrl = useObjectUrl(refBlob);
   const refBitmap = useBitmap(refBlob);
 
+  // The picture as soon as it is read from storage: a scan started while it loads waits for it.
+  const blobState = useRef<{ blob?: Blob; missing: boolean; waiting: (() => void)[] }>({ missing: false, waiting: [] });
+  useEffect(() => {
+    const b = blobState.current;
+    b.blob = refBlob;
+    b.missing = refMissing;
+    if (refBlob || refMissing) b.waiting.splice(0).forEach((wake) => wake());
+  }, [refBlob, refMissing]);
+  const referenceBlob = useCallback(async (): Promise<Blob> => {
+    const b = blobState.current;
+    if (!b.blob && !b.missing) await new Promise<void>((resolve) => b.waiting.push(resolve));
+    if (!b.blob) throw new Error('The puzzle picture is missing from storage.');
+    return b.blob;
+  }, []);
+
   const ensureMatcher = useCallback(async () => {
-    if (!puzzle || !refBlob) throw new Error('The puzzle picture is still loading.');
-    await loadIntoPipeline(pipeline, puzzle, refBlob);
-  }, [pipeline, puzzle, refBlob]);
+    const blob = await referenceBlob();
+    const p = puzzleRef.current;
+    if (!p) throw new Error('The puzzle is not open.');
+    await loadIntoPipeline(pipeline, p, blob);
+  }, [pipeline, referenceBlob]);
 
   const ensureRef = useRef(ensureMatcher);
   ensureRef.current = ensureMatcher;
@@ -145,6 +175,7 @@ export function PuzzleProvider({ id, children }: { id: string; children: ReactNo
     async (p: PuzzleRecord) => {
       const next = { ...p, updatedAt: Date.now() };
       await repo.savePuzzle(next);
+      puzzleRef.current = next;
       setState((s) => (s.kind === 'ready' ? { ...s, puzzle: next } : s));
     },
     [repo],
@@ -175,30 +206,28 @@ export function PuzzleProvider({ id, children }: { id: string; children: ReactNo
   );
 
   const scansChanged = useCallback(() => setScansVersion((v) => v + 1), []);
-  const loadMatcher = useCallback(
-    async (p: PuzzleRecord) => {
-      if (!refBlob) throw new Error('The puzzle picture is still loading.');
-      await loadIntoPipeline(pipeline, p, refBlob);
-    },
-    [pipeline, refBlob],
-  );
+  const cellsChanged = useCallback(() => setCellsVersion((v) => v + 1), []);
+  const loadMatcher = useCallback(async (p: PuzzleRecord) => loadIntoPipeline(pipeline, p, await referenceBlob()), [pipeline, referenceBlob]);
   const getProgress = useCallback(() => progressRef.current, []);
   const grid = useGridBelief({
     repo,
     pipeline,
     puzzle,
+    getPuzzle,
     progress: getProgress,
     savePuzzle,
     saveProgress,
     loadMatcher,
     scansVersion,
     scansChanged,
+    cellsChanged,
   });
   const scan = useScanJob({
     repo,
     pipeline,
     puzzle,
-    progress: state.kind === 'ready' ? state.progress : undefined,
+    getPuzzle,
+    progress: getProgress,
     ensureMatcher,
     scansChanged,
   });
@@ -216,12 +245,13 @@ export function PuzzleProvider({ id, children }: { id: string; children: ReactNo
       ensureMatcher,
       scansVersion,
       scansChanged,
+      cellsVersion,
       scanJob: scan.job,
       startScan: scan.start,
       cancelScan: scan.cancel,
       grid,
     };
-  }, [state, savePuzzle, saveProgress, updateProgress, refUrl, refBitmap, refMissing, matcher, ensureMatcher, scansVersion, scansChanged, scan.job, scan.start, scan.cancel, grid]);
+  }, [state, savePuzzle, saveProgress, updateProgress, refUrl, refBitmap, refMissing, matcher, ensureMatcher, scansVersion, scansChanged, cellsVersion, scan.job, scan.start, scan.cancel, grid]);
 
   if (state.kind === 'loading') {
     return (

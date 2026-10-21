@@ -14,6 +14,7 @@ import type {
   CloseupRegistration,
   CutStyle,
   FrameQuality,
+  GridEvidence,
   GridSpec,
   Id,
   ProgressRecord,
@@ -78,7 +79,16 @@ export interface AnalyzeResponse {
   result: ScanResult;
   /** The exact image that was analysed (downscaled photo); store it with the scan. */
   analysedImage: RGBAImage;
+  /**
+   * The cell-size measurement left for after the result (`result.gridEvidence` is a `pending`
+   * placeholder): run it with {@link PipelineApi.gridFollowUpStep} until done and store its
+   * evidence in the scan.
+   */
+  gridFollowUp?: string;
 }
+
+/** One step of a deferred grid probe; when done, the evidence to store (undefined: it was dropped). */
+export type GridFollowUpStep = { done: false } | { done: true; evidence?: GridEvidence };
 
 export interface ComposeOptions {
   /** Output scale relative to the current reference (e.g. 2 = twice the resolution). */
@@ -130,4 +140,11 @@ export interface PipelineApi {
 
   /** Carry scans' cells and the placed progress over to another grid without re-analysing photos. */
   remapGrid(req: RemapRequest): Promise<RemapResponse>;
+
+  /**
+   * Run one step of a scan's deferred grid probe (AnalyzeResponse.gridFollowUp): a re-match or
+   * measurement of a few regions, so a new scan waits at most that long. The worker keeps the
+   * last few; an older one is dropped (done, no evidence).
+   */
+  gridFollowUpStep(token: string): Promise<GridFollowUpStep>;
 }

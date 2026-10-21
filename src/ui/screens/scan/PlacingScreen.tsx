@@ -33,9 +33,10 @@ import { useScanModel } from './useScanModel';
 
 export function PlacingScreen({ scanId }: { scanId: string }) {
   const repo = useRepo();
-  const { puzzle, scansVersion } = usePuzzle();
-  // Reloaded when scans change: a new grid re-derives their cells (pipeline/remap.ts).
-  const scan = useAsync(() => repo.getScan(scanId), [repo, scanId, scansVersion]);
+  const { puzzle, cellsVersion } = usePuzzle();
+  // Reloaded when a new grid re-derives the scans' cells (pipeline/remap.ts) – not when the scan's
+  // cell size is measured after it is shown (that would reset the screen under the user).
+  const scan = useAsync(() => repo.getScan(scanId), [repo, scanId, cellsVersion]);
   const back = href.scan(puzzle.id, scanId);
   if (scan.loading && !scan.data) {
     return (

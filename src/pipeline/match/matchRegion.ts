@@ -17,6 +17,7 @@ import { estimatePatchPitch } from '../pieces/patchPitch';
 import { fitPatchLattice, latticeCells, latticePoint, type LatticeCell, type PatchLattice } from '../pieces/patchLattice';
 import { NOT_ONE_PIECE_CAP, onePieceArea } from './groups';
 import type { MatchInput, MatchOptions, RefLevel, ReferenceIndex } from './types';
+import { runSteps, type Steps } from '../steps';
 
 /** A similarity hypothesis to search. */
 interface Hypothesis {
@@ -598,6 +599,16 @@ export function matchRegion(index: ReferenceIndex, input: MatchInput, opts: Matc
 
 /** {@link matchRegion} with internal options and the winning similarity. */
 export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, opts: MatchOptions = {}, ctx: MatchContext = {}): MatchDetail {
+  return runSteps(matchRegionDetailedSteps(index, input, opts, ctx));
+}
+
+/**
+ * {@link matchRegionDetailed} in steps (pipeline/steps.ts): it yields after the set-up, each
+ * rotation's coarse search and each candidate's refinement, so a background re-match of a large
+ * patch (the grid probe) can let a new scan go first within a fraction of a second rather than
+ * after the whole match.
+ */
+export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInput, opts: MatchOptions = {}, ctx: MatchContext = {}): Steps<MatchDetail> {
   const maxCandidates = opts.maxCandidates ?? 5;
   const isPatch = input.kind === 'patch';
   let sp = ctx.score ?? DEFAULT_SCORE;
@@ -609,10 +620,11 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   const erode = Math.max(2, Math.round(roughBody * 0.045));
   // Assembled patches: ignore the seams and gaps between their pieces (not in the printed picture).
   const seams = isPatch ? { radius: Math.max(2, Math.round(roughBody * 0.035)), angleDeg: input.orientationDeg, body: roughBody } : undefined;
-  const src = makePhotoSource(input.image, input.mask, input.origin, erode, index.channelWeights, ctx.correction, seams);
+  const src = photoSourceOf(input, erode, index.channelWeights, ctx.correction, seams);
   if (src.area < 50) return empty;
   const { hyps } = makeHypotheses(index, input, src, pitch);
   if (hyps.length === 0) return empty;
+  yield;
 
   const cache = new TemplateCache(src);
   const L = index.levels.length;
@@ -629,7 +641,10 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
     if (flatness > 0.01) sp = { ...sp, hinge: FLAT_COLOUR_HINGE * flatness };
   }
   const coarse: Candidate[] = [];
-  for (const h of hyps) coarseSearch(index, ci, h, cache, sp, coarse);
+  for (const h of hyps) {
+    coarseSearch(index, ci, h, cache, sp, coarse);
+    yield;
+  }
   if (coarse.length === 0) return empty;
   const nKeep = isPatch ? 24 : 30;
   let cands = suppress(coarse, 0.6 * cell, nKeep);
@@ -641,6 +656,7 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
     for (const c of cands) {
       const rc = refinePosition(index, li, c, cache, r, sp);
       if (rc) next.push(rc);
+      yield;
     }
     cands = suppress(next, 0.3 * cell, nKeep);
   }
@@ -649,7 +665,10 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   // 3. Angle / scale refinement of the best few on the finest level.
   const nFine = Math.min(cands.length, 6);
   cands.sort((a, b) => b.score - a.score);
-  for (let i = 0; i < nFine; i++) cands[i] = refineAngleScale(index, L - 1, cands[i], cache, sp);
+  for (let i = 0; i < nFine; i++) {
+    cands[i] = refineAngleScale(index, L - 1, cands[i], cache, sp);
+    yield;
+  }
 
   // 4. Placed-cell penalty and ranking.
   const placed = new Set((opts.placedCells ?? []).map(cellKey));
@@ -665,6 +684,7 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   const margin = second ? best.score - second.score : 0.3;
   const features = informationFeatures(index, cache, Math.min(ci + 1, L - 1), best, cands, distinct, sp, input, !!ctx.correction);
   features.margin = margin;
+  yield;
 
   // Distinct places (one per cell, well apart; best rotation each) for the candidate list. The
   // likelihood shares of all places (listed or not) give the alternatives' confidences.
@@ -728,6 +748,22 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   if (lattice) match.lattice = refLattice(input, best, lattice);
   return { match, best: { map: best.map, ref: best.ref }, src, features, params: sp, lattice };
 }
+
+/**
+ * The region's photo source (template pyramid). It does not depend on the grid, so a region matched
+ * again at other cell sizes (the grid probe: up to a dozen times) reuses it – for a large patch it
+ * takes seconds. Not kept with a colour correction (one per scan, second pass only).
+ */
+function photoSourceOf(input: MatchInput, erode: number, weights: readonly number[], correction: ColorCorrection | undefined, seams: { radius: number; angleDeg: number; body: number } | undefined): PhotoSource {
+  if (correction) return makePhotoSource(input.image, input.mask, input.origin, erode, weights, correction, seams);
+  const key = `${erode}|${weights.join(',')}|${seams ? `${seams.radius},${seams.angleDeg},${seams.body}` : ''}`;
+  let byKey = photoSources.get(input);
+  if (!byKey) photoSources.set(input, (byKey = new Map()));
+  let src = byKey.get(key);
+  if (!src) byKey.set(key, (src = makePhotoSource(input.image, input.mask, input.origin, erode, weights, undefined, seams)));
+  return src;
+}
+const photoSources = new WeakMap<MatchInput, Map<string, PhotoSource>>();
 
 /** A patch's photo lattice carried into the reference through placement `c` (see `RefLattice`). */
 export function refLattice(input: MatchInput, c: Pick<Candidate, 'map' | 'ref'>, lat: PatchLattice): RefLattice {
@@ -835,6 +871,14 @@ function sweepPeak(raws: number[], x0: number, step: number): { x: number; peak:
  * scale).
  */
 export function measureScale(index: ReferenceIndex, detail: MatchDetail, opts: { centre?: number; aspect?: boolean } = {}): ScaleMeasurement | null {
+  return runSteps(measureScaleSteps(index, detail, opts));
+}
+
+/** Scores of {@link measureScaleSteps}'s sweeps computed per step (a large patch: ~100 ms each on a desktop). */
+const SWEEP_PER_STEP = 4;
+
+/** {@link measureScale} in steps (pipeline/steps.ts): a few of its sweep's scores per step. */
+export function* measureScaleSteps(index: ReferenceIndex, detail: MatchDetail, opts: { centre?: number; aspect?: boolean } = {}): Steps<ScaleMeasurement | null> {
   if (!detail.src || !detail.best) return null;
   const sp = detail.params ?? DEFAULT_SCORE;
   const cache = new TemplateCache(detail.src);
@@ -849,7 +893,10 @@ export function measureScale(index: ReferenceIndex, detail: MatchDetail, opts: {
   };
   const n = Math.round(SCALE_RANGE / SCALE_STEP);
   const raws: number[] = [];
-  for (let k = -n; k <= n; k++) raws.push(scoreOf({ pivot: base.pivot, phi: base.phi, s: Math.exp(c0 + k * SCALE_STEP) }));
+  for (let k = -n; k <= n; k++) {
+    raws.push(scoreOf({ pivot: base.pivot, phi: base.phi, s: Math.exp(c0 + k * SCALE_STEP) }));
+    if (raws.length % SWEEP_PER_STEP === 0) yield;
+  }
   const iso = sweepPeak(raws, c0 - n * SCALE_STEP, SCALE_STEP);
   if (!iso) return null;
   const s = Math.exp(iso.x);
@@ -860,6 +907,7 @@ export function measureScale(index: ReferenceIndex, detail: MatchDetail, opts: {
     for (let k = -na; k <= na; k++) {
       const h = (k * SCALE_STEP) / 2;
       ar.push(scoreOf({ pivot: base.pivot, phi: base.phi, s, ax: Math.exp(h), ay: Math.exp(-h) }));
+      if (ar.length % SWEEP_PER_STEP === 0) yield;
     }
     const asp = sweepPeak(ar, -na * SCALE_STEP, SCALE_STEP);
     if (asp && !asp.clipped) q = asp.x;

@@ -701,6 +701,9 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
     return groups;
   }
 
+  const followUps = new Map<string, { evidence: GridEvidence; steps: number }>();
+  let followUpSeq = 0;
+
   async function analyzeScan(
     puzzleId: string,
     photo: RGBAImage,
@@ -772,12 +775,18 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
       issues,
       metrics: { brightness: mean, clipped, sharpness: 0.7, medianPieceSize: slots[0]?.body.s ?? 0, regions: regions.length },
     };
-    const gridEvidence = mockEvidence(ref, options.measuredGrid ?? ref.grid, rnd);
+    const measured = mockEvidence(ref, options.measuredGrid ?? ref.grid, rnd);
+    // As the real pipeline: the evidence is measured after the result (gridFollowUpStep), a
+    // placeholder until then.
+    const gridFollowUp = `mock-grid-${++followUpSeq}`;
+    followUps.set(gridFollowUp, { evidence: measured, steps: 2 });
+    const gridEvidence: GridEvidence = { ...measured, sources: [], pending: true };
     await step('done', 1, 'Done', 0);
     timings.total = Date.now() - t0;
     return {
       result: { width: w, height: h, regions, matches, fits, groups, quality, timings, gridEvidence },
       analysedImage: image,
+      gridFollowUp,
     };
   }
 
@@ -832,6 +841,14 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
     async remapGrid(req) {
       await wait(30);
       return remapGrid(req);
+    },
+    async gridFollowUpStep(token) {
+      await wait(40);
+      const f = followUps.get(token);
+      if (!f) return { done: true };
+      if (--f.steps > 0) return { done: false };
+      followUps.delete(token);
+      return { done: true, evidence: f.evidence };
     },
   };
 }

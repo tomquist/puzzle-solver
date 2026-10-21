@@ -166,6 +166,17 @@ describe.each(implementations)('%s repository', (_name, create) => {
     await repo.saveScan({ ...s1, label: 'renamed' });
     expect((await repo.getScan(s1.id))?.label).toBe('renamed');
 
+    // A change in one step, on the record as stored; undefined leaves it.
+    const changed = await Promise.all([
+      repo.updateScan(s1.id, (s) => ({ ...s, label: `${s.label}+a` })),
+      repo.updateScan(s1.id, (s) => ({ ...s, label: `${s.label}+b` })),
+    ]);
+    expect(changed[1]?.label).toBe('renamed+a+b');
+    expect((await repo.getScan(s1.id))?.label).toBe('renamed+a+b');
+    expect(await repo.updateScan(s1.id, () => undefined)).toBeUndefined();
+    expect((await repo.getScan(s1.id))?.label).toBe('renamed+a+b');
+    expect(await repo.updateScan('missing', (s) => s)).toBeUndefined();
+
     await repo.deleteScan(s3.id);
     expect(await repo.getScan(s3.id)).toBeUndefined();
     expect(await repo.getBlob(s3.photoBlobId)).toBeUndefined();

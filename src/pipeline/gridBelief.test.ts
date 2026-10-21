@@ -9,6 +9,7 @@ import {
   decideGrid,
   gridStateOf,
   newGridState,
+  probeModeFor,
   sameGrid,
   syncEvidence,
   withoutScan,
@@ -267,6 +268,48 @@ describe('grid belief', () => {
     expect(Object.keys(state.scans).sort()).toEqual(['a', 'b']);
     expect(state.scans.a).toBe(measured);
     expect(state.scans.b.sources).toEqual([{ kind: 'pieces', regionIds: [1, 2, 3], x: [52, 158, 1000], y: [50, 260, 700] }]);
+  });
+
+  it('leaves out a scan still being measured, and counts it once measured', () => {
+    const rng = new Rng(16);
+    const scans = Array.from({ length: 6 }, () => scan(rng, { patches: [[6, 5]], pieces: 12 }));
+    const start: GridSpec = { rows: 34, cols: 44 };
+    let state = newGridState('unconfirmed');
+    // Placeholders (the measurement runs after the result): nothing to weigh, no question.
+    scans.forEach((ev, i) => (state = withScanEvidence(state, `s${i}`, { ...ev, sources: [], pending: true })));
+    expect(assessGrid(ctxOf(start, state)).scans).toBe(0);
+    expect(decideGrid(ctxOf(start, state)).kind).toBe('none');
+    // A pending entry that still carries sources is left out all the same.
+    state = withScanEvidence(state, 's0', { ...scans[0], pending: true });
+    expect(assessGrid(ctxOf(start, state)).scans).toBe(0);
+    scans.forEach((ev, i) => (state = withScanEvidence(state, `s${i}`, ev)));
+    expect(assessGrid(ctxOf(start, state)).scans).toBe(6);
+    const d = decideGrid(ctxOf(start, state));
+    expect(d.kind).toBe('suggest');
+    if (d.kind === 'suggest') expect(d.grid).toEqual(TRUTH);
+  });
+
+  it('runs the wide probe only while the grid is an estimate, on the first scans, until two measured a size', () => {
+    const rng = new Rng(17);
+    const sized = () => scan(rng, { patches: [[4, 4]] });
+    const positionsOnly: GridEvidence = { ...sized(), sources: [{ kind: 'pieces', regionIds: [1, 2], x: [10, 200], y: [10, 200] }] };
+    let st = newGridState('estimated');
+    expect(probeModeFor(st)).toBe('wide');
+    // Two sized scans: enough (a pending one does not count as sized).
+    st = withScanEvidence(st, 'a', { ...sized(), pending: true });
+    st = withScanEvidence(st, 'b', sized());
+    expect(probeModeFor(st)).toBe('wide');
+    st = withScanEvidence(st, 'c', sized());
+    expect(probeModeFor(st)).toBe('near');
+    // Three scans that measured no size: no more tries.
+    let none = newGridState('estimated');
+    none = withScanEvidence(none, 'a', positionsOnly);
+    none = withScanEvidence(none, 'b', { ...positionsOnly, sources: [] });
+    expect(probeModeFor(none)).toBe('wide');
+    none = withScanEvidence(none, 'c', positionsOnly);
+    expect(probeModeFor(none)).toBe('near');
+    expect(probeModeFor({ ...st, status: 'unconfirmed' })).toBe('near');
+    expect(probeModeFor({ ...st, status: 'confirmed' })).toBeUndefined();
   });
 
   it('reads puzzles saved before the grid state existed as unconfirmed without evidence', () => {

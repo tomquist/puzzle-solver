@@ -390,7 +390,27 @@ async function addChain(page: Page): Promise<string[]> {
   const linked = new Set((await page.getByTestId('link').evaluateAll((gs) => gs.flatMap((g) => [g.getAttribute('data-a'), g.getAttribute('data-b')]))) as string[]);
   const loose = (await page.locator('[data-testid="scan-overlay"] [data-testid^="item-r"]').evaluateAll((gs) => gs.map((g) => g.getAttribute('data-testid')!.slice(5)))).filter((k) => !linked.has(k));
   expect(loose.length, 'loose pieces in the mock scan').toBeGreaterThanOrEqual(4);
-  const chain = loose.slice(0, 4);
+  // Four whose cells don't touch (touching cells are linked as neighbours, not in chain order).
+  const ids = await page.evaluate(async (candidates) => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const r = indexedDB.open('puzzle-solver');
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+    const req = db.transaction('scans').objectStore('scans').getAll();
+    const [scan] = await new Promise<{ result: { matches: { regionId: number; candidates: { row: number; col: number }[] }[] } }[]>((resolve) => (req.onsuccess = () => resolve(req.result)));
+    db.close();
+    const cell = new Map(scan.result.matches.map((m) => [m.regionId, m.candidates[0]]));
+    const picked: number[] = [];
+    for (const id of candidates) {
+      const c = cell.get(id);
+      if (c && picked.every((o) => Math.abs(cell.get(o)!.row - c.row) + Math.abs(cell.get(o)!.col - c.col) !== 1)) picked.push(id);
+      if (picked.length === 4) break;
+    }
+    return picked;
+  }, loose.map((k) => Number(k.slice(1))));
+  expect(ids.length, 'four loose pieces whose cells do not touch').toBe(4);
+  const chain = ids.map((id) => `r${id}`);
   await page.evaluate(async (regionIds) => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       const r = indexedDB.open('puzzle-solver');
