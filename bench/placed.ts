@@ -38,21 +38,13 @@ export interface PlacedSetting {
 export const NO_MARKS: PlacedSetting = { name: 'none', mode: 'none' };
 
 /**
- * Gate: with marks, wrong ones included, top-1 and top-3 are at least the no-marks result minus
- * this – tighter than the baseline tolerance: one piece of one synthetic scene moves the scenes'
- * average by about 0.002 (every scene) …
+ * Gate: with marks, wrong ones included, top-1, top-3 and confident precision are at least the
+ * no-marks result minus this – tighter than the baseline tolerance: one piece of one synthetic scene
+ * moves the scenes' average by about 0.007…
  */
 export const PLACED_TOLERANCE = 0.01;
 /** …and one piece of the private files' 75 by 0.013. */
 export const PLACED_TOLERANCE_PRIVATE = 0.015;
-/**
- * Confident precision must not drop with marks: a wrong mark may make a piece unsure or move an
- * ambiguous one, never make a wrong placement sure. The scan scenes allow the one confident region
- * without a truth item that the last-free-cells rule places right with every other cell marked
- * (starry-rim-shadow-dark: an outline with its rim shadow that the truth association misses; 0.001
- * over all scenes); the private files allow nothing.
- */
-export const PLACED_PRECISION_TOLERANCE = 0.002;
 
 /** The settings the benchmarks run (PLACED=<name,name,…> picks some). */
 export const PLACED_SETTINGS: PlacedSetting[] = [
