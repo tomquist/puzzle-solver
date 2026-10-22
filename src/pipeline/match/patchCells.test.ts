@@ -3,7 +3,7 @@ import type { RGBAImage } from '../../cv/image';
 import { loadTestAsset } from '../../testing/nodeImageIO';
 import { generateJigsaw, perturbReference, renderPiecesPhoto, type JigsawCut, type PieceTruth } from '../../testing/synth';
 import { segmentPieces } from '../pieces';
-import { matchRegionDetailed, patchCoveredCells, sameLatticeGeometry } from './matchRegion';
+import { matchRegionDetailed, patchCellAt, patchCoveredCells, sameLatticeGeometry } from './matchRegion';
 import { buildReferenceIndex, type MatchInput, type ReferenceIndex } from './index';
 
 /**
@@ -54,6 +54,20 @@ describe('patch cells — a 56-cell block with holes and notches at an odd angle
     const d = matchRegionDetailed(index, patchInput());
     expect(d.match.status).toBe('confident');
     expect(keys(d.match.coveredCells ?? [])).toEqual([...cells].sort());
+  });
+
+  it('puts every piece of the block on its own cell (the cell under its centre)', () => {
+    const input = patchInput();
+    const d = matchRegionDetailed(index, input);
+    const pl = d.placements![0];
+    expect(pl.lattice).toBeDefined();
+    const members = truth[0].members ?? [];
+    expect(members.length).toBe(50);
+    const wrong = members.filter((m) => {
+      const c = patchCellAt(index, input, pl, pl.lattice!, { x: m.center.x - input.origin.x, y: m.center.y - input.origin.y });
+      return c.row !== m.row || c.col !== m.col;
+    });
+    expect(wrong).toEqual([]);
   });
 
   it('still does when the placement transform is off (1.5°, 3 % scale, 0.15 cells)', () => {

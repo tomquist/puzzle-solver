@@ -15,6 +15,11 @@
  *   segmented  our segmentation on the photo around the box (25 % margin); the region over the body
  *              centre goes to the matcher as in a scan. Misses count as wrong placements. Most
  *              photos show fingers and a desk around the piece, which segmentation is not made for.
+ *              That region is often a patch (crops of the assembled puzzle, touching pieces, a piece
+ *              taken for two): a patch is scored by the cell under the labelled body centre – the
+ *              lattice cell holding it, on the grid as the app puts the patch's cells, per candidate
+ *              with the lattice its cells come from (match/matchRegion.ts `patchCellAt`) – not by its
+ *              top-left covered cell, which is a neighbour's whenever part of one is in the crop.
  *
  * Truth: `puzzle.angle` is the counter-clockwise turn of the piece in the photo (the side kinds of
  * 642 / 643 labels agree with the border cells under that reading), so the clockwise turn back to
@@ -32,7 +37,7 @@ import { resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { createMask, cropRGBA, type RGBAImage } from '../src/cv/image';
 import type { GridSpec, PieceShape, RegionMatch, SideKind } from '../src/model/types';
-import { buildReferenceIndex, matchRegions, type MatchInput, type ReferenceIndex } from '../src/pipeline/match';
+import { buildReferenceIndex, matchRegions, matchRegionsDetailed, patchCellAt, type MatchInput, type ReferenceIndex } from '../src/pipeline/match';
 import { segmentPieces, type Segmentation } from '../src/pipeline/pieces';
 import { DEBUG_IMAGES, loadImageFile, REPO_ROOT, savePng, SEGMENT_OPTIONS } from '../src/testing/nodeImageIO';
 import { angleError, compareToBaseline, report, saveBaselineSuite, UPDATE_BASELINE, yieldToEventLoop, type CalibrationPair, type MetricRecord } from './lib';
@@ -123,8 +128,11 @@ function annotatedInput(photo: RGBAImage, p: PieceLabel): MatchInput {
   return { regionId: 1, kind: 'piece', image: cropRGBA(photo, rect), mask, origin: { x: rect.x, y: rect.y }, shape, orientationDeg: o, expectedBodySize: b };
 }
 
-/** The 'segmented' input: our segmentation around the box, the region over the body centre (an Error when segmentation throws). */
-function segmentedInput(photo: RGBAImage, p: PieceLabel): MatchInput | Error | null {
+/**
+ * The 'segmented' input: our segmentation around the box, the region over the body centre, and that
+ * centre in the region's crop (an Error when segmentation throws).
+ */
+function segmentedInput(photo: RGBAImage, p: PieceLabel): { input: MatchInput; body: { x: number; y: number } } | Error | null {
   const [x0, y0, x1, y1] = p.bbox;
   const mx = 0.25 * (x1 - x0), my = 0.25 * (y1 - y0);
   const X0 = Math.max(0, Math.floor(x0 - mx)), Y0 = Math.max(0, Math.floor(y0 - my));
@@ -143,10 +151,26 @@ function segmentedInput(photo: RGBAImage, p: PieceLabel): MatchInput | Error | n
   });
   if (!hit) return null;
   const r = hit.region;
-  return {
+  const input: MatchInput = {
     regionId: 1, kind: r.kind, image: hit.image, mask: hit.mask, origin: { x: r.bbox.x, y: r.bbox.y }, shape: r.shape,
     orientationDeg: r.orientationDeg, expectedBodySize: seg.medianBodySize, outline: { borderTable: hit.borderTable, issues: r.issues.map((i) => i.code) },
   };
+  return { input, body: { x: cx - rect.x - r.bbox.x, y: cy - rect.y - r.bbox.y } };
+}
+
+/**
+ * Cells of a segmented region's candidates, best first: a piece's cell as placed; a patch's cell
+ * under the labelled body centre `body` (crop of the region), through each candidate's own lattice.
+ */
+function segmentedCells(index: ReferenceIndex, input: MatchInput, body: { x: number; y: number }): { m: RegionMatch | undefined; keys: string[] } {
+  const d = matchRegionsDetailed(index, [input])[0];
+  const keys = (d?.match.candidates ?? []).map((c, k) => {
+    const pl = d.placements?.[k];
+    if (input.kind !== 'patch' || !pl?.lattice) return `${c.row},${c.col}`;
+    const cell = patchCellAt(index, input, pl, pl.lattice, body);
+    return `${cell.row},${cell.col}`;
+  });
+  return { m: d?.match, keys };
 }
 
 /** The input's crop with the mask tinted and the shape corners marked (DEBUG_IMAGES). */
@@ -217,11 +241,9 @@ describe('puzzle-map placement', () => {
         const img = decoded.get(photo)!;
         const { row, column, angle } = piece.puzzle!;
         const truthRot = norm360(angle - (piece.rotation ?? 0));
-        const judge = (m: RegionMatch | undefined) => {
-          const keys = (m?.candidates ?? []).map((c) => `${c.row},${c.col}`);
-          const cell = `${row - 1},${column - 1}`;
-          return { top1: keys[0] === cell, top3: keys.slice(0, 3).includes(cell), m };
-        };
+        const cell = `${row - 1},${column - 1}`;
+        const judgeKeys = (keys: string[]) => ({ top1: keys[0] === cell, top3: keys.slice(0, 3).includes(cell) });
+        const judge = (m: RegionMatch | undefined) => ({ ...judgeKeys((m?.candidates ?? []).map((c) => `${c.row},${c.col}`)), m });
         const start = performance.now();
         const input = annotatedInput(img, piece);
         const a = judge(matchRegions(index, [input])[0]);
@@ -238,13 +260,13 @@ describe('puzzle-map placement', () => {
         if (a.m && best && a.m.status !== 'unmatched') {
           pairs.push({ confidence: best.confidence, status: a.m.status, cell: a.top1, turn: a.top1 && angleError(best.rotationDeg, truthRot) <= 10, top3: a.top3, reason: a.m.uncertainReason });
         }
-        const segInput = segmentedInput(img, piece);
-        if (segInput instanceof Error) {
+        const seg = segmentedInput(img, piece);
+        if (seg instanceof Error) {
           t.segErrors++;
-          console.warn(`${photo}: segmentation failed: ${segInput.message}`);
-        } else if (segInput) {
+          console.warn(`${photo}: segmentation failed: ${seg.message}`);
+        } else if (seg) {
           t.segFound++;
-          const s = judge(matchRegions(index, [segInput])[0]);
+          const s = judgeKeys(segmentedCells(index, seg.input, seg.body).keys);
           if (s.top1) t.segTop1++;
           if (s.top3) t.segTop3++;
         }

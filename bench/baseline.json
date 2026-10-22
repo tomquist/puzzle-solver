@@ -1284,7 +1284,7 @@
         "rotationOk": 0.846,
         "confidentPrecision": 1,
         "segFound": 1,
-        "segTop1": 0,
+        "segTop1": 0.077,
         "segTop3": 0.077,
         "segErrors": 0
       },
@@ -1295,9 +1295,9 @@
         "rotationOk": 0.946,
         "confidentPrecision": 0.988,
         "segFound": 0.936,
-        "segTop1": 0.155,
-        "segTop3": 0.231,
-        "segErrors": 1
+        "segTop1": 0.194,
+        "segTop3": 0.302,
+        "segErrors": 0
       },
       "6_patos_p2.jpg": {
         "cells": 6,
@@ -1306,8 +1306,8 @@
         "rotationOk": 1,
         "confidentPrecision": 1,
         "segFound": 1,
-        "segTop1": 0.647,
-        "segTop3": 0.941,
+        "segTop1": 0.765,
+        "segTop3": 1,
         "segErrors": 0
       },
       "6_patos_p3.jpg": {
@@ -1318,7 +1318,7 @@
         "confidentPrecision": 1,
         "segFound": 0.917,
         "segTop1": 0.5,
-        "segTop3": 0.583,
+        "segTop3": 0.75,
         "segErrors": 0
       },
       "6_patos_p4.jpg": {
@@ -1327,9 +1327,9 @@
         "top3": 1,
         "rotationOk": 1,
         "confidentPrecision": 1,
-        "segFound": 0.711,
-        "segTop1": 0.263,
-        "segTop3": 0.421,
+        "segFound": 0.684,
+        "segTop1": 0.316,
+        "segTop3": 0.447,
         "segErrors": 0
       },
       "6_patos_p5.jpg": {
@@ -1339,8 +1339,8 @@
         "rotationOk": 0.97,
         "confidentPrecision": 1,
         "segFound": 0.909,
-        "segTop1": 0.515,
-        "segTop3": 0.667,
+        "segTop1": 0.485,
+        "segTop3": 0.636,
         "segErrors": 0
       },
       "6_patos.jpg": {
@@ -1350,8 +1350,8 @@
         "rotationOk": 0.783,
         "confidentPrecision": 1,
         "segFound": 0.978,
-        "segTop1": 0.609,
-        "segTop3": 0.848,
+        "segTop1": 0.674,
+        "segTop3": 0.783,
         "segErrors": 0
       },
       "overall": {
@@ -1359,10 +1359,10 @@
         "top3": 0.972,
         "rotationOk": 0.939,
         "confidentPrecision": 0.991,
-        "segFound": 0.927,
-        "segTop1": 0.229,
-        "segTop3": 0.331,
-        "segErrors": 1
+        "segFound": 0.925,
+        "segTop1": 0.269,
+        "segTop3": 0.384,
+        "segErrors": 0
       }
     },
     "grid": {

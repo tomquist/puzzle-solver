@@ -22,7 +22,7 @@ import { findSimilarity, type Point } from '../../cv/geometry';
 import { cellKey, type CellRef, type MatchStatus, type Placement, type PlacedConflict, type RefLattice, type RegionMatch, type SideKind, type UncertainReason } from '../../model/types';
 import { buildTemplate, colourDistanceMap, DEFAULT_SCORE, makePhotoSource, scoreAt, scoreMap, type ColorCorrection, type Mapping, type PhotoSource, type ScoreParams, type Template } from './template';
 import { estimatePatchPitch } from '../pieces/patchPitch';
-import { fitPatchLattice, latticeCells, latticePoint, type LatticeCell, type PatchLattice } from '../pieces/patchLattice';
+import { fitPatchLattice, latticeCells, latticeCoords, latticePoint, type LatticeCell, type PatchLattice } from '../pieces/patchLattice';
 import { NOT_ONE_PIECE_CAP, onePieceArea } from './groups';
 import type { MatchInput, MatchOptions, RefLevel, ReferenceIndex } from './types';
 import { runSteps, type Steps } from '../steps';
@@ -608,6 +608,13 @@ export interface MatchFeatures {
 }
 
 /** Match result plus the winning similarity (for scan-level post-processing). */
+/** A candidate's placement: the similarity `map` with its pivot at reference point `ref` (patches: and their photo lattice). */
+export interface CandidatePlacement {
+  map: Mapping;
+  ref: Point;
+  lattice?: PatchLattice;
+}
+
 export interface MatchDetail {
   match: RegionMatch;
   best?: { map: Mapping; ref: Point };
@@ -617,6 +624,8 @@ export interface MatchDetail {
   params?: ScoreParams;
   /** Patches: the seam-fitted cell lattice in the photo crop at the best placement. */
   lattice?: PatchLattice;
+  /** The placements behind `match.candidates` (same order; patches: with the lattice their cells come from). */
+  placements?: CandidatePlacement[];
   /** Why the placement would be unsure (see {@link uncertainReasonOf}; set whatever the status, for later demotions). */
   reason?: UncertainReason;
 }
@@ -799,6 +808,7 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
     };
   });
 
+  const placements: CandidatePlacement[] = chosen.map((c) => ({ map: c.map, ref: c.ref }));
   let coveredCells: CellRef[] | undefined;
   let lattice: PatchLattice | undefined;
   if (isPatch) {
@@ -810,7 +820,9 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
     lattice = patchLatticeOf(index, input, best);
     const lat = lattice;
     chosen.forEach((c, i) => {
-      const cells = patchCoveredCells(index, input, c, i === 0 || sameLatticeGeometry(index, best, c) ? lat : undefined);
+      const own = i === 0 || sameLatticeGeometry(index, best, c) ? lat : patchLatticeOf(index, input, c);
+      placements[i].lattice = own;
+      const cells = patchCoveredCells(index, input, c, own);
       if (i === 0) coveredCells = cells;
       if (cells.length > 0) {
         const tl = cells.reduce((a, b) => (b.row < a.row || (b.row === a.row && b.col < a.col) ? b : a));
@@ -829,7 +841,7 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
   if (conflict) match.placedConflict = conflict;
   const reason = uncertainReasonOf(features, input, roughBody);
   if (status === 'ambiguous') match.uncertainReason = reason;
-  return { match, best: { map: best.map, ref: best.ref }, src, features, params: sp, lattice, reason };
+  return { match, best: { map: best.map, ref: best.ref }, src, features, params: sp, lattice, reason, placements };
 }
 
 /** The placed-cell prior of a run (undefined without placed cells or with no penalty). */
@@ -1205,6 +1217,18 @@ export function sameLatticeGeometry(index: Pick<ReferenceIndex, 'cellW' | 'cellH
  * placement transform (whose drift over a large block is what the lattice is for).
  */
 function latticeToGrid(index: ReferenceIndex, input: MatchInput, c: Pick<Candidate, 'map' | 'ref'>, lat: PatchLattice, cells: LatticeCell[]): (CellRef & LatticeCell)[] {
+  const place = latticeGridPlacer(index, input, c, lat, cells);
+  if (!place) return [];
+  const out: (CellRef & LatticeCell)[] = [];
+  for (const q of cells) {
+    const { row, col } = place(q.i, q.j);
+    if (row >= 0 && col >= 0 && row < index.grid.rows && col < index.grid.cols) out.push({ ...q, row, col });
+  }
+  return out.sort((p, q) => p.row - q.row || p.col - q.col);
+}
+
+/** The grid cell of each lattice cell (i, j) at placement `c`, by the one offset `cells` vote for (see {@link latticeToGrid}); null without cells. */
+function latticeGridPlacer(index: ReferenceIndex, input: MatchInput, c: Pick<Candidate, 'map' | 'ref'>, lat: PatchLattice, cells: LatticeCell[]): ((i: number, j: number) => CellRef) | null {
   const { cellW, cellH } = index;
   const { pivot, phi, s } = c.map;
   const cos = Math.cos(phi), sin = Math.sin(phi);
@@ -1229,15 +1253,35 @@ function latticeToGrid(index: ReferenceIndex, input: MatchInput, c: Pick<Candida
   }
   let bestKey = '', bestN = 0;
   for (const [key, n] of votes) if (n > bestN) [bestKey, bestN] = [key, n];
-  if (!bestKey) return [];
+  if (!bestKey) return null;
   const [tr, tc] = bestKey.split(',').map(Number);
-  const out: (CellRef & LatticeCell)[] = [];
-  for (const q of cells) {
-    const st = step(q.i, q.j);
-    const row = tr + st.row, col = tc + st.col;
-    if (row >= 0 && col >= 0 && row < index.grid.rows && col < index.grid.cols) out.push({ ...q, row, col });
+  return (i, j) => {
+    const st = step(i, j);
+    return { row: tr + st.row, col: tc + st.col };
+  };
+}
+
+/**
+ * The grid cell the app shows photo point `p` (crop coordinates) of a patch in, at placement `c`
+ * with lattice `lat`: of the patch's covered cells (on the grid, as {@link patchCoveredCells}), the
+ * one holding the point, or the nearest one when the point lies in none (a lone piece whose lattice
+ * is half a cell off, a part of the patch placed off the puzzle); with no covered cell, the point
+ * through the placement transform (then possibly off the grid).
+ */
+export function patchCellAt(index: ReferenceIndex, input: MatchInput, c: Pick<Candidate, 'map' | 'ref'>, lat: PatchLattice, p: Point): CellRef {
+  const cells = latticeToGrid(index, input, c, lat, latticeCells(lat, input.mask, input.table));
+  if (cells.length === 0) {
+    const { pivot, phi, s } = c.map;
+    const dx = (p.x + input.origin.x - pivot.x) * s, dy = (p.y + input.origin.y - pivot.y) * s;
+    return cellAt(index, { x: c.ref.x + Math.cos(phi) * dx - Math.sin(phi) * dy, y: c.ref.y + Math.sin(phi) * dx + Math.cos(phi) * dy });
   }
-  return out.sort((p, q) => p.row - q.row || p.col - q.col);
+  const q = latticeCoords(lat, p);
+  let best = cells[0], bestD = Infinity;
+  for (const cell of cells) {
+    const d = Math.hypot((q.a - cell.i - 0.5) * lat.pa, (q.b - cell.j - 0.5) * lat.pb);
+    if (d < bestD) [best, bestD] = [cell, d];
+  }
+  return { row: best.row, col: best.col };
 }
 
 /**

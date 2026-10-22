@@ -126,5 +126,7 @@ places the labelled pieces of the Puzzle-Map dataset (CC BY 4.0; fetched by
 `npm run corpus:fetch-puzzlemap` into `test-corpus/puzzle-map/`, which is not committed because
 the pictures show publishers' artwork) in their puzzles' reference pictures: once from the
 labelled piece body alone (appearance matching) and once through our segmentation of the photo.
-The suite is skipped without the data and takes about 15 minutes with it (`PUZZLEMAP_LIMIT=<n>`
+A segmented region is often a patch (a crop of the assembled puzzle, touching pieces); it is
+scored by the cell the app shows its labelled piece's body centre in (`patchCellAt`: the covered
+cell of its lattice holding that point, per candidate), not by its top-left covered cell. The suite is skipped without the data and takes about 15 minutes with it (`PUZZLEMAP_LIMIT=<n>`
 for a quick, ungated run).
