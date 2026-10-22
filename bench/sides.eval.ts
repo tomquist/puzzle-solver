@@ -1,11 +1,12 @@
 /**
  * Side retrieval benchmark: for every true pair of mating sides in a scan, how often the partner is
- * the closest (top-1) or among the five closest (top-5) complementary sides (tab ↔ blank as
- * detected) of all pieces in the scan, by each side comparison of the fit hints (src/pipeline/match:
+ * the closest (top-1) or among the five closest (top-5) candidate sides of all pieces in the scan
+ * (complementary as detected, tab ↔ blank, with agreeing neighbouring sides: as the fit hints
+ * compare them), by each side comparison of the fit hints (src/pipeline/match:
  * fits.ts, sideCompare.ts) – shape point by point ('rms') or with DTW ('dtw', 'dtw-levelled'), the
  * colour strips just inside the sides, and shape and colour combined as the fit hints combine them.
- * Independent of the hints' gating thresholds; a side whose partner was not detected as
- * complementary counts as a miss.
+ * Independent of the hints' distance thresholds; a side whose partner is no candidate (a side kind
+ * misread) counts as a miss.
  *
  * Scenes: a block of neighbouring cells photographed as loose pieces plus a few unrelated pieces,
  * segmented and shape-analysed by the real pipeline. Each scene is scored twice:
@@ -13,7 +14,7 @@
  *   jitter    every corner moved 2–5 % of the side length along the outline (random direction, in
  *             this evaluation only), as a corner found a few pixels off on a real photo would be
  * Report columns `<comparison>@lr`: mean natural log of the true partner's rank among the
- * complementary candidates, over the queries whose partner was detected as complementary (0 = always
+ * candidates, over the queries whose partner is a candidate (0 = always
  * first; lower is better).
  *
  * The 'uniform-knobs' scenarios cut the puzzle with near-uniform knobs on a nearly regular grid (as
@@ -26,8 +27,8 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { traceOuterContour } from '../src/cv/contour';
 import type { RGBAImage } from '../src/cv/image';
-import type { GridSpec, SideKind } from '../src/model/types';
-import { profileMismatch, profileMismatchDtw, puzzleSideOf, sideMismatch, stripMismatch, type ShapeMetric } from '../src/pipeline/match';
+import type { GridSpec, PieceShape, SideKind } from '../src/model/types';
+import { neighboursAgree, profileMismatch, profileMismatchDtw, puzzleSideOf, sideMismatch, stripMismatch, type ShapeMetric } from '../src/pipeline/match';
 import { cornerPositions, edgeStripsAt, outlineArc } from '../src/pipeline/match/edgeStrips';
 import { segmentPieces, sideProfilesAt } from '../src/pipeline/pieces';
 import { offsetPoints } from '../src/pipeline/pieces/util';
@@ -86,6 +87,9 @@ const SCENARIOS: Scenario[] = [
 /** One side of a detected piece in one scoring mode. */
 interface SideRec {
   region: number;
+  shape: PieceShape;
+  /** Local side index. */
+  i: number;
   kind: SideKind;
   profile: number[];
   strip?: Float32Array;
@@ -103,7 +107,9 @@ const NAMES = Object.keys(METRICS);
 const MODES = ['detected', 'jitter'] as const;
 type Mode = (typeof MODES)[number];
 
-const complementary = (a: SideKind, b: SideKind) => (a === 'tab' && b === 'blank') || (a === 'blank' && b === 'tab');
+/** Sides the fit hints compare: complementary kinds (tab ↔ blank as detected) whose neighbouring sides agree (`neighboursAgree`). */
+const candidate = (a: SideRec, b: SideRec) =>
+  ((a.kind === 'tab' && b.kind === 'blank') || (a.kind === 'blank' && b.kind === 'tab')) && neighboursAgree(a.shape, a.i, b.shape, b.i);
 
 interface Tally {
   queries: number;
@@ -160,7 +166,7 @@ describe('side retrieval benchmark', () => {
             const corners = cornerPositions(arc, p.shape).map((c, j) => c + (shifts?.[j] ?? 0));
             const strips = edgeStripsAt(p.sr.image, p.sr.mask, origin, arc, corners, p.shape.bodySize);
             for (let i = 0; i < 4; i++) {
-              const rec: SideRec = { region: p.sr.region.id, kind: p.shape.sides[i].kind, profile: profiles?.[i].profile ?? p.shape.sides[i].profile, strip: strips?.sides[i] };
+              const rec: SideRec = { region: p.sr.region.id, shape: p.shape, i, kind: p.shape.sides[i].kind, profile: profiles?.[i].profile ?? p.shape.sides[i].profile, strip: strips?.sides[i] };
               sides.push(rec);
               byPuzzleSide.set(`${p.sr.region.id}|${puzzleSideOf(p.shape, p.truth.rotationDeg, i)}`, rec);
             }
@@ -176,9 +182,9 @@ describe('side retrieval benchmark', () => {
               if (!a || !b) continue;
               for (const [x, y] of [[a, b], [b, a]] as const) {
                 tally.queries++;
-                if (!complementary(x.kind, y.kind)) continue;
+                if (!candidate(x, y)) continue;
                 tally.kindOk++;
-                const cands = sides.filter((o) => o.region !== x.region && complementary(x.kind, o.kind));
+                const cands = sides.filter((o) => o.region !== x.region && candidate(x, o));
                 for (const k of NAMES) {
                   const f = METRICS[k];
                   const dt = f(x, y);

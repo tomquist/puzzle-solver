@@ -1,9 +1,9 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { RGBAImage } from '../../cv/image';
-import type { DetectedRegion, FitHint, RegionMatch } from '../../model/types';
+import type { DetectedRegion, FitHint, PieceShape, RegionMatch, SideKind } from '../../model/types';
 import { loadTestAsset } from '../../testing/nodeImageIO';
 import { generateJigsaw, perturbReference, truthPieceShape, type JigsawCut, type PieceTruth } from '../../testing/synth';
-import { puzzleSideOf, profileMismatch } from './fits';
+import { neighboursAgree, puzzleSideOf, profileMismatch, shapeFits } from './fits';
 import { buildReferenceIndex, findFits, matchRegions, sampleEdgeStrips, type EdgeStrips, type MatchInput, type ReferenceIndex } from './index';
 import { inputFromTruth, renderScenario } from './testkit';
 
@@ -151,5 +151,65 @@ describe('findFits', () => {
     const a = [0, 0.1, 0.3, 0.1, 0];
     expect(profileMismatch(a, a.map((v) => -v).reverse())).toBeCloseTo(0, 10);
     expect(profileMismatch(a, a)).toBeGreaterThan(0.1);
+  });
+});
+
+describe('neighboursAgree', () => {
+  /** A unit-square piece with the given side kinds; knob profiles bulge out (tab) or in (blank). */
+  const piece = (kinds: SideKind[], depth = 0.25): PieceShape => ({
+    corners: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }],
+    sides: kinds.map((kind) => ({
+      kind,
+      length: 100,
+      profile: Array.from({ length: 32 }, (_, i) => (kind === 'flat' || kind === 'unknown' ? 0 : (kind === 'tab' ? 1 : -1) * depth * Math.sin((Math.PI * i) / 31) ** 4)),
+    })) as PieceShape['sides'],
+    angleDeg: 0,
+    bodySize: 100,
+    center: { x: 50, y: 50 },
+    kind: kinds.filter((k) => k === 'flat').length === 1 ? 'edge' : 'interior',
+    confidence: 0.9,
+  });
+
+  it('holds for every pair of true neighbours of a cut, border pieces included', () => {
+    const cut = generateJigsaw(5, 6, 600, 500, 3);
+    const shapeOf = (r: number, c: number) => piece(cut.pieces[r * 6 + c].sides);
+    for (let r = 0; r < 5; r++) {
+      for (let c = 0; c < 6; c++) {
+        if (c + 1 < 6) expect(neighboursAgree(shapeOf(r, c), 1, shapeOf(r, c + 1), 3)).toBe(true);
+        if (r + 1 < 5) expect(neighboursAgree(shapeOf(r, c), 2, shapeOf(r + 1, c), 0)).toBe(true);
+      }
+    }
+  });
+
+  it('rules out sides whose neighbours disagree about the border, unknown sides allow anything', () => {
+    // A top-border piece (side 0 flat) cannot put its right side against an interior piece's left side.
+    const border = piece(['flat', 'tab', 'blank', 'blank']);
+    const interior = piece(['tab', 'blank', 'tab', 'blank']);
+    expect(neighboursAgree(border, 1, interior, 3)).toBe(false);
+    expect(neighboursAgree(interior, 3, border, 1)).toBe(false);
+    // …but against another top-border piece's left side it can.
+    expect(neighboursAgree(border, 1, piece(['flat', 'blank', 'tab', 'blank']), 3)).toBe(true);
+    expect(neighboursAgree(border, 1, piece(['unknown', 'blank', 'tab', 'blank']), 3)).toBe(true);
+  });
+
+  it('trusts only clear readings: a shallow "flat" (a partly filled blank) or a shallow knob tells nothing', () => {
+    const interior = piece(['tab', 'blank', 'tab', 'blank']);
+    const shallowFlat = piece(['flat', 'tab', 'blank', 'blank']);
+    shallowFlat.sides[0].profile = shallowFlat.sides[0].profile.map((_, i) => -0.06 * Math.sin((Math.PI * i) / 31) ** 4);
+    expect(neighboursAgree(shallowFlat, 1, interior, 3)).toBe(true);
+    const border = piece(['flat', 'tab', 'blank', 'blank']);
+    expect(neighboursAgree(border, 1, piece(['tab', 'blank', 'tab', 'blank'], 0.1), 3)).toBe(true);
+    expect(neighboursAgree(border, 1, piece(['tab', 'blank', 'tab', 'blank'], 0.2), 3)).toBe(false);
+  });
+
+  it('keeps shape fits from pairing a border piece with an interior piece', () => {
+    const region = (id: number, shape: PieceShape): DetectedRegion => ({
+      id, kind: 'piece', bbox: { x: 0, y: 0, width: 100, height: 100 }, contour: [], area: 1e4, touchesBorder: false, shape, orientationDeg: 0, issues: [],
+    });
+    // The right side of piece 1 (top border) and the left side of piece 2 match perfectly in shape.
+    const a = piece(['flat', 'tab', 'unknown', 'unknown']);
+    const fits = (b: PieceShape) => shapeFits([region(1, a), region(2, b)]);
+    expect(fits(piece(['flat', 'unknown', 'unknown', 'blank']))).toHaveLength(1);
+    expect(fits(piece(['tab', 'unknown', 'unknown', 'blank']))).toHaveLength(0);
   });
 });

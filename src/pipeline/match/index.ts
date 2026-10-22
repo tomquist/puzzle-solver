@@ -9,7 +9,7 @@
 export { buildReferenceIndex, withCells } from './referenceIndex';
 export { matchRegion, cellAt, matchConfidence, patchBodySize, scorePlacement, CONFIDENT_THRESHOLD, type MatchDetail } from './matchRegion';
 export { matchRegions, matchRegionsDetailed, estimateColorCorrection } from './colorCorrection';
-export { findFits, shapeFits, puzzleSideOf, profileMismatch, sideMismatch, type FitOptions, type ShapeFit, type ShapeMetric } from './fits';
+export { findFits, shapeFits, neighboursAgree, puzzleSideOf, profileMismatch, sideMismatch, type FitOptions, type ShapeFit, type ShapeMetric } from './fits';
 export { enforceConsistency, impliedPlacement, type ConsistencyChange, type ConsistencyOptions, type ConsistencyReport } from './consistency';
 export { sampleEdgeStrips, type EdgeStrips } from './edgeStrips';
 export { dtwDistance, profileMismatchDtw, stripMismatch } from './sideCompare';
