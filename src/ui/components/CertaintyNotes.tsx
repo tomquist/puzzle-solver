@@ -2,7 +2,7 @@
  * Notes about how sure a place is, shared by the selection bar, the details and the placing mode:
  * - UncertainNote: why a piece is not sure and what to do (lib/certainty.ts uncertaintyText)
  * - PlacedConflictNote: a spot the user marked as placed that this piece seems to belong in –
- *   small and non-blocking, with "Unmark the spot" and "Keep it".
+ *   small and non-blocking, with "Unmark the spot" and "Keep the mark".
  */
 import type { CellRef } from '../../model/types';
 import { cellWords, type ReasonText } from '../lib/certainty';
@@ -45,7 +45,7 @@ export function PlacedConflictNote({ cell, compact = false, onUnmark, onKeep }: 
           }}
           data-testid="conflict-keep"
         >
-          Keep it
+          Keep the mark
         </button>
       </div>
     </div>

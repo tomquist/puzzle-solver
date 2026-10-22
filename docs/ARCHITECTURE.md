@@ -45,7 +45,7 @@ to be analysed. Everything runs locally in the browser – no server, no upload.
    (spots within half the best confidence, or a plain / repeating picture), with the matcher's
    reason when it gives one (`RegionMatch.uncertainReason`: "Plain area – many spots look alike");
    the details show the spots side by side; a spot the user marked placed that a piece seems to
-   belong in (`RegionMatch.placedConflict`) gets a small note with "Unmark the spot" / "Keep it");
+   belong in (`RegionMatch.placedConflict`) gets a small note with "Unmark the spot" / "Keep the mark");
    a short pink
    bar on the edge that must end up on top (`topBarFor`, from `upVector`); connection lines are
    dotted light lines with dark-rimmed dots that flow toward the biggest unit of their cluster

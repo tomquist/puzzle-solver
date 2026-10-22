@@ -3,7 +3,7 @@
  * "Likely" / "Unsure – one of these N spots" and never a percentage, an unsure piece says why
  * (RegionMatch.uncertainReason) in the selection card and the details, the details offer the
  * spots side by side, and a spot marked as placed that a piece seems to belong in
- * (RegionMatch.placedConflict) shows a small note with "Unmark the spot" / "Keep it".
+ * (RegionMatch.placedConflict) shows a small note with "Unmark the spot" / "Keep the mark".
  * Screenshots (light and dark) go to $UX_SHOTS (default .debug/ui).
  */
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
@@ -208,7 +208,7 @@ test('a spot marked placed that a piece belongs in: a note to unmark it or keep 
   await shot(page, info, 'conflict-details');
   const vsSheet = await auditPage(page);
   expect.soft(vsSheet, formatViolations(vsSheet)).toEqual([]);
-  // Keep it: the note goes, the spot stays placed, and it stays answered after a reload.
+  // Keep the mark: the note goes, the spot stays placed, and it stays answered after a reload.
   await sheet.getByTestId('conflict-keep').click();
   await expect(sheet.getByTestId('placed-conflict')).toHaveCount(0);
   await page.keyboard.press('Escape');
