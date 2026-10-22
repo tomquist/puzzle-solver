@@ -134,6 +134,7 @@ export function* matchRegionsDetailedSteps(index: ReferenceIndex, inputs: MatchI
   out.forEach((d, i) => {
     capForBorder(d, inputs[i], scanMedian);
     capForSize(d, inputs[i]);
+    if (d.match.status === 'ambiguous' && d.reason) d.match.uncertainReason = d.reason;
   });
   return out;
 }

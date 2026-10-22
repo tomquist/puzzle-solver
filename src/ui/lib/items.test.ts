@@ -63,6 +63,16 @@ describe('hide rules', () => {
     expect(r.hiddenRegionIds).toEqual([2, 3]);
     expect(itemCounts(r.items)).toEqual({ items: 1, pieces: 1, assembled: 0, unsure: 0 });
   });
+
+  it('carries why a piece is unsure and a placed-spot conflict from the match', () => {
+    const unsure: RegionMatch = { ...match(1, 'ambiguous', [place(2, 2, 0.4), place(3, 3, 0.35)]), uncertainReason: 'plain', placedConflict: { row: 5, col: 6 } };
+    const sure: RegionMatch = { ...match(2, 'confident', [place(4, 4)]), uncertainReason: 'plain' };
+    const r = buildScanItems(scan({ regions: [region(1), region(2)], matches: [unsure, sure] }), grid);
+    expect(r.items[0]).toMatchObject({ key: 'r1', uncertainReason: 'plain', placedConflict: { row: 5, col: 6 } });
+    // A sure piece has no reason to be unsure; older scans have neither field.
+    expect(r.items[1].uncertainReason).toBeUndefined();
+    expect(r.items[1].placedConflict).toBeUndefined();
+  });
 });
 
 describe('assembled groups', () => {

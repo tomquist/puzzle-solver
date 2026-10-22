@@ -32,7 +32,7 @@ export function ScanTab() {
       <ErrorState
         title={scanJob.title}
         error={scanJob.message}
-        onRetry={photo ? () => startScan(photo) : undefined}
+        onRetry={photo ? () => startScan(photo, scanJob.capture) : undefined}
         actions={
           <button className="btn" onClick={cancelScan}>
             Take another photo

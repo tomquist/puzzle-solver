@@ -22,7 +22,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import type { Point } from '../../src/cv/geometry';
-import type { CellRef, RegionMatch, ScanResult } from '../../src/model/types';
+import type { CellRef, RegionMatch, ScanResult, UncertainReason } from '../../src/model/types';
 import { cellJaccard, cellKey, containsPoint, rasterizeRegions, type RasterRegion } from './regions';
 
 export const TRUTH_FORMAT = 'puzzle-solver-truth';
@@ -111,6 +111,10 @@ export interface TruthJudgement {
   top3: boolean;
   rotationOk: boolean;
   confident: boolean;
+  /** Confidence of the best placement (0 when not placed). */
+  confidence: number;
+  /** Why the placement is unsure (`RegionMatch.uncertainReason`). */
+  reason?: UncertainReason;
   /** Blocks: cell Jaccard of the placement with the truth. */
   jaccard?: number;
   placed: string;
@@ -159,7 +163,7 @@ export function scoreTruth(result: ScanResult, truth: PlacementTruth): TruthScor
       kind: 'piece', index: i, at: { x: p.x, y: p.y }, unsure: !!p.unsure, truth: `r${p.row}c${p.col} ${Math.round(p.rotationDeg)}°`,
       regionId: id, merged: id !== undefined && (count.get(id) ?? 0) > 1, status: m?.status,
       top1, top3, rotationOk: top1 && !!best && angleError(best.rotationDeg, p.rotationDeg) <= ROTATION_TOLERANCE,
-      confident: m?.status === 'confident', placed: best ? `${fmtCells(placed)} ${Math.round(best.rotationDeg)}°` : 'not placed',
+      confident: m?.status === 'confident', confidence: best?.confidence ?? 0, reason: m?.uncertainReason, placed: best ? `${fmtCells(placed)} ${Math.round(best.rotationDeg)}°` : 'not placed',
     });
   });
   const nPieces = truth.pieces?.length ?? 0;
@@ -174,7 +178,7 @@ export function scoreTruth(result: ScanResult, truth: PlacementTruth): TruthScor
       kind: 'block', index: i, at: { x: b.x, y: b.y }, unsure: !!b.unsure, truth: `${b.cells.length} cells ${Math.round(b.rotationDeg)}°`,
       regionId: id, merged: id !== undefined && (count.get(id) ?? 0) > 1, status: m?.status,
       top1, top3: top1, rotationOk: top1 && !!best && angleError(best.rotationDeg, b.rotationDeg) <= ROTATION_TOLERANCE,
-      confident: m?.status === 'confident', jaccard, placed: best ? `${fmtCells(placed)} ${Math.round(best.rotationDeg)}°` : 'not placed',
+      confident: m?.status === 'confident', confidence: best?.confidence ?? 0, jaccard, placed: best ? `${fmtCells(placed)} ${Math.round(best.rotationDeg)}°` : 'not placed',
     });
   });
   return { items, metrics: truthMetrics(items) };
@@ -183,8 +187,9 @@ export function scoreTruth(result: ScanResult, truth: PlacementTruth): TruthScor
 /**
  * Rates over the sure items. Pieces: found (inside a piece / patch region), merged (sharing it with
  * another truth item), top1, top3, rotationOk (share of the top-1 placements), confidentShare
- * (confident placements of all pieces), confidentPrecision (top-1 right among the confident).
- * Blocks: blockFound, blockTop1 (Jaccard ≥ 0.5), blockJaccard (mean), blockRotationOk. Counts:
+ * (confident placements of all pieces), confidentPrecision (top-1 right among the confident),
+ * confidentTurnPrecision (top-1 right and turned within {@link ROTATION_TOLERANCE}° among the
+ * confident). Blocks: blockFound, blockTop1 (Jaccard ≥ 0.5), blockJaccard (mean), blockRotationOk. Counts:
  * pieces, blocks, unsure.
  */
 export function truthMetrics(items: TruthJudgement[]): Record<string, number> {
@@ -204,7 +209,10 @@ export function truthMetrics(items: TruthJudgement[]): Record<string, number> {
     out.rotationOk = right.length === 0 ? 0 : rate(right, (j) => j.rotationOk);
     out.confidentShare = rate(pieces, (j) => j.confident);
     const conf = pieces.filter((j) => j.confident);
-    if (conf.length > 0) out.confidentPrecision = rate(conf, (j) => j.top1);
+    if (conf.length > 0) {
+      out.confidentPrecision = rate(conf, (j) => j.top1);
+      out.confidentTurnPrecision = rate(conf, (j) => j.top1 && j.rotationOk);
+    }
   }
   out.blocks = blocks.length;
   if (blocks.length > 0) {
@@ -214,4 +222,11 @@ export function truthMetrics(items: TruthJudgement[]): Record<string, number> {
     out.blockRotationOk = rate(blocks, (j) => j.rotationOk);
   }
   return out;
+}
+
+/** The sure single pieces that were placed (not 'unmatched'), as calibration pairs (bench/calibration.ts). */
+export function truthCalibrationPairs(items: readonly TruthJudgement[]): { confidence: number; status: RegionMatch['status']; cell: boolean; turn: boolean; top3: boolean; reason?: UncertainReason }[] {
+  return items
+    .filter((j) => j.kind === 'piece' && !j.unsure && j.status !== undefined && j.status !== 'unmatched' && j.placed !== 'not placed')
+    .map((j) => ({ confidence: j.confidence, status: j.status!, cell: j.top1, turn: j.rotationOk, top3: j.top3, reason: j.reason }));
 }

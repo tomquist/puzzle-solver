@@ -1,5 +1,5 @@
 /** Solving-progress math (pure). */
-import { cellKey, type CellRef, type GridSpec, type Id, type ProgressRecord } from '../../model/types';
+import { cellKey, type CellRef, type GridSpec, type Id, type PlacedCell, type ProgressRecord } from '../../model/types';
 
 export function emptyProgress(puzzleId: Id): ProgressRecord {
   return { puzzleId, placed: {}, updatedAt: 0 };
@@ -66,4 +66,9 @@ export function unplaceCells(progress: ProgressRecord, cells: CellRef[], now = D
   const placed = { ...progress.placed };
   for (const cell of cells) delete placed[cellKey(cell)];
   return { ...progress, placed, updatedAt: now };
+}
+
+/** New record with entries taken out earlier put back as they were (undo of unplaceCells). */
+export function restorePlaced(progress: ProgressRecord, entries: Record<string, PlacedCell>, now = Date.now()): ProgressRecord {
+  return { ...progress, placed: { ...progress.placed, ...entries }, updatedAt: now };
 }

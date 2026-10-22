@@ -135,8 +135,9 @@ async function decodeResized(blob: Blob, tw: number, th: number): Promise<ImageB
  * decodes straight to the target size (createImageBitmap resize) where it can; otherwise an <img>
  * (which honours EXIF orientation everywhere) is drawn into a target-size canvas in halving steps.
  * Throws {@link UnreadableImageError} for files the browser can't decode (e.g. HEIC outside Safari).
+ * `source`, when given, receives the photo's own (upright) size before the limit.
  */
-export async function blobToRGBA(blob: Blob, maxSide = 4096, maxArea = MAX_CANVAS_AREA): Promise<RGBAImage> {
+export async function blobToRGBA(blob: Blob, maxSide = 4096, maxArea = MAX_CANVAS_AREA, source?: { width?: number; height?: number }): Promise<RGBAImage> {
   let header: ImageHeader = { format: 'unknown', orientation: 1 };
   try {
     header = parseImageHeader(new Uint8Array(await blob.slice(0, HEADER_BYTES).arrayBuffer()));
@@ -148,6 +149,7 @@ export async function blobToRGBA(blob: Blob, maxSide = 4096, maxArea = MAX_CANVA
     const t = targetSize(header.width, header.height, maxSide, maxArea);
     const bmp = await decodeResized(blob, t.width, t.height);
     if (bmp) {
+      if (source) Object.assign(source, { width: header.width, height: header.height });
       try {
         return drawToRGBA(bmp, bmp.width, bmp.height, bmp.width, bmp.height);
       } finally {
@@ -164,6 +166,7 @@ export async function blobToRGBA(blob: Blob, maxSide = 4096, maxArea = MAX_CANVA
   const sw = img.naturalWidth;
   const sh = img.naturalHeight;
   if (!sw || !sh) throw new UnreadableImageError(UNREADABLE);
+  if (source) Object.assign(source, { width: sw, height: sh });
   const t = targetSize(sw, sh, maxSide, maxArea);
   try {
     return drawToRGBA(img, sw, sh, t.width, t.height);

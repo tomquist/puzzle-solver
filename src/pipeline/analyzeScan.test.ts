@@ -8,7 +8,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { RGBAImage } from '../cv/image';
 import { resizeRGBA } from '../cv/resize';
-import { cellKey, type ScanResult } from '../model/types';
+import { cellKey, type CellRef, type ScanResult } from '../model/types';
 import { loadTestAsset } from '../testing/nodeImageIO';
 import { generateJigsaw, perturbReference, renderPiecesPhoto, type PieceTruth } from '../testing/synth';
 import { analyzeScan } from './analyzeScan';
@@ -40,7 +40,13 @@ describe('analyzeScan: an 18-piece portrait puzzle with two holes', () => {
     const big = resizeRGBA(picture, picture.width * 1.6, picture.height * 1.6);
     const index = buildReferenceIndex(perturbReference(big, { seed: 40 }), grid, 'grid');
     result = analyzeScan(index, scene.photo, { maxSide: Math.max(scene.photo.width, scene.photo.height) }).result;
+    // The user marked every cell as placed, the two holes too (wrong: the pieces from there lie in
+    // the photo).
+    const all: CellRef[] = [];
+    for (let row = 0; row < grid.rows; row++) for (let col = 0; col < grid.cols; col++) all.push({ row, col });
+    marked = analyzeScan(index, scene.photo, { maxSide: Math.max(scene.photo.width, scene.photo.height), placedCells: all }).result;
   }, 120_000);
+  let marked: ScanResult;
 
   const regionAt = (t: PieceTruth) => {
     const c = t.pieces.length > 1 ? t.members![0].center : t.center;
@@ -64,6 +70,18 @@ describe('analyzeScan: an 18-piece portrait puzzle with two holes', () => {
       const m = result.matches.find((x) => x.regionId === r.id)!;
       expect(m.candidates[0]).toMatchObject({ row: t.row, col: t.col });
       expect(result.fits.some((h) => (h.a === r.id && h.b === block.id) || (h.a === block.id && h.b === r.id))).toBe(true);
+    }
+  });
+
+  it('wrong placed marks on the holes: the photo wins, the conflict is flagged', () => {
+    for (const t of truth.filter((x) => x.pieces.length === 1)) {
+      const r = regionAt(t)!;
+      const before = result.matches.find((x) => x.regionId === r.id)!;
+      const m = marked.matches.find((x) => x.regionId === r.id)!;
+      expect(m.candidates[0]).toMatchObject({ row: t.row, col: t.col });
+      expect(m.status).toBe(before.status);
+      expect(m.placedConflict).toMatchObject({ row: t.row, col: t.col });
+      expect(before.placedConflict).toBeUndefined();
     }
   });
 });

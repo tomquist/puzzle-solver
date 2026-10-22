@@ -13,7 +13,8 @@ import { convexHull, polygonArea, polygonPerimeter } from '../../cv/polygon';
 import { createMask, createRGBA, type Mask, type RGBAImage } from '../../cv/image';
 import { erode, open } from '../../cv/morphology';
 import { sampleRGBA } from '../../cv/warp';
-import type { FrameQuality, QualityCode, QualityIssue, QualityReport, Severity } from '../../model/types';
+import type { FrameProblem, FrameQuality, QualityCode, QualityIssue, QualityReport, Severity } from '../../model/types';
+import { measureGlare } from '../quality/glare';
 import { blurMetric, exposureStats, glareMask } from '../quality/metrics';
 import { backgroundAt } from './background';
 import type { Segmentation, SegmentedRegion } from './types';
@@ -531,8 +532,78 @@ function scoreOf(issues: QualityIssue[]): number {
 }
 
 /**
+ * Live-frame glare (fraction of the frame covered by specular glare blobs, measureGlare) above
+ * which the meter warns. A glossy piece reflecting a lamp at 320 px covers ≈ 50–150 px; two or
+ * three of them (or one torch hotspot) pass this.
+ */
+export const FRAME_GLARE = 0.002;
+
+/** Live-frame messages per problem. */
+export const FRAME_MESSAGE: Record<FrameProblem, string> = {
+  too_dark: 'Too dark – add light',
+  too_bright: 'Too bright – avoid direct light',
+  glare: 'Glare – move the light or tilt the lamp',
+  blurry: 'Blurry – hold still and tap to focus',
+};
+
+/**
+ * Everything in a frame that does not look like the table: the table colour is the median of a
+ * band along the frame's border (pieces lie in the middle), with a tolerance from its spread.
+ */
+function frameContentMask(frame: RGBAImage): Mask {
+  const { width: w, height: h, data: d } = frame;
+  const band = Math.max(2, Math.round(Math.min(w, h) * 0.06));
+  const ch: number[][] = [[], [], []];
+  for (let y = 0; y < h; y += 2) {
+    for (let x = 0; x < w; x += 2) {
+      if (x >= band && x < w - band && y >= band && y < h - band) continue;
+      const p = (y * w + x) * 4;
+      for (let c = 0; c < 3; c++) ch[c].push(d[p + c]);
+    }
+  }
+  const table = ch.map((v) => median(v));
+  const spread = Math.max(...ch.map((v, c) => median(v.map((x) => Math.abs(x - table[c])))));
+  const tol = Math.max(22, Math.min(60, 3.5 * spread));
+  const out = createMask(w, h);
+  for (let i = 0, p = 0; i < out.data.length; i++, p += 4) {
+    const diff = Math.max(Math.abs(d[p] - table[0]), Math.abs(d[p + 1] - table[1]), Math.abs(d[p + 2] - table[2]));
+    if (diff > tol) out.data[i] = 1;
+  }
+  return out;
+}
+
+/**
+ * Glare in a live frame: specular blobs (measureGlare: compact, with a washed-out, desaturated
+ * halo) as a fraction of the frame. The halo is compared with the pieces around it, not with the
+ * table – a grey table next to a small piece passes for a desaturated halo, a coloured one makes
+ * pale print look like one.
+ */
+export function frameGlare(frame: RGBAImage): number {
+  // Most frames have no near-white pixels to speak of (measureGlare's candidates: max ≥ 0.965,
+  // saturation ≤ 0.1): skip the table model.
+  let bright = 0;
+  const d = frame.data;
+  for (let p = 0; p < d.length; p += 4) {
+    const max = Math.max(d[p], d[p + 1], d[p + 2]);
+    if (max >= 246 && Math.min(d[p], d[p + 1], d[p + 2]) >= 0.9 * max) bright++;
+  }
+  if (bright < 12) return 0;
+  const content = frameContentMask(frame);
+  let n = 0;
+  for (let i = 0; i < content.data.length; i++) n += content.data[i];
+  if (n < 0.02 * content.data.length) return 0;
+  const all = createMask(frame.width, frame.height);
+  all.data.fill(1);
+  // Blobs from about a fifth of a piece's body at 320 px (the photo checks start at 0.15 % of the
+  // area); the halo is measured from 1.5 px out (resampling smears sharp white print that far).
+  return measureGlare(frame, all, { minBlobPx: 12, minBlobFraction: 0.0002, ringFromPx: 1.5, outerRingMask: content, minOuterShare: 0.3 }).fraction;
+}
+
+/**
  * Fast live-camera feedback on a small (~320 px) frame: sharpness (content-normalised blur metric),
- * brightness, clipping and a short message when the frame is not good enough. ≈ 5 ms for 320×240.
+ * brightness, clipping, glare (the photo checks' blob and halo test, so blown white print is not
+ * glare) and a short message when the frame is not good enough. ≈ 5 ms for 320×240 (more when it
+ * has bright blobs to test).
  */
 export function assessFrame(frame: RGBAImage): FrameQuality {
   const gray = rgbaToGray(frame);
@@ -543,9 +614,11 @@ export function assessFrame(frame: RGBAImage): FrameQuality {
   const ex = exposureStats(frame);
   const high = clipping(frame).clipped;
   const clipped = Math.min(1, ex.clippedLow + high);
-  let message: string | undefined;
-  if (ex.mean < 0.12 || ex.p95 < 0.25) message = 'Too dark – add light';
-  else if (high > 0.1 || ex.mean > 0.9) message = 'Too bright – avoid direct light';
-  else if (sharpness < 0.45) message = 'Blurry – hold still and tap to focus';
-  return { sharpness, brightness: ex.mean, clipped, ok: message === undefined, ...(message ? { message } : {}) };
+  const glare = frameGlare(frame);
+  let problem: FrameProblem | undefined;
+  if (ex.mean < 0.12 || ex.p95 < 0.25) problem = 'too_dark';
+  else if (high > 0.1 || ex.mean > 0.9) problem = 'too_bright';
+  else if (glare > FRAME_GLARE) problem = 'glare';
+  else if (sharpness < 0.45) problem = 'blurry';
+  return { sharpness, brightness: ex.mean, clipped, glare, ok: problem === undefined, ...(problem ? { problem, message: FRAME_MESSAGE[problem] } : {}) };
 }

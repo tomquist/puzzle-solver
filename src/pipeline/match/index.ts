@@ -7,12 +7,12 @@
  * `buildGroups(...)` (assembled grids, loose neighbours; may place weak members of assembled grids).
  */
 export { buildReferenceIndex, withCells } from './referenceIndex';
-export { matchRegion, cellAt, matchConfidence, patchBodySize, scorePlacement, CONFIDENT_THRESHOLD, type MatchDetail } from './matchRegion';
+export { matchRegion, cellAt, patchCellAt, type CandidatePlacement,matchConfidence, patchBodySize, scorePlacement, CONFIDENT_THRESHOLD, type MatchDetail } from './matchRegion';
 export { matchRegions, matchRegionsDetailed, estimateColorCorrection } from './colorCorrection';
-export { findFits, shapeFits, puzzleSideOf, profileMismatch, sideMismatch, type FitOptions, type ShapeFit, type ShapeMetric } from './fits';
+export { findFits, shapeFits, neighboursAgree, puzzleSideOf, profileMismatch, sideMismatch, type FitOptions, type ShapeFit, type ShapeMetric } from './fits';
 export { enforceConsistency, impliedPlacement, type ConsistencyChange, type ConsistencyOptions, type ConsistencyReport } from './consistency';
 export { sampleEdgeStrips, type EdgeStrips } from './edgeStrips';
 export { dtwDistance, profileMismatchDtw, stripMismatch } from './sideCompare';
 export { buildGroups, type GroupOptions } from './groups';
-export { placeByElimination, resolveCellClaims, type CellClaimChange, type EliminationChange } from './claims';
+export { CLAIM_SLACK, duplicateClaims, placeByElimination, resolveCellClaims, uniqueCells, type CellClaimChange, type EliminationChange, type UniqueCellChange } from './claims';
 export type { MatchInput, MatchOptions, ReferenceIndex, RefLevel } from './types';

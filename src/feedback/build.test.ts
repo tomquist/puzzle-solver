@@ -80,6 +80,11 @@ describe('buildFeedbackBundle', () => {
     expect(b.scan!.appVersion).toBeUndefined();
     const stamped = buildFeedbackBundle({ createdAt: 42, app, puzzle, scan: { record: { ...scan, appVersion: 'old123' }, photo: { bytes: bytes(7), type: 'image/jpeg', width: 4, height: 3 } }, marks: [] });
     expect(stamped.scan!.appVersion).toBe('old123');
+    // How the photo was captured travels with it (missing for scans from before it was recorded).
+    expect(b.scan!.capture).toBeUndefined();
+    const capture = { method: 'video-frame' as const, fallback: true, fallbackReason: 'NotSupportedError', width: 1920, height: 1080 };
+    const captured = buildFeedbackBundle({ createdAt: 42, app, puzzle, scan: { record: { ...scan, capture }, photo: { bytes: bytes(7), type: 'image/jpeg', width: 4, height: 3 } }, marks: [] });
+    expect(parseFeedback(serializeFeedback(captured)).scan!.capture).toEqual(capture);
     expect(b.marks).toEqual([{ kind: 'missed', x: 1, y: 2 }, { kind: 'not_a_piece', regionId: 9 }]);
     expect(b.comment).toBe('two pieces missed');
     // Valid feedback file.

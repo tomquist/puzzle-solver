@@ -29,11 +29,24 @@ to be analysed. Everything runs locally in the browser – no server, no upload.
 
 ### 1.2 Solve
 1. **Scan** – spread a handful of pieces (or assembled patches) on a contrasting, plain background
-   and take one photo. A live quality meter (sharpness/exposure) helps before pressing the shutter.
+   and take one photo. A live quality meter (sharpness, exposure, glare – `assessFrame`; with the
+   torch on, glare offers "Turn the torch off") helps before pressing the shutter; the tips have
+   "More tips" (glare, a matte cloth, the 2× lens). The still is sized for its purpose
+   (`platform/photoSettings.ts`: piece scans the smallest camera size of ≥ 2400 px on the long side –
+   the analysis size; box photos and close-ups the sensor maximum), and the scan records how it was
+   captured (`ScanRecord.capture`: takePhoto / video frame because takePhoto failed / a file, the
+   original size).
 2. **Analyse** (Web Worker): quality checks → segmentation → per-region shape analysis → matching
    against the reference → fit detection.
 3. **Results** – the photo with every piece thinly outlined (no fill) and a small number label
-   placed just outside the outline (`ui/lib/labels.ts`), colour-coded by confidence; a short pink
+   placed just outside the outline (`ui/lib/labels.ts`), colour-coded by confidence (shown in words,
+   never as a percentage – the matcher's confidence is a heuristic, not calibrated: `ui/lib/certainty.ts`
+   says "Sure", "Likely – check it" (no other spot comes close) or "Unsure – one of these 3 spots"
+   (spots within half the best confidence, or a plain / repeating picture), with the matcher's
+   reason when it gives one (`RegionMatch.uncertainReason`: "Plain area – many spots look alike");
+   the details show the spots side by side; a spot the user marked placed that a piece seems to
+   belong in (`RegionMatch.placedConflict`) gets a small note with "Unmark the spot" / "Keep the mark");
+   a short pink
    bar on the edge that must end up on top (`topBarFor`, from `upVector`); connection lines are
    dotted light lines with dark-rimmed dots that flow toward the biggest unit of their cluster
    (`flowDirections` in `ui/lib/linkGraph.ts`: the item with the most pieces, then the most links;
@@ -200,6 +213,8 @@ laplacianVariance(gray, mask?): number
 exposureStats(img, mask?): { mean; clippedLow; clippedHigh; p05; p95 }
 glareMask(img, opts?): Mask
 noiseSigma(gray): number
+// src/pipeline/quality/glare.ts: specular blobs – compact, with a washed-out desaturated halo
+measureGlare(img, mask, opts?): { fraction; area? }  // box photo, reference and live frames
 ```
 
 ### stitch (`src/cv/features/`, `src/pipeline/stitch/`)
@@ -228,7 +243,7 @@ segmentPieces(photo: RGBAImage, opts?): Segmentation
 analyzePieceShape(contour: Point[], mask?: Mask, bboxOrigin?: Point): PieceShape | null
 dominantOrientation(contour: Point[]): number                     // degrees in (-45, 45]
 assessPhoto(photo: RGBAImage, seg?: Segmentation): QualityReport
-assessFrame(frame: RGBAImage): FrameQuality
+assessFrame(frame: RGBAImage): FrameQuality   // ~320 px frame: sharpness, exposure, glare (halo vs the pieces, not the table)
 ```
 
 ### match (`src/pipeline/match/`, `src/testing/synth.ts`)
@@ -239,7 +254,7 @@ matchRegions(index, inputs: MatchInput[], opts?): RegionMatch[]   // whole scan;
   // MatchInput { regionId; kind: RegionKind; image: RGBAImage (bbox crop); mask: Mask (same size);
   //              origin: Point (crop origin in photo coords); shape?: PieceShape (photo coords);
   //              orientationDeg: number; expectedBodySize?: number /* photo px per cell */ }
-  // MatchOptions { placedCells?: CellRef[]; maxCandidates?: number }
+  // MatchOptions { placedCells?: CellRef[]; placedPenalty?: number; maxCandidates?: number }
 findFits(regions: DetectedRegion[], matches: RegionMatch[], grid: GridSpec, opts?: FitOptions): FitHint[]
   // FitOptions { shape?: 'rms' | 'dtw' | 'dtw-levelled'; band?; strips?: Map<regionId, EdgeStrips>; colourShare?; cache? }
 sampleEdgeStrips(image, mask, origin, contour, shape): EdgeStrips | null   // Lab strip just inside each side
@@ -304,11 +319,14 @@ patch without a size reference is also searched at every size up to the whole pu
 cells come from its own cell lattice (`pieces/patchLattice.ts`): starting from the grid its
 placement implies, the angle, both pitches and the phases are fitted to the dark cut lines and
 the straight outline edges (folded seam profiles; an axis without a clear seam peak keeps the
-placement's), and a cell counts when the middle half of its body is patch that does not show the
-table (segmentation reports the table inside a patch: shadowed holes and notches of missing
-pieces). The lattice is rigid, so one integer offset puts all its cells on the grid – a small
-angle or scale error of the placement over a large block no longer drops rim pieces or counts
-holes. One cell, one piece (`match/claims.ts`): a confident
+placement's), and a cell counts when the middle half of its body, and half of the whole cell, is
+patch that does not show the table (segmentation reports the table inside a patch: shadowed holes
+and notches of missing pieces; the whole-cell share keeps a knob that reaches into the middle of
+the next cell – a lone piece matched as a patch at a slightly small scale – or the sliver of a
+piece cut off by the photo's edge from counting). The lattice is rigid, so one integer offset puts
+all its cells on the grid – a small angle or scale error of the placement over a large block no
+longer drops rim pieces or counts holes. Alternative placements at another scale (another piece
+count) or turn fit a lattice of their own. One cell, one piece (`match/claims.ts`): a confident
 loose piece on a cell a patch covers is a contradiction – the less confident placement gives way –
 and when the scan's confident placements and the user's placed cells leave at most three cells
 free, the pieces without a confident place are assigned to them (the corner under a box picture's
@@ -316,6 +334,23 @@ badge, the last pieces of a puzzle). A region whose size says it is not what it 
 single piece far from one piece's area (merged pieces, table attached, half a piece), or a small
 patch of touching loose pieces – is placed at most ambiguously, also when its neighbours would
 place it (groups).
+
+**Placed cells are soft evidence.** Users make mistakes when marking pieces as placed, and their
+mistakes must not cost accuracy. A cell marked as placed lowers the score of every candidate in it
+by `PLACED_PENALTY` from the first (coarse) search on, so the shortlists keep the free cells; the
+best few places by the photo alone stay in the shortlists too. When the photo alone places a region
+confidently in a marked cell, the photo wins. Marks take competitors away, which would raise the
+confidence of what is left – also of a wrong place – so they lift a placement's confidence by at
+most `PLACED_GAIN` (0.2) over the photo's own for that place. Whenever the photo's own best place
+is a marked cell, `RegionMatch.placedConflict` names it (whether the photo won there or the marks
+moved the piece): the UI can offer to unmark it. The marks are never an exclusion: the
+last-free-cells rule (`placeByElimination`) stays unsure when the piece itself points at a marked
+cell. Among the scan's loose pieces one cell holds one piece (`uniqueCells`): the less confident of
+two pieces with the same best cell moves to its next free candidate when that scores within
+`CLAIM_SLACK` (0.05), otherwise it is no longer confident. A placement
+that is not confident carries `RegionMatch.uncertainReason` ('shape', 'small', 'plain',
+'repeating', 'similar-spots'), from the evidence the confidence was computed from.
+`bench/placed.eval.ts` measures all of this with simulated marks, wrong ones included.
 
 **Grid belief** – the grid comes from the piece count, and boxes round ("1500" for 45 × 34) or the
 count is unknown; one column off puts the right half of the picture a cell off. Each scan measures

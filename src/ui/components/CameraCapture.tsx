@@ -1,25 +1,27 @@
 /**
  * Camera + upload capture: live preview with a quality meter (pipeline.assessFrame every ~400 ms,
- * never more than one request in flight), full-resolution shutter, torch, context tips, and file
- * input (photo library and the native camera app) that is always available.
+ * never more than one request in flight; it warns about glare and, with the torch on, offers to
+ * turn it off), a shutter whose still size suits the purpose (platform/photoSettings.ts), torch,
+ * context tips (with "More tips" for piece scans), and file input (photo library and the native
+ * camera app) that is always available. Every capture reports how it was taken (CaptureInfo).
  *
  * On iOS the native camera (`<input capture>`) is the primary action: Safari's getUserMedia stills
  * are much lower resolution than the Camera app's photos.
  */
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
-import type { FrameQuality } from '../../model/types';
+import type { CaptureInfo, FrameQuality } from '../../model/types';
 import { CAMERA_ERROR_TEXT, cameraPermission, CameraError, isCameraSupported, openCamera, type CameraSession } from '../../platform/camera';
 import { haptic, isCoarsePointer, isIOS } from '../../platform/device';
 import { usePipeline } from '../context/PipelineContext';
 import { usePrefs } from '../hooks/usePrefs';
-import { startFrameLoop } from '../lib/frameLoop';
+import { meterState, startFrameLoop } from '../lib/frameLoop';
 import { setDismissed } from '../lib/prefs';
 import { Banner } from './Feedback';
 import { IconCamera, IconCheck, IconClose, IconImage, IconInfo, IconTorch, IconUpload } from './Icons';
 
 export type CaptureContext = 'box' | 'pieces' | 'closeup';
 
-const TIPS: Record<CaptureContext, { title: string; tips: string[] }> = {
+const TIPS: Record<CaptureContext, { title: string; tips: string[]; more?: string[] }> = {
   box: {
     title: 'Photograph the box',
     tips: ['Fill the frame with the box picture', 'Avoid reflections – tilt the box away from lamps', 'Straight from the front is best, but angles are fine'],
@@ -27,12 +29,31 @@ const TIPS: Record<CaptureContext, { title: string; tips: string[] }> = {
   pieces: {
     title: 'Photograph loose pieces',
     tips: ['Plain, contrasting background', 'Pieces must not touch', 'Shoot from directly above', '10–40 pieces per photo'],
+    more: [
+      'Glare? Flash and torch off; a lamp from the side, not from above',
+      'A matte cloth in a colour unlike the puzzle',
+      'Use the 2× lens if you have one and hold the phone higher: less tilt at the edges',
+    ],
   },
   closeup: {
     title: 'Close-up of the box picture',
     tips: ['Fill the frame with one part of the picture', 'Keep it sharp and free of glare', 'Overlap a little with other close-ups'],
   },
 };
+
+/** Extra tips behind a "More tips" disclosure (glare, background, lens). */
+function MoreTips({ tips, card = false }: { tips: string[]; card?: boolean }) {
+  return (
+    <details className={`more-tips${card ? ' on-card' : ''}`} data-testid="more-tips">
+      <summary>More tips</summary>
+      <ul>
+        {tips.map((t) => (
+          <li key={t}>{t}</li>
+        ))}
+      </ul>
+    </details>
+  );
+}
 
 type CamState = { kind: 'off' } | { kind: 'starting' } | { kind: 'live'; session: CameraSession } | { kind: 'error'; message: string };
 
@@ -88,7 +109,8 @@ export function CameraCapture({
   uploadLabel = 'Upload photo',
 }: {
   context: CaptureContext;
-  onCapture: (photo: Blob) => void;
+  /** The photo and how it was taken (camera still, video frame, or a file). */
+  onCapture: (photo: Blob, capture: CaptureInfo) => void;
   disabled?: boolean;
   /** Start the camera immediately when permission was already granted (not on iOS). */
   autoStart?: boolean;
@@ -224,8 +246,8 @@ export function CameraCapture({
     haptic();
     setTimeout(() => setFlash(false), 180);
     try {
-      const blob = await cam.session.takePhoto(v);
-      onCapture(blob);
+      const { blob, capture } = await cam.session.takePhoto(v, context);
+      onCapture(blob, capture);
     } catch (e) {
       setCam({ kind: 'error', message: e instanceof Error ? e.message : CAMERA_ERROR_TEXT.unknown });
     } finally {
@@ -237,7 +259,7 @@ export function CameraCapture({
     const f = files?.[0];
     if (!f) return;
     if (f.type && !f.type.startsWith('image/')) return;
-    onCapture(f);
+    onCapture(f, { method: 'file' });
   };
 
   const onDrop = (e: DragEvent) => {
@@ -275,33 +297,44 @@ export function CameraCapture({
   if (cam.kind === 'live') {
     const q = quality;
     const sharpPct = q ? Math.round(q.sharpness * 100) : 0;
+    const meter = meterState(q, torch);
+    const setTorchOn = async (on: boolean) => setTorch(await cam.session.setTorch(on));
     return (
       <div className="camera">
         <div className="camera-view">
           <video ref={video} playsInline muted autoPlay className="camera-video" />
           {flash && <div className="camera-flash" />}
-          <div className={`camera-meter ${q ? (q.ok ? 'ok' : 'bad') : ''}`} aria-live="polite">
-            <span className="meter-dot" />
-            <span className="meter-text">{q ? (q.ok ? 'Looks good' : q.message ?? 'Adjust') : 'Checking…'}</span>
-            {q && (
-              <span className="meter-bars" aria-hidden="true">
-                <span title="Sharpness" className="meter-bar">
-                  <span style={{ width: `${sharpPct}%` }} />
+          <div className="camera-top">
+            <div className={`camera-meter ${meter.tone === 'checking' ? '' : meter.tone}${meter.glare ? ' glare' : ''}`} aria-live="polite" data-testid="camera-meter" data-problem={q?.problem ?? ''}>
+              <span className="meter-dot" />
+              <span className="meter-text">{meter.text}</span>
+              {q && (
+                <span className="meter-bars" aria-hidden="true">
+                  <span title="Sharpness" className="meter-bar">
+                    <span style={{ width: `${sharpPct}%` }} />
+                  </span>
+                  <span title="Brightness" className="meter-bar">
+                    <span style={{ width: `${Math.round(q.brightness * 100)}%` }} />
+                  </span>
                 </span>
-                <span title="Brightness" className="meter-bar">
-                  <span style={{ width: `${Math.round(q.brightness * 100)}%` }} />
-                </span>
-              </span>
+              )}
+            </div>
+            {meter.torchOff && (
+              <button className="btn btn-sm btn-on-dark camera-torch-off" onClick={() => void setTorchOn(false)} data-testid="glare-torch-off">
+                <IconTorch size={18} />
+                Turn the torch off
+              </button>
             )}
           </div>
           {showTips && (
-            <div className="camera-tips">
+            <div className="camera-tips" data-testid="camera-tips">
               <strong>{tips.title}</strong>
               <ul>
                 {tips.tips.map((t) => (
                   <li key={t}>{t}</li>
                 ))}
               </ul>
+              {tips.more && <MoreTips tips={tips.more} />}
               {ios && <span className="small">For the sharpest photo use “Take photo” below.</span>}
               <div className="camera-tips-actions">
                 <label className="camera-tips-check">
@@ -324,7 +357,7 @@ export function CameraCapture({
             {cam.session.torchSupported ? (
               <button
                 className={`icon-btn on-dark${torch ? ' active' : ''}`}
-                onClick={async () => setTorch(await cam.session.setTorch(!torch))}
+                onClick={() => void setTorchOn(!torch)}
                 aria-label={torch ? 'Torch off' : 'Torch on'}
                 aria-pressed={torch}
               >
@@ -374,6 +407,7 @@ export function CameraCapture({
           </li>
         ))}
       </ul>
+      {tips.more && <MoreTips tips={tips.more} card />}
       {cam.kind === 'error' && <Banner tone="warning">{cam.message}</Banner>}
       <div className="capture-actions">
         {ios ? (

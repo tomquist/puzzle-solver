@@ -1,6 +1,6 @@
 const ENTRIES = [
   { tone: 'confident', label: 'Sure place' },
-  { tone: 'ambiguous', label: 'Unsure' },
+  { tone: 'ambiguous', label: 'Likely or unsure – check' },
   { tone: 'patch', label: 'Assembled grid' },
 ] as const;
 

@@ -9,12 +9,20 @@
  * rank with priors (flat sides must face the border, placed cells) → confidence from score and
  * margin. The search is a sliding search for every cut style; grid cells only enter as priors and
  * when reporting row/col.
+ *
+ * Cells the user marked as placed are soft evidence, never an exclusion (users make mistakes when
+ * marking): every candidate in such a cell scores {@link PLACED_PENALTY} less from the first search
+ * on, so the shortlists keep free cells, but the best few places by the photo alone stay in the
+ * shortlists too. When the photo alone places the region confidently in a marked cell, the photo
+ * wins. The marks reorder the places, but lift a confidence by at most {@link PLACED_GAIN} over the
+ * photo's own. Whenever the photo's own best place is a marked cell, the match names it in
+ * `placedConflict` (a wrong mark, or a piece that came off the board).
  */
 import { findSimilarity, type Point } from '../../cv/geometry';
-import { cellKey, type CellRef, type MatchStatus, type Placement, type RefLattice, type RegionMatch, type SideKind } from '../../model/types';
+import { cellKey, type CellRef, type MatchStatus, type Placement, type PlacedConflict, type RefLattice, type RegionMatch, type SideKind, type UncertainReason } from '../../model/types';
 import { buildTemplate, colourDistanceMap, DEFAULT_SCORE, makePhotoSource, scoreAt, scoreMap, type ColorCorrection, type Mapping, type PhotoSource, type ScoreParams, type Template } from './template';
 import { estimatePatchPitch } from '../pieces/patchPitch';
-import { fitPatchLattice, latticeCells, latticePoint, type LatticeCell, type PatchLattice } from '../pieces/patchLattice';
+import { fitPatchLattice, latticeCells, latticeCoords, latticePoint, type LatticeCell, type PatchLattice } from '../pieces/patchLattice';
 import { NOT_ONE_PIECE_CAP, onePieceArea } from './groups';
 import type { MatchInput, MatchOptions, RefLevel, ReferenceIndex } from './types';
 import { runSteps, type Steps } from '../steps';
@@ -38,13 +46,42 @@ interface Candidate {
   raw: number;
   /** raw minus priors. */
   score: number;
+  /** raw minus the priors of the photo alone (flat sides), without the placed-cell penalty. */
+  photo: number;
   level: number;
+}
+
+/** The user's placed cells as a prior: candidates in them score `penalty` less. */
+interface PlacedPrior {
+  cells: Set<string>;
+  penalty: number;
+  /** Most the marks may lift a placement's confidence over the photo's own for that place. */
+  gain: number;
 }
 
 const DEG = 180 / Math.PI;
 const PRIOR_FLAT_INSIDE = 0.22;
 const PRIOR_KNOB_AT_BORDER = 0.22;
-const PLACED_PENALTY = 0.1;
+/**
+ * Score penalty of a place in a cell the user marked as placed (default; `MatchOptions.
+ * placedPenalty`). On the candidates' softmax scale ({@link CANDIDATE_TAU}) it divides the place's
+ * likelihood by about 6.5: a mark is trusted, but a clear photo still beats it. bench/placed.eval.ts
+ * (simulated marks, a quarter of them wrong at worst): 0.05 helps less with right marks (top-3
+ * 0.951 with every other cell marked), 0.1 and 0.2 cost more with wrong ones (top-1 0.903 / 0.896
+ * with 30 % of the cells marked, a quarter wrongly, against 0.912 without marks); 0.075: 0.973 and
+ * 0.910.
+ */
+export const PLACED_PENALTY = 0.075;
+/** Best places by the photo alone (without the placed-cell penalty) that every shortlist keeps. */
+const PHOTO_KEEP = 3;
+/**
+ * Most the placed marks may lift a placement's confidence over what the photo alone gives that
+ * place (default; `MatchOptions.placedGain`). Marks take competitors away, which raises the share
+ * and margin of what is left – also of a wrong place when the right one scores lower, or is marked
+ * by mistake. The marks reorder the places freely; they make a placement confident only with the
+ * photo's support.
+ */
+export const PLACED_GAIN = 0.2;
 
 function norm360(deg: number): number {
   const d = deg % 360;
@@ -72,6 +109,17 @@ function pivotRef(level: RefLevel, t: Template, X: number, Y: number): Point {
 
 function fits(level: RefLevel, t: Template, X: number, Y: number): boolean {
   return X >= 0 && Y >= 0 && X + t.w <= level.stride && Y + t.h <= level.rows;
+}
+
+/** Penalty of a place in a cell the user marked as placed. */
+function placedPrior(index: ReferenceIndex, ref: Point, placed: PlacedPrior | undefined): number {
+  return placed && placed.cells.has(cellKey(cellAt(index, ref))) ? placed.penalty : 0;
+}
+
+/** A candidate's scores at `ref`: by the photo alone, and with the placed-cell penalty. */
+function scored(index: ReferenceIndex, hyp: Hypothesis, ref: Point, raw: number, placed: PlacedPrior | undefined): { score: number; photo: number } {
+  const photo = raw - gridPrior(index, hyp, ref);
+  return { photo, score: photo - placedPrior(index, ref, placed) };
 }
 
 /** Penalty for violating the border constraints implied by flat sides. */
@@ -228,7 +276,7 @@ function searchBounds(level: RefLevel, t: Template): { x0: number; x1: number; y
  * applied to them). When a prefilter level exists (index 0, below `ci`), only the neighbourhoods of
  * its best positions are evaluated on the coarse level.
  */
-function coarseSearch(index: ReferenceIndex, ci: number, hyp: Hypothesis, cache: TemplateCache, sp: ScoreParams, out: Candidate[]): void {
+function coarseSearch(index: ReferenceIndex, ci: number, hyp: Hypothesis, cache: TemplateCache, sp: ScoreParams, out: Candidate[], placed?: PlacedPrior): void {
   const level = index.levels[ci];
   const t = cache.get(level, ci, hyp.map);
   if (!t) return;
@@ -294,17 +342,20 @@ function coarseSearch(index: ReferenceIndex, ci: number, hyp: Hypothesis, cache:
       }
       if (!isMax) continue;
       const ref = pivotRef(level, t, b.x0 + i, b.y0 + j);
-      out.push({ hyp, map: hyp.map, ref, raw: v, score: v - gridPrior(index, hyp, ref), level: ci });
+      out.push({ hyp, map: hyp.map, ref, raw: v, ...scored(index, hyp, ref, v, placed), level: ci });
     }
   }
 }
 
-/** Greedy non-maximum suppression: keeps candidates further than `radius` (ref px) from better ones of the same group. */
-function suppress(cands: Candidate[], radius: number, limit: number): Candidate[] {
-  cands.sort((a, b) => b.score - a.score);
+/**
+ * Greedy non-maximum suppression: keeps candidates further than `radius` (ref px) from better ones
+ * of the same group, best first by `key`.
+ */
+function suppressBy(cands: Candidate[], radius: number, limit: number, key: (c: Candidate) => number): Candidate[] {
+  const sorted = [...cands].sort((a, b) => key(b) - key(a));
   const kept: Candidate[] = [];
   const r2 = radius * radius;
-  for (const c of cands) {
+  for (const c of sorted) {
     if (kept.length >= limit) break;
     let dup = false;
     for (const k of kept) {
@@ -316,6 +367,20 @@ function suppress(cands: Candidate[], radius: number, limit: number): Candidate[
       }
     }
     if (!dup) kept.push(c);
+  }
+  return kept;
+}
+
+/**
+ * The shortlist: the best `limit` distinct candidates by score (placed-cell penalty included) and,
+ * with placed cells, also the best {@link PHOTO_KEEP} by the photo alone, so a wrong mark cannot
+ * drop the photo's own best places. Sorted by score.
+ */
+function suppress(cands: Candidate[], radius: number, limit: number, placed?: PlacedPrior): Candidate[] {
+  const kept = suppressBy(cands, radius, limit, (c) => c.score);
+  if (placed && placed.cells.size > 0 && placed.penalty > 0) {
+    for (const c of suppressBy(cands, radius, PHOTO_KEEP, (c) => c.photo)) if (!kept.includes(c)) kept.push(c);
+    kept.sort((a, b) => b.score - a.score);
   }
   return kept;
 }
@@ -335,7 +400,7 @@ class TemplateCache {
 }
 
 /** Re-search a candidate's position on level `li` around its current reference position. */
-function refinePosition(index: ReferenceIndex, li: number, c: Candidate, cache: TemplateCache, r: number, sp: ScoreParams, map = c.map): Candidate | null {
+function refinePosition(index: ReferenceIndex, li: number, c: Candidate, cache: TemplateCache, r: number, sp: ScoreParams, map = c.map, placed?: PlacedPrior): Candidate | null {
   const level = index.levels[li];
   const t = cache.get(level, li, map);
   if (!t) return null;
@@ -343,11 +408,11 @@ function refinePosition(index: ReferenceIndex, li: number, c: Candidate, cache: 
   const best = searchWindow(level, t, X, Y, r, sp);
   if (!best) return null;
   const ref = pivotRef(level, t, best.X, best.Y);
-  return { hyp: c.hyp, map, ref, raw: best.raw, score: best.raw - gridPrior(index, c.hyp, ref), level: li };
+  return { hyp: c.hyp, map, ref, raw: best.raw, ...scored(index, c.hyp, ref, best.raw, placed), level: li };
 }
 
 /** Coordinate-descent refinement of angle and scale on the finest level. */
-function refineAngleScale(index: ReferenceIndex, li: number, c: Candidate, cache: TemplateCache, sp: ScoreParams): Candidate {
+function refineAngleScale(index: ReferenceIndex, li: number, c: Candidate, cache: TemplateCache, sp: ScoreParams, placed?: PlacedPrior): Candidate {
   let best = c;
   const steps: [number, number][] = [
     [2 / DEG, 0], [-2 / DEG, 0], [4 / DEG, 0], [-4 / DEG, 0],
@@ -359,7 +424,7 @@ function refineAngleScale(index: ReferenceIndex, li: number, c: Candidate, cache
     if (Math.abs(best.map.phi + dphi - base.phi) > 4.5 / DEG) continue;
     if (Math.abs(best.map.s * (1 + ds) / base.s - 1) > 0.11) continue;
     const m: Mapping = { pivot: best.map.pivot, phi: best.map.phi + dphi, s: best.map.s * (1 + ds) };
-    const cand = refinePosition(index, li, best, cache, 1, sp, m);
+    const cand = refinePosition(index, li, best, cache, 1, sp, m, placed);
     if (cand && cand.score > best.score) best = cand;
   }
   return best;
@@ -460,6 +525,7 @@ export function capForSize(detail: MatchDetail, input: Pick<MatchInput, 'kind' |
   const bad = input.kind === 'piece' ? !onePieceArea(r) : input.kind === 'patch' && r <= SMALL_TOUCHING_PATCH && (input.outline?.issues ?? []).includes('touching_pieces');
   if (!bad || c.confidence <= NOT_ONE_PIECE_CAP) return;
   c.confidence = NOT_ONE_PIECE_CAP;
+  detail.reason = 'shape';
   for (const o of detail.match.candidates.slice(1)) o.confidence = Math.min(o.confidence, NOT_ONE_PIECE_CAP);
   if (detail.match.status === 'confident') detail.match.status = 'ambiguous';
 }
@@ -489,6 +555,7 @@ export function capForBorder(detail: MatchDetail, input: Pick<MatchInput, 'outli
   c.confidence = cap;
   for (const o of detail.match.candidates.slice(1)) o.confidence = Math.min(o.confidence, cap);
   if (detail.match.status === 'confident' && cap < CONFIDENT_THRESHOLD) detail.match.status = 'ambiguous';
+  if (cap < CONFIDENT_THRESHOLD) detail.reason = 'shape';
 }
 
 /** Plausible area of a single piece relative to its body area (4 blanks … 4 tabs, with tolerance). */
@@ -541,6 +608,13 @@ export interface MatchFeatures {
 }
 
 /** Match result plus the winning similarity (for scan-level post-processing). */
+/** A candidate's placement: the similarity `map` with its pivot at reference point `ref` (patches: and their photo lattice). */
+export interface CandidatePlacement {
+  map: Mapping;
+  ref: Point;
+  lattice?: PatchLattice;
+}
+
 export interface MatchDetail {
   match: RegionMatch;
   best?: { map: Mapping; ref: Point };
@@ -550,6 +624,32 @@ export interface MatchDetail {
   params?: ScoreParams;
   /** Patches: the seam-fitted cell lattice in the photo crop at the best placement. */
   lattice?: PatchLattice;
+  /** The placements behind `match.candidates` (same order; patches: with the lattice their cells come from). */
+  placements?: CandidatePlacement[];
+  /** Why the placement would be unsure (see {@link uncertainReasonOf}; set whatever the status, for later demotions). */
+  reason?: UncertainReason;
+}
+
+/** Body size (photo px) below which a region counts as small: fewer pixels than the finest level's 32 px per cell, by a margin. */
+const SMALL_BODY = 24;
+/** Distinct places within 0.05 of the best from which a textured region's texture counts as repeating. */
+const REPEATING_PLATEAU = 2;
+
+/**
+ * The main reason a placement is (or would be) unsure, from its evidence (see `UncertainReason`):
+ * doubts about the outline ('shape': segmentation issues, a ragged outline, a shapeless single
+ * piece whose area is not one piece's), a small region ('small'), featureless print ('plain'),
+ * several distinct places that fit about equally well ('repeating') or a few similar ones
+ * ('similar-spots'). The caps for cast shadow and for sizes that are not one piece set 'shape'
+ * themselves; claims.ts says 'similar-spots' for a piece whose best spot another piece holds.
+ */
+export function uncertainReasonOf(f: Pick<MatchFeatures, 'detail' | 'plateau05' | 'areaRatio'>, input: Pick<MatchInput, 'kind' | 'outline' | 'shape'>, bodySize: number): UncertainReason {
+  const shapelessPiece = !input.shape && input.kind !== 'patch';
+  if (outlineFactor(input) < 1 || (shapelessPiece && (f.areaRatio < AREA_RATIO_RANGE[0] || f.areaRatio > AREA_RATIO_RANGE[1]))) return 'shape';
+  if (bodySize < SMALL_BODY) return 'small';
+  if (f.detail < TEXTURE_DETAIL) return 'plain';
+  if (f.plateau05 >= REPEATING_PLATEAU) return 'repeating';
+  return 'similar-spots';
 }
 
 /** Template std with and without a per-channel linear ramp (plane fit over template coordinates). */
@@ -611,6 +711,7 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
 export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInput, opts: MatchOptions = {}, ctx: MatchContext = {}): Steps<MatchDetail> {
   const maxCandidates = opts.maxCandidates ?? 5;
   const isPatch = input.kind === 'patch';
+  const placed = placedPriorOf(opts);
   let sp = ctx.score ?? DEFAULT_SCORE;
   const empty: MatchDetail = { match: { regionId: input.regionId, candidates: [], status: 'unmatched' } };
   // Body size estimate for the erosion radius and the seams. Without a scan-level size reference a
@@ -642,52 +743,171 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
   }
   const coarse: Candidate[] = [];
   for (const h of hyps) {
-    coarseSearch(index, ci, h, cache, sp, coarse);
+    coarseSearch(index, ci, h, cache, sp, coarse, placed);
     yield;
   }
   if (coarse.length === 0) return empty;
   const nKeep = isPatch ? 24 : 30;
-  let cands = suppress(coarse, 0.6 * cell, nKeep);
+  let cands = suppress(coarse, 0.6 * cell, nKeep, placed);
 
   // 2. Position refinement through the finer levels.
   for (let li = ci + 1; li < L; li++) {
     const r = Math.ceil((index.levels[li].ppc / index.levels[li - 1].ppc) * (li === ci + 1 ? 1.5 : 1)) + 1;
     const next: Candidate[] = [];
     for (const c of cands) {
-      const rc = refinePosition(index, li, c, cache, r, sp);
+      const rc = refinePosition(index, li, c, cache, r, sp, c.map, placed);
       if (rc) next.push(rc);
       yield;
     }
-    cands = suppress(next, 0.3 * cell, nKeep);
+    cands = suppress(next, 0.3 * cell, nKeep, placed);
   }
   if (cands.length === 0) return empty;
 
-  // 3. Angle / scale refinement of the best few on the finest level.
-  const nFine = Math.min(cands.length, 6);
+  // 3. Angle / scale refinement of the best few on the finest level (and of the photo's own best
+  // places, when placed cells push them down).
   cands.sort((a, b) => b.score - a.score);
-  for (let i = 0; i < nFine; i++) {
-    cands[i] = refineAngleScale(index, L - 1, cands[i], cache, sp);
+  const fine = new Set(cands.slice(0, 6));
+  if (placed) for (const c of [...cands].sort((a, b) => b.photo - a.photo).slice(0, 2)) fine.add(c);
+  for (let i = 0; i < cands.length; i++) {
+    if (!fine.has(cands[i])) continue;
+    cands[i] = refineAngleScale(index, L - 1, cands[i], cache, sp, placed);
     yield;
   }
 
-  // 4. Placed-cell penalty and ranking.
-  const placed = new Set((opts.placedCells ?? []).map(cellKey));
-  for (const c of cands) if (placed.size && placed.has(cellKey(cellAt(index, c.ref)))) c.score -= PLACED_PENALTY;
+  // 4. Ranking (the placed-cell penalty is in the scores) and confidence. With placed cells, the
+  // photo alone is heard first: when it places the region confidently in a marked cell, it wins.
   cands.sort((a, b) => b.score - a.score);
+  const featureLevel = Math.min(ci + 1, L - 1);
+  const rank = (list: Candidate[], n = maxCandidates) => rankCandidates(index, cache, featureLevel, list, sp, input, !!ctx.correction, n);
+  let ranked: Ranking | undefined;
+  let photoWins = false;
+  let photoView: Ranking | undefined;
+  if (placed) {
+    // The photo alone: all its distinct places, with their confidences.
+    photoView = rank(cands.map((c) => ({ ...c, score: c.photo })).sort((a, b) => b.score - a.score), Infinity);
+    if (placed.cells.has(cellKey(cellAt(index, photoView.best.ref))) && photoView.conf >= CONFIDENT_THRESHOLD) {
+      ranked = { ...photoView, chosen: photoView.chosen.slice(0, maxCandidates), confidences: photoView.confidences.slice(0, maxCandidates) };
+      photoWins = true;
+    }
+  }
+  ranked ??= rank(cands);
+  if (photoView && !photoWins) capMarkedGain(ranked, photoView, placed!.gain, cell);
+  yield;
+  const { best, chosen, conf, confidences, features } = ranked;
 
-  // 5. Distinct candidates and confidence.
+  const candidates: Placement[] = chosen.map((c, i) => {
+    const cellRef = cellAt(index, c.ref);
+    return {
+      row: cellRef.row,
+      col: cellRef.col,
+      x: c.ref.x,
+      y: c.ref.y,
+      rotationDeg: norm360(c.map.phi * DEG) % 360,
+      score: c.score,
+      confidence: confidences[i],
+    };
+  });
+
+  const placements: CandidatePlacement[] = chosen.map((c) => ({ map: c.map, ref: c.ref }));
+  let coveredCells: CellRef[] | undefined;
+  let lattice: PatchLattice | undefined;
+  if (isPatch) {
+    // Patches report the top-most, then left-most covered cell as row/col.
+    // One lattice for the candidates that see the photo at the best one's cell size and turn: it is
+    // the photo's own geometry, only its place on the grid differs. A candidate at another cell size
+    // (another piece-count hypothesis) or turn has cells of its own size in the photo; the best one's
+    // lattice would put the wrong cells under it.
+    lattice = patchLatticeOf(index, input, best);
+    const lat = lattice;
+    chosen.forEach((c, i) => {
+      const own = i === 0 || sameLatticeGeometry(index, best, c) ? lat : patchLatticeOf(index, input, c);
+      placements[i].lattice = own;
+      const cells = patchCoveredCells(index, input, c, own);
+      if (i === 0) coveredCells = cells;
+      if (cells.length > 0) {
+        const tl = cells.reduce((a, b) => (b.row < a.row || (b.row === a.row && b.col < a.col) ? b : a));
+        candidates[i].row = tl.row;
+        candidates[i].col = tl.col;
+      }
+    });
+  }
+  // 'unmatched' (hidden in the UI) only when textured content clearly matches nowhere; a featureless
+  // region's score is noise, so it stays a (low-confidence) ambiguous match with alternatives.
+  const status: MatchStatus =
+    best.score < UNMATCHED_SCORE && features.detail >= TEXTURE_DETAIL ? 'unmatched' : conf >= CONFIDENT_THRESHOLD ? 'confident' : 'ambiguous';
+  const match: RegionMatch = { regionId: input.regionId, candidates, coveredCells, status };
+  if (lattice) match.lattice = refLattice(input, best, lattice);
+  const conflict = placed && placedConflictOf(index, placed, photoView ?? ranked, candidates[0], coveredCells);
+  if (conflict) match.placedConflict = conflict;
+  const reason = uncertainReasonOf(features, input, roughBody);
+  if (status === 'ambiguous') match.uncertainReason = reason;
+  return { match, best: { map: best.map, ref: best.ref }, src, features, params: sp, lattice, reason, placements };
+}
+
+/** The placed-cell prior of a run (undefined without placed cells or with no penalty). */
+function placedPriorOf(opts: MatchOptions): PlacedPrior | undefined {
+  const penalty = opts.placedPenalty ?? PLACED_PENALTY;
+  if (!opts.placedCells || opts.placedCells.length === 0 || penalty <= 0) return undefined;
+  return { cells: new Set(opts.placedCells.map(cellKey)), penalty, gain: opts.placedGain ?? PLACED_GAIN };
+}
+
+/**
+ * The marked cell the region seems to belong in (`RegionMatch.placedConflict`): a single piece's
+ * best place by the photo alone, when the user marked that cell as placed – whether the photo won
+ * there or the marks moved the piece elsewhere; a patch's placement when most of its covered cells
+ * are marked.
+ */
+function placedConflictOf(index: ReferenceIndex, placed: PlacedPrior, photoView: Ranking, best: Placement | undefined, covered: CellRef[] | undefined): PlacedConflict | undefined {
+  if (covered && covered.length > 0) {
+    if (!best || 2 * covered.filter((c) => placed.cells.has(cellKey(c))).length <= covered.length) return undefined;
+    return { row: best.row, col: best.col, rotationDeg: best.rotationDeg };
+  }
+  const own = cellAt(index, photoView.best.ref);
+  if (!placed.cells.has(cellKey(own))) return undefined;
+  return { row: own.row, col: own.col, rotationDeg: norm360(photoView.best.map.phi * DEG) % 360 };
+}
+
+/**
+ * Limit what the placed marks add to the best placement's confidence (see {@link PLACED_GAIN}): at
+ * most `gain` over the photo's own confidence for the same place (same position and quarter turn;
+ * 0 when the photo does not list it). Alternatives are capped alike.
+ */
+function capMarkedGain(ranked: Ranking, photoView: Ranking, gain: number, cell: number): void {
+  const rot = (c: Candidate) => norm360(c.map.phi * DEG);
+  const own = (c: Candidate) => {
+    const i = photoView.chosen.findIndex((p) => Math.hypot(p.ref.x - c.ref.x, p.ref.y - c.ref.y) < 0.5 * cell && angleDiff(rot(p), rot(c)) < 45);
+    return i >= 0 ? photoView.confidences[i] : 0;
+  };
+  ranked.confidences = ranked.confidences.map((p, i) => Math.min(p, own(ranked.chosen[i]) + gain));
+  ranked.conf = ranked.confidences[0];
+}
+
+/** The ranked candidates of a run with their confidences (see {@link rankCandidates}). */
+interface Ranking {
+  best: Candidate;
+  chosen: Candidate[];
+  conf: number;
+  confidences: number[];
+  features: MatchFeatures;
+}
+
+/**
+ * Distinct candidates and confidence from candidates sorted best first by `score`: the margin over
+ * the best distinct alternative, the information features of the best one, and the distinct places
+ * (one per cell, well apart; best rotation each) for the candidate list, whose likelihood shares
+ * (listed or not) give the alternatives' confidences.
+ */
+function rankCandidates(index: ReferenceIndex, cache: TemplateCache, li: number, cands: Candidate[], sp: ScoreParams, input: MatchInput, colourCorrected: boolean, maxCandidates: number): Ranking {
+  const isPatch = input.kind === 'patch';
+  const cell = Math.sqrt(index.cellW * index.cellH);
   const rot = (c: Candidate) => norm360(c.map.phi * DEG);
   const distinct = (a: Candidate, b: Candidate) =>
     Math.hypot(a.ref.x - b.ref.x, a.ref.y - b.ref.y) > 0.6 * cell || angleDiff(rot(a), rot(b)) > 45;
   const best = cands[0];
   const second = cands.find((c) => distinct(best, c));
   const margin = second ? best.score - second.score : 0.3;
-  const features = informationFeatures(index, cache, Math.min(ci + 1, L - 1), best, cands, distinct, sp, input, !!ctx.correction);
+  const features = informationFeatures(index, cache, li, best, cands, distinct, sp, input, colourCorrected);
   features.margin = margin;
-  yield;
-
-  // Distinct places (one per cell, well apart; best rotation each) for the candidate list. The
-  // likelihood shares of all places (listed or not) give the alternatives' confidences.
   const places: Candidate[] = [];
   const usedCells = new Set<string>();
   for (const c of cands) {
@@ -709,44 +929,7 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
     // share what the best one leaves.
     return conf <= q[0] ? (q[i] * conf) / q[0] : ((1 - conf) * q[i]) / Math.max(1e-9, 1 - q[0]);
   });
-
-  const candidates: Placement[] = chosen.map((c, i) => {
-    const cellRef = cellAt(index, c.ref);
-    return {
-      row: cellRef.row,
-      col: cellRef.col,
-      x: c.ref.x,
-      y: c.ref.y,
-      rotationDeg: norm360(c.map.phi * DEG) % 360,
-      score: c.score,
-      confidence: confidences[i],
-    };
-  });
-
-  let coveredCells: CellRef[] | undefined;
-  let lattice: PatchLattice | undefined;
-  if (isPatch) {
-    // Patches report the top-most, then left-most covered cell as row/col.
-    // One lattice for all candidates: it is the photo's own geometry, only its place on the grid differs.
-    lattice = patchLatticeOf(index, input, best);
-    const lat = lattice;
-    chosen.forEach((c, i) => {
-      const cells = patchCoveredCells(index, input, c, lat);
-      if (i === 0) coveredCells = cells;
-      if (cells.length > 0) {
-        const tl = cells.reduce((a, b) => (b.row < a.row || (b.row === a.row && b.col < a.col) ? b : a));
-        candidates[i].row = tl.row;
-        candidates[i].col = tl.col;
-      }
-    });
-  }
-  // 'unmatched' (hidden in the UI) only when textured content clearly matches nowhere; a featureless
-  // region's score is noise, so it stays a (low-confidence) ambiguous match with alternatives.
-  const status: MatchStatus =
-    best.score < UNMATCHED_SCORE && features.detail >= TEXTURE_DETAIL ? 'unmatched' : conf >= CONFIDENT_THRESHOLD ? 'confident' : 'ambiguous';
-  const match: RegionMatch = { regionId: input.regionId, candidates, coveredCells, status };
-  if (lattice) match.lattice = refLattice(input, best, lattice);
-  return { match, best: { map: best.map, ref: best.ref }, src, features, params: sp, lattice };
+  return { best, chosen, conf, confidences, features };
 }
 
 /**
@@ -798,6 +981,7 @@ export function refLattice(input: MatchInput, c: Pick<Candidate, 'map' | 'ref'>,
 export function scorePlacement(index: ReferenceIndex, input: MatchInput, detail: MatchDetail, cell: CellRef, rotationDeg: number, opts: MatchOptions = {}): Placement | null {
   if (!detail.src || !detail.params) return null;
   const sp = detail.params;
+  const placed = placedPriorOf(opts);
   const { hyps } = makeHypotheses(index, input, detail.src, patchBodySize(input, index.cellW / index.cellH));
   const cache = new TemplateCache(detail.src);
   const L = index.levels.length;
@@ -807,16 +991,14 @@ export function scorePlacement(index: ReferenceIndex, input: MatchInput, detail:
   let best: Candidate | null = null;
   for (const hyp of hyps) {
     if (angleDiff(norm360(hyp.map.phi * DEG), rotationDeg) > 45) continue;
-    let c: Candidate | null = { hyp, map: hyp.map, ref: centre, raw: -Infinity, score: -Infinity, level: li0 };
-    c = refinePosition(index, li0, c, cache, Math.ceil(0.3 * index.levels[li0].ppc), sp);
-    for (let li = li0 + 1; li < L && c; li++) c = refinePosition(index, li, c, cache, Math.ceil(index.levels[li].ppc / index.levels[li - 1].ppc) + 1, sp);
+    let c: Candidate | null = { hyp, map: hyp.map, ref: centre, raw: -Infinity, score: -Infinity, photo: -Infinity, level: li0 };
+    c = refinePosition(index, li0, c, cache, Math.ceil(0.3 * index.levels[li0].ppc), sp, c.map, placed);
+    for (let li = li0 + 1; li < L && c; li++) c = refinePosition(index, li, c, cache, Math.ceil(index.levels[li].ppc / index.levels[li - 1].ppc) + 1, sp, c.map, placed);
     if (!c) continue;
-    c = refineAngleScale(index, L - 1, c, cache, sp);
+    c = refineAngleScale(index, L - 1, c, cache, sp, placed);
     if (!best || c.score > best.score) best = c;
   }
   if (!best) return null;
-  const placed = new Set((opts.placedCells ?? []).map(cellKey));
-  if (placed.has(cellKey(cell))) best.score -= PLACED_PENALTY;
   return { row: cell.row, col: cell.col, x: best.ref.x, y: best.ref.y, rotationDeg: norm360(best.map.phi * DEG) % 360, score: best.score, confidence: 0 };
 }
 
@@ -888,7 +1070,7 @@ export function* measureScaleSteps(index: ReferenceIndex, detail: MatchDetail, o
   const c0 = opts.centre ?? Math.log(base.s);
   const hyp: Hypothesis = { map: base, group: 0, sideWeight: 0 };
   const scoreOf = (m: Mapping) => {
-    const c = refinePosition(index, li, { hyp, map: m, ref, raw: -Infinity, score: -Infinity, level: li }, cache, 2, sp, m);
+    const c = refinePosition(index, li, { hyp, map: m, ref, raw: -Infinity, score: -Infinity, photo: -Infinity, level: li }, cache, 2, sp, m);
     return c ? c.raw : -Infinity;
   };
   const n = Math.round(SCALE_RANGE / SCALE_STEP);
@@ -1009,12 +1191,44 @@ export function patchLatticeOf(index: ReferenceIndex, input: MatchInput, c: Pick
 }
 
 /**
+ * Largest scale difference (|ln| of the ratio) and turn difference (degrees) between two placements
+ * of a patch that still share one photo lattice: the range the lattice fit searches around its
+ * prior (pieces/patchLattice.ts: ±6 % pitch, ±2.4°).
+ */
+const LATTICE_SHARE_SCALE = 0.06;
+const LATTICE_SHARE_ANGLE = 2.4;
+
+/**
+ * Whether placement `c` sees the patch with the cells of placement `best` (see
+ * {@link LATTICE_SHARE_SCALE}): about the same scale, and the same turn up to a quarter turn when
+ * the cells are square (a half turn otherwise: a quarter turn swaps the cells' width and height).
+ */
+export function sameLatticeGeometry(index: Pick<ReferenceIndex, 'cellW' | 'cellH'>, best: Pick<Candidate, 'map'>, c: Pick<Candidate, 'map'>): boolean {
+  if (Math.abs(Math.log(c.map.s / best.map.s)) > LATTICE_SHARE_SCALE) return false;
+  const period = Math.abs(Math.log(index.cellW / index.cellH)) < 0.02 ? 90 : 180;
+  const d = norm360((c.map.phi - best.map.phi) * DEG) % period;
+  return Math.min(d, period - d) <= LATTICE_SHARE_ANGLE;
+}
+
+/**
  * Reference cells of a patch's lattice cells at placement `c`. The lattice is rigid: its axes map
  * onto the grid's (to the nearest quarter turn) and every cell steps by exactly one grid cell, so
  * one integer offset places them all – the offset most of the cells' centres agree on through the
  * placement transform (whose drift over a large block is what the lattice is for).
  */
 function latticeToGrid(index: ReferenceIndex, input: MatchInput, c: Pick<Candidate, 'map' | 'ref'>, lat: PatchLattice, cells: LatticeCell[]): (CellRef & LatticeCell)[] {
+  const place = latticeGridPlacer(index, input, c, lat, cells);
+  if (!place) return [];
+  const out: (CellRef & LatticeCell)[] = [];
+  for (const q of cells) {
+    const { row, col } = place(q.i, q.j);
+    if (row >= 0 && col >= 0 && row < index.grid.rows && col < index.grid.cols) out.push({ ...q, row, col });
+  }
+  return out.sort((p, q) => p.row - q.row || p.col - q.col);
+}
+
+/** The grid cell of each lattice cell (i, j) at placement `c`, by the one offset `cells` vote for (see {@link latticeToGrid}); null without cells. */
+function latticeGridPlacer(index: ReferenceIndex, input: MatchInput, c: Pick<Candidate, 'map' | 'ref'>, lat: PatchLattice, cells: LatticeCell[]): ((i: number, j: number) => CellRef) | null {
   const { cellW, cellH } = index;
   const { pivot, phi, s } = c.map;
   const cos = Math.cos(phi), sin = Math.sin(phi);
@@ -1039,15 +1253,35 @@ function latticeToGrid(index: ReferenceIndex, input: MatchInput, c: Pick<Candida
   }
   let bestKey = '', bestN = 0;
   for (const [key, n] of votes) if (n > bestN) [bestKey, bestN] = [key, n];
-  if (!bestKey) return [];
+  if (!bestKey) return null;
   const [tr, tc] = bestKey.split(',').map(Number);
-  const out: (CellRef & LatticeCell)[] = [];
-  for (const q of cells) {
-    const st = step(q.i, q.j);
-    const row = tr + st.row, col = tc + st.col;
-    if (row >= 0 && col >= 0 && row < index.grid.rows && col < index.grid.cols) out.push({ ...q, row, col });
+  return (i, j) => {
+    const st = step(i, j);
+    return { row: tr + st.row, col: tc + st.col };
+  };
+}
+
+/**
+ * The grid cell the app shows photo point `p` (crop coordinates) of a patch in, at placement `c`
+ * with lattice `lat`: of the patch's covered cells (on the grid, as {@link patchCoveredCells}), the
+ * one holding the point, or the nearest one when the point lies in none (a lone piece whose lattice
+ * is half a cell off, a part of the patch placed off the puzzle); with no covered cell, the point
+ * through the placement transform (then possibly off the grid).
+ */
+export function patchCellAt(index: ReferenceIndex, input: MatchInput, c: Pick<Candidate, 'map' | 'ref'>, lat: PatchLattice, p: Point): CellRef {
+  const cells = latticeToGrid(index, input, c, lat, latticeCells(lat, input.mask, input.table));
+  if (cells.length === 0) {
+    const { pivot, phi, s } = c.map;
+    const dx = (p.x + input.origin.x - pivot.x) * s, dy = (p.y + input.origin.y - pivot.y) * s;
+    return cellAt(index, { x: c.ref.x + Math.cos(phi) * dx - Math.sin(phi) * dy, y: c.ref.y + Math.sin(phi) * dx + Math.cos(phi) * dy });
   }
-  return out.sort((p, q) => p.row - q.row || p.col - q.col);
+  const q = latticeCoords(lat, p);
+  let best = cells[0], bestD = Infinity;
+  for (const cell of cells) {
+    const d = Math.hypot((q.a - cell.i - 0.5) * lat.pa, (q.b - cell.j - 0.5) * lat.pb);
+    if (d < bestD) [best, bestD] = [cell, d];
+  }
+  return { row: best.row, col: best.col };
 }
 
 /**

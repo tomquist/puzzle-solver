@@ -5,14 +5,14 @@
  * - TargetZoomView / TargetContext: the box picture around the target (about 7 × 7 cells, upright
  *   like the puzzle on the table), the target outlined thinly and the rest slightly dimmed, plus an
  *   overview of the whole picture with a crosshair on the spot. The zoom view can be pinched.
- * - ConfidenceBar
+ * - CertaintyMeter: how sure a place is, in words
  * (How to turn the item: TurnGuide.)
  */
 import { useState, type CSSProperties } from 'react';
 import type { CellRef, DetectedRegion, GridSpec } from '../../model/types';
 import { blockRect, cellsOutlinePath, closeupSquare, cornerBrackets, insetCorner, itemPieceSize, outsideMaskPath, overviewMarker, pickupRect, shiftInside, targetContext, topBarFor, topLabelSpot, type TopBar } from '../lib/framing';
 import type { CellBounds, ItemPlacement, ScanItem } from '../lib/items';
-import { confidencePercent } from '../lib/pieces';
+import { CERTAINTY_STEPS, CERTAINTY_WORD, type Certainty } from '../lib/certainty';
 import { CropCanvas } from './CropCanvas';
 import { IconZoom } from './Icons';
 import { ZoomPanView } from './ZoomPanView';
@@ -22,16 +22,21 @@ export type ReferenceImage = { bitmap?: ImageBitmap; url?: string; width: number
 /** Upscaling limit for the box picture (screen px per picture px) – beyond this it gets blurry. */
 const MAX_PICTURE_ZOOM = 2.5;
 
-export function ConfidenceBar({ value }: { value: number }) {
-  const pct = confidencePercent(value);
-  const tone = value >= 0.7 ? 'ok' : value >= 0.35 ? 'warn' : 'bad';
+/**
+ * How sure a place is: a word and a three-step meter (no percentage – the matcher's confidence is
+ * not calibrated; lib/certainty.ts).
+ */
+export function CertaintyMeter({ certainty, text }: { certainty: Certainty; text?: string }) {
+  const steps = CERTAINTY_STEPS[certainty];
   return (
-    <div className="conf" title={`${pct}% confidence`}>
-      <div className="conf-track">
-        <div className={`conf-fill ${tone}`} style={{ width: `${pct}%` }} />
-      </div>
-      <span className="conf-num tabular">{pct}%</span>
-    </div>
+    <span className={`cert cert-${certainty}`} data-testid="certainty" data-certainty={certainty}>
+      <span className="cert-steps" aria-hidden="true">
+        {[0, 1, 2].map((i) => (
+          <span key={i} className={i < steps ? 'on' : undefined} />
+        ))}
+      </span>
+      <span className="cert-word">{text ?? CERTAINTY_WORD[certainty]}</span>
+    </span>
   );
 }
 

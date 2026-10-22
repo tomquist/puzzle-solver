@@ -9,6 +9,9 @@
  * at its outline or at a hole is its least certain part); otherwise the piece is no longer
  * confident (its confidence halved). Patches cover only the cells where their mask has print
  * (segmentation opens the table they enclose), so this is the guard for what is left.
+ *
+ * The same holds between two loose pieces (`uniqueCells`): the less confident one moves to its next
+ * free candidate when that one scores nearly as well, or is no longer confident.
  */
 import { cellKey, type CellRef, type DetectedRegion, type GridSpec, type Placement, type RegionMatch } from '../../model/types';
 import { CONFIDENT_THRESHOLD } from './matchRegion';
@@ -49,7 +52,10 @@ export function resolveCellClaims(regions: readonly DetectedRegion[], matches: R
         changes.push({ piece: q.regionId, patch: p.regionId, cell: { row: best.row, col: best.col }, action: 'cell-dropped' });
       } else {
         for (const c of q.candidates) c.confidence *= 0.5;
-        if (best.confidence < CONFIDENT_THRESHOLD) q.status = 'ambiguous';
+        if (best.confidence < CONFIDENT_THRESHOLD) {
+          q.status = 'ambiguous';
+          q.uncertainReason = 'similar-spots';
+        }
         changes.push({ piece: q.regionId, patch: p.regionId, cell: { row: best.row, col: best.col }, action: 'piece-demoted' });
       }
     }
@@ -85,8 +91,9 @@ export interface EliminationChange {
  * the matcher does not even list that cell), or the last pieces of a puzzle. `score` gives the
  * matcher's score of a region at a cell and rotation (null: cannot be laid there); every free cell
  * is tried in the four quarter turns, and the best pairs are assigned first. A single region for a
- * single cell becomes confident; otherwise the new candidates stay ambiguous. Changes `matches` in
- * place.
+ * single cell becomes confident – unless its own best place is a cell the user marked as placed
+ * (the marks may be wrong, and then the free cell is not the piece's) –; otherwise the new
+ * candidates stay ambiguous. Changes `matches` in place.
  */
 export function placeByElimination(
   regions: readonly DetectedRegion[],
@@ -118,7 +125,10 @@ export function placeByElimination(
     }
   }
   pairs.sort((a, b) => b.p.score - a.p.score);
-  const sure = open.length === 1 && free.length === 1;
+  // The user's marks may be wrong: when the piece's own best place is a cell the user marked as
+  // placed, the photo and the marks disagree, and the last free cell is no certainty.
+  const marked = new Set(placedCells.map(cellKey));
+  const sure = open.length === 1 && free.length === 1 && !(open[0].candidates.length > 0 && marked.has(cellKey(open[0].candidates[0])));
   const done = new Set<RegionMatch>(), taken = new Set<string>();
   const changes: EliminationChange[] = [];
   for (const { m, cell, p } of pairs) {
@@ -133,6 +143,88 @@ export function placeByElimination(
     m.candidates = [{ ...p, row: cell.row, col: cell.col, confidence }, ...rest];
     m.status = sure ? 'confident' : 'ambiguous';
     changes.push({ regionId: m.regionId, cell, rotationDeg: p.rotationDeg, free: free.length, open: open.length });
+  }
+  return changes;
+}
+
+/**
+ * Single pieces of a scan whose best placement shares its cell with another single piece's (for a
+ * cell claimed by k pieces, k − 1 count), among all placed pieces and among the confident ones.
+ * A diagnostic: one cell holds one piece, so every duplicate claim is at least one wrong placement.
+ */
+export function duplicateClaims(regions: readonly DetectedRegion[], matches: readonly RegionMatch[]): { all: number; confident: number } {
+  const kind = new Map(regions.map((r) => [r.id, r.kind]));
+  const count = (pick: (m: RegionMatch) => boolean) => {
+    const seen = new Map<string, number>();
+    for (const m of matches) {
+      if (kind.get(m.regionId) !== 'piece' || m.status === 'unmatched' || m.candidates.length === 0 || !pick(m)) continue;
+      const k = cellKey(m.candidates[0]);
+      seen.set(k, (seen.get(k) ?? 0) + 1);
+    }
+    let n = 0;
+    for (const v of seen.values()) n += v - 1;
+    return n;
+  };
+  return { all: count(() => true), confident: count((m) => m.status === 'confident') };
+}
+
+/** Default score slack within which a single piece moves to its next free candidate ({@link uniqueCells}). */
+export const CLAIM_SLACK = 0.05;
+/** Factor of a piece's confidences when it shares its cell with a more confident piece and has no free place within the slack. */
+const CLAIM_DEMOTE = 0.5;
+
+/** What {@link uniqueCells} changed. */
+export interface UniqueCellChange {
+  regionId: number;
+  /** The more confident region holding the cell. */
+  holder: number;
+  cell: CellRef;
+  /** 'moved': to its next free candidate (`to`); 'demoted': its confidence lowered. */
+  action: 'moved' | 'demoted';
+  to?: CellRef;
+}
+
+/**
+ * One cell, one piece, within a scan: when two single pieces' best placements share a cell, the
+ * less confident one gives way – to its best candidate in a cell no more confident piece (or
+ * confident patch) holds, when that one scores within `slack` of its best, otherwise it is no
+ * longer confident (its confidences halved). Placement scores only: no shape fits. Pieces are
+ * taken most confident first (ties by region id, so the result is deterministic). Cells the user
+ * marked as placed are no hard claim here: they are in the scores already (soft, see matchRegion).
+ * Changes `matches` in place; a piece that gave way gets `uncertainReason: 'similar-spots'` (its
+ * best spot is another piece's, the others score about the same).
+ */
+export function uniqueCells(regions: readonly DetectedRegion[], matches: RegionMatch[], slack = CLAIM_SLACK): UniqueCellChange[] {
+  const kind = new Map(regions.map((r) => [r.id, r.kind]));
+  const held = new Map<string, number>();
+  for (const m of matches) {
+    if (kind.get(m.regionId) !== 'patch' || m.status !== 'confident' || m.candidates.length === 0) continue;
+    for (const c of m.coveredCells ?? []) held.set(cellKey(c), m.regionId);
+  }
+  const rank = (m: RegionMatch) => m.candidates[0].confidence + (m.status === 'confident' ? 1 : 0);
+  const pieces = matches
+    .filter((m) => kind.get(m.regionId) === 'piece' && m.status !== 'unmatched' && m.candidates.length > 0)
+    .sort((a, b) => rank(b) - rank(a) || a.regionId - b.regionId);
+  const changes: UniqueCellChange[] = [];
+  for (const m of pieces) {
+    const best = m.candidates[0];
+    const holder = held.get(cellKey(best));
+    if (holder === undefined) {
+      held.set(cellKey(best), m.regionId);
+      continue;
+    }
+    const k = m.candidates.findIndex((c, i) => i > 0 && !held.has(cellKey(c)) && best.score - c.score <= slack);
+    if (k > 0) {
+      const [c] = m.candidates.splice(k, 1);
+      m.candidates.unshift(c);
+      held.set(cellKey(c), m.regionId);
+      changes.push({ regionId: m.regionId, holder, cell: { row: best.row, col: best.col }, action: 'moved', to: { row: c.row, col: c.col } });
+    } else {
+      for (const c of m.candidates) c.confidence *= CLAIM_DEMOTE;
+      changes.push({ regionId: m.regionId, holder, cell: { row: best.row, col: best.col }, action: 'demoted' });
+    }
+    if (m.status === 'confident' && m.candidates[0].confidence < CONFIDENT_THRESHOLD) m.status = 'ambiguous';
+    if (m.status !== 'confident') m.uncertainReason = 'similar-spots';
   }
   return changes;
 }

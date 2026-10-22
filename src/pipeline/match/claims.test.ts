@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { CellRef, DetectedRegion, RegionMatch } from '../../model/types';
-import { placeByElimination, resolveCellClaims } from './claims';
+import { duplicateClaims, placeByElimination, resolveCellClaims, uniqueCells } from './claims';
 import { findFits } from './fits';
 
 const region = (id: number, kind: DetectedRegion['kind']): DetectedRegion => ({
@@ -118,5 +118,68 @@ describe('placeByElimination', () => {
     expect(placeByElimination(many.regions, many.matches, grid, [], scorer({}))).toEqual([]);
     const crowded = puzzle([{ row: 5, col: 2 }], [{ id: 2, cell: { row: 3, col: 1 }, confident: false }, { id: 3, cell: { row: 3, col: 2 }, confident: false }]);
     expect(placeByElimination(crowded.regions, crowded.matches, grid, [], scorer({}))).toEqual([]);
+  });
+
+  it('stays unsure when the piece itself points at a cell the user marked as placed (a wrong mark)', () => {
+    // The user marked r3c1 although it is empty; the open piece's best guess is r3c1.
+    const regions = [region(1, 'patch'), region(2, 'piece')];
+    const matches: RegionMatch[] = [
+      { regionId: 1, status: 'confident', coveredCells: cellsBut({ row: 5, col: 2 }, { row: 3, col: 1 }), candidates: [{ row: 0, col: 0, x: 0, y: 0, rotationDeg: 0, score: 0.6, confidence: 0.95 }] },
+      { regionId: 2, status: 'ambiguous', candidates: [{ row: 3, col: 1, x: 0, y: 0, rotationDeg: 10, score: 0.4, confidence: 0.3 }] },
+    ];
+    const changes = placeByElimination(regions, matches, grid, [{ row: 3, col: 1 }], scorer({ '5,2': 0.1 }));
+    expect(changes.map((c) => c.cell)).toEqual([{ row: 5, col: 2 }]);
+    expect(matches[1].status).toBe('ambiguous');
+    expect(matches[1].candidates[0].confidence).toBeCloseTo(0.4, 5);
+  });
+});
+
+/** A single piece with candidates [row, col, score, confidence]. */
+function piece(id: number, status: RegionMatch['status'], cands: [number, number, number, number][]): RegionMatch {
+  return { regionId: id, status, candidates: cands.map(([row, col, score, confidence]) => ({ row, col, x: 0, y: 0, rotationDeg: 0, score, confidence })) };
+}
+
+describe('uniqueCells', () => {
+  it('moves the less confident piece to its next free candidate within the slack', () => {
+    const regions = [region(1, 'piece'), region(2, 'piece')];
+    const matches = [piece(1, 'confident', [[2, 2, 0.8, 0.95], [4, 4, 0.5, 0.01]]), piece(2, 'ambiguous', [[2, 2, 0.5, 0.4], [3, 1, 0.47, 0.3], [0, 0, 0.3, 0.1]])];
+    expect(duplicateClaims(regions, matches)).toEqual({ all: 1, confident: 0 });
+    const changes = uniqueCells(regions, matches, 0.05);
+    expect(changes).toEqual([{ regionId: 2, holder: 1, cell: { row: 2, col: 2 }, action: 'moved', to: { row: 3, col: 1 } }]);
+    expect(matches[1].candidates.map((c) => [c.row, c.col])).toEqual([[3, 1], [2, 2], [0, 0]]);
+    expect(matches[1].uncertainReason).toBe('similar-spots');
+    expect(matches[0].candidates[0]).toMatchObject({ row: 2, col: 2, confidence: 0.95 });
+    expect(duplicateClaims(regions, matches)).toEqual({ all: 0, confident: 0 });
+  });
+
+  it('demotes a confident piece whose free alternatives score far worse', () => {
+    const regions = [region(1, 'piece'), region(2, 'piece')];
+    const matches = [piece(1, 'confident', [[2, 2, 0.8, 0.97]]), piece(2, 'confident', [[2, 2, 0.75, 0.9], [3, 1, 0.5, 0.05]])];
+    expect(duplicateClaims(regions, matches)).toEqual({ all: 1, confident: 1 });
+    const changes = uniqueCells(regions, matches, 0.05);
+    expect(changes.map((c) => c.action)).toEqual(['demoted']);
+    expect(matches[1].status).toBe('ambiguous');
+    expect(matches[1].candidates[0]).toMatchObject({ row: 2, col: 2 });
+    expect(matches[1].candidates[0].confidence).toBeCloseTo(0.45, 5);
+    expect(matches[0].status).toBe('confident');
+  });
+
+  it('never moves into a cell a more confident piece or a confident patch holds', () => {
+    const regions = [region(1, 'piece'), region(2, 'piece'), region(3, 'patch')];
+    const patch: RegionMatch = { regionId: 3, status: 'confident', coveredCells: [{ row: 3, col: 1 }], candidates: [{ row: 3, col: 1, x: 0, y: 0, rotationDeg: 0, score: 0.6, confidence: 0.9 }] };
+    const matches = [piece(1, 'confident', [[2, 2, 0.8, 0.95]]), piece(2, 'ambiguous', [[2, 2, 0.5, 0.4], [3, 1, 0.49, 0.3], [0, 1, 0.48, 0.1]]), patch];
+    uniqueCells(regions, matches, 0.05);
+    expect(matches[1].candidates[0]).toMatchObject({ row: 0, col: 1 });
+  });
+
+  it('is deterministic: equally confident pieces give way by region id', () => {
+    const regions = [region(7, 'piece'), region(3, 'piece')];
+    const run = () => {
+      const matches = [piece(7, 'ambiguous', [[1, 1, 0.5, 0.4], [1, 2, 0.48, 0.3]]), piece(3, 'ambiguous', [[1, 1, 0.5, 0.4], [2, 2, 0.47, 0.3]])];
+      uniqueCells(regions, matches, 0.05);
+      return matches.map((m) => [m.regionId, m.candidates[0].row, m.candidates[0].col]);
+    };
+    expect(run()).toEqual([[7, 1, 2], [3, 1, 1]]);
+    expect(run()).toEqual(run());
   });
 });

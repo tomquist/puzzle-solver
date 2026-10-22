@@ -76,6 +76,7 @@ export function buildFeedbackBundle(input: FeedbackInputs): FeedbackBundle {
       result: input.scan.record.result,
       ...(input.scan.record.appVersion ? { appVersion: input.scan.record.appVersion } : {}),
       analysedAt: input.scan.record.createdAt,
+      ...(input.scan.record.capture ? { capture: { ...input.scan.record.capture } } : {}),
       placements: placementsForScan(input.progress, input.scan.record.id),
     };
   }

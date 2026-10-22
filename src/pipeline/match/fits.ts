@@ -73,6 +73,30 @@ function complementary(a: SideKind, b: SideKind): boolean | null {
   return (a === 'tab' && b === 'blank') || (a === 'blank' && b === 'tab');
 }
 
+/** A side read flat counts as the puzzle border for {@link neighboursAgree} only when it is this straight (fraction of its length)… */
+const CLEAR_FLAT = 0.04;
+/** …and a tab or blank counts as a knob only when it is this deep: a partly filled blank reads in between. */
+const CLEAR_KNOB = 0.12;
+
+/**
+ * Whether local side `i` of piece `a` can touch local side `j` of piece `b` as far as their
+ * neighbouring sides tell: the sides on either side of the joint run along the same line, so each
+ * is flat (the puzzle border) exactly when its counterpart on the other piece is – side i + 1 of A
+ * with side j − 1 of B, and side i − 1 of A with side j + 1 of B. Only a clearly flat side against
+ * a clear knob rules a pair out; unknown and borderline sides tell nothing.
+ */
+export function neighboursAgree(a: PieceShape, i: number, b: PieceShape, j: number): boolean {
+  const reading = (s: PieceShape, k: number): 'flat' | 'knob' | null => {
+    const side = s.sides[((k % 4) + 4) % 4];
+    let ext = 0;
+    for (const v of side.profile) ext = Math.max(ext, Math.abs(v));
+    if (side.kind === 'flat') return ext < CLEAR_FLAT ? 'flat' : null;
+    return (side.kind === 'tab' || side.kind === 'blank') && ext > CLEAR_KNOB ? 'knob' : null;
+  };
+  const same = (x: 'flat' | 'knob' | null, y: 'flat' | 'knob' | null) => x === null || y === null || x === y;
+  return same(reading(a, i + 1), reading(b, j - 1)) && same(reading(a, i - 1), reading(b, j + 1));
+}
+
 /** RMS distance between profile A and the reversed, negated profile B (0 = perfect fit). */
 export function profileMismatch(a: readonly number[], b: readonly number[]): number {
   const n = Math.min(a.length, b.length);
@@ -129,7 +153,7 @@ function sideFit(a: SideOf, b: SideOf, opts: FitOptions): number | null {
   const A = a.shape.sides[a.i], B = b.shape.sides[b.i];
   const comp = complementary(A.kind, B.kind);
   if (comp === null) return null;
-  if (!comp) return 0;
+  if (!comp || !neighboursAgree(a.shape, a.i, b.shape, b.i)) return 0;
   const ratio = Math.max(A.length, B.length) / Math.max(1e-6, Math.min(A.length, B.length));
   if (ratio > MAX_LENGTH_RATIO * 1.1) return 0.2;
   const rms = sideDistance(a, b, opts);
@@ -152,7 +176,7 @@ export interface ShapeFit {
 
 /**
  * Shape fits among single pieces, wherever they are placed: complementary sides of nearly equal
- * length whose distance is small and which are each other's best partner by a clear margin (the
+ * length, whose neighbouring sides agree (see {@link neighboursAgree}), whose distance is small and which are each other's best partner by a clear margin (the
  * second-best partner of either side at least 1.6× as far). Pieces with unsure corners take no
  * part. Partners are sought among the given regions only.
  */
@@ -168,7 +192,7 @@ export function shapeFits(regions: readonly DetectedRegion[], opts: FitOptions =
   for (const s of sides) {
     let b: SideRef | null = null, d1 = Infinity, d2 = Infinity;
     for (const o of sides) {
-      if (o.id === s.id || !complementary(s.shape.sides[s.i].kind, o.shape.sides[o.i].kind)) continue;
+      if (o.id === s.id || !complementary(s.shape.sides[s.i].kind, o.shape.sides[o.i].kind) || !neighboursAgree(s.shape, s.i, o.shape, o.i)) continue;
       const la = s.shape.sides[s.i].length, lb = o.shape.sides[o.i].length;
       if (Math.max(la, lb) / Math.min(la, lb) > MAX_LENGTH_RATIO) continue;
       const d = sideDistance({ regionId: s.id, shape: s.shape, i: s.i }, { regionId: o.id, shape: o.shape, i: o.i }, opts);

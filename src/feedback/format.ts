@@ -5,7 +5,7 @@
  * puzzle export. Pure TypeScript (no DOM): used in the browser and in Node.
  */
 import type { Quad } from '../cv/geometry';
-import type { CellRef, CutStyle, GridSpec, PhysicalSize, ScanResult } from '../model/types';
+import type { CaptureInfo, CellRef, CutStyle, GridSpec, PhysicalSize, ScanResult } from '../model/types';
 import { base64ToBytes, bytesToBase64 } from '../storage/base64';
 
 export const FEEDBACK_FORMAT = 'puzzle-solver-feedback';
@@ -71,6 +71,11 @@ export interface FeedbackBundle {
     appVersion?: string;
     /** When the photo was analysed (epoch milliseconds). */
     analysedAt?: number;
+    /**
+     * How the photo was captured (camera still / video frame because the still failed / a file) and
+     * its size before it was scaled for analysis; missing in files from before it was recorded.
+     */
+    capture?: CaptureInfo;
     /** Placements the user confirmed with "Placed" (ground truth for matching). */
     placements: { regionId: number; cells: CellRef[] }[];
   };

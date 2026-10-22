@@ -1,17 +1,25 @@
 /**
  * Side retrieval benchmark: for every true pair of mating sides in a scan, how often the partner is
- * the closest (top-1) or among the five closest (top-5) complementary sides (tab ↔ blank as
- * detected) of all pieces in the scan, by each side comparison of the fit hints (src/pipeline/match:
+ * the closest (top-1) or among the five closest (top-5) candidate sides of all pieces in the scan
+ * (complementary as detected, tab ↔ blank, with agreeing neighbouring sides: as the fit hints
+ * compare them), by each side comparison of the fit hints (src/pipeline/match:
  * fits.ts, sideCompare.ts) – shape point by point ('rms') or with DTW ('dtw', 'dtw-levelled'), the
  * colour strips just inside the sides, and shape and colour combined as the fit hints combine them.
- * Independent of the hints' gating thresholds; a side whose partner was not detected as
- * complementary counts as a miss.
+ * Independent of the hints' distance thresholds; a side whose partner is no candidate (a side kind
+ * misread) counts as a miss.
  *
  * Scenes: a block of neighbouring cells photographed as loose pieces plus a few unrelated pieces,
  * segmented and shape-analysed by the real pipeline. Each scene is scored twice:
  *   detected  profiles and strips at the corners the shape analysis found
  *   jitter    every corner moved 2–5 % of the side length along the outline (random direction, in
  *             this evaluation only), as a corner found a few pixels off on a real photo would be
+ * Report columns `<comparison>@lr`: mean natural log of the true partner's rank among the
+ * candidates, over the queries whose partner is a candidate (0 = always
+ * first; lower is better).
+ *
+ * The 'uniform-knobs' scenarios cut the puzzle with near-uniform knobs on a nearly regular grid (as
+ * many brands other than Ravensburger do): how much of the shape matching relies on every knob
+ * being different.
  *
  *   npx vitest run --config vitest.bench.config.ts bench/sides.eval.ts
  * Gated by bench/baseline.json (suite 'sides').
@@ -19,8 +27,8 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { traceOuterContour } from '../src/cv/contour';
 import type { RGBAImage } from '../src/cv/image';
-import type { GridSpec, SideKind } from '../src/model/types';
-import { profileMismatch, profileMismatchDtw, puzzleSideOf, sideMismatch, stripMismatch, type ShapeMetric } from '../src/pipeline/match';
+import type { GridSpec, PieceShape, SideKind } from '../src/model/types';
+import { neighboursAgree, profileMismatch, profileMismatchDtw, puzzleSideOf, sideMismatch, stripMismatch, type ShapeMetric } from '../src/pipeline/match';
 import { cornerPositions, edgeStripsAt, outlineArc } from '../src/pipeline/match/edgeStrips';
 import { segmentPieces, sideProfilesAt } from '../src/pipeline/pieces';
 import { offsetPoints } from '../src/pipeline/pieces/util';
@@ -38,6 +46,8 @@ interface Scenario {
   extra: number;
   seeds: number[];
   render: (rng: Rng) => RenderOptions;
+  /** Variation of the cut's corners and knobs (generateJigsaw; default 1). */
+  variation?: number;
 }
 
 const gain = (rng: Rng, spread: number): RGB => [rng.uniform(1 - spread, 1 + spread), rng.uniform(1 - spread, 1 + spread), rng.uniform(1 - spread, 1 + spread)];
@@ -70,11 +80,16 @@ const SCENARIOS: Scenario[] = [
     name: 'starry-small-pieces', painting: 'starry-night', grid: { rows: 16, cols: 20 }, block: [5, 6], extra: 6, seeds: [10],
     render: (rng) => ({ ...standard(rng), scale: 0.6 }),
   },
+  { name: 'starry-uniform-knobs', painting: 'starry-night', grid: { rows: 16, cols: 20 }, block: [5, 6], extra: 6, seeds: [11, 12], render: standard, variation: 0.2 },
+  { name: 'wave-uniform-knobs', painting: 'great-wave', grid: { rows: 20, cols: 30 }, block: [5, 6], extra: 6, seeds: [13], render: standard, variation: 0.2 },
 ];
 
 /** One side of a detected piece in one scoring mode. */
 interface SideRec {
   region: number;
+  shape: PieceShape;
+  /** Local side index. */
+  i: number;
   kind: SideKind;
   profile: number[];
   strip?: Float32Array;
@@ -92,15 +107,19 @@ const NAMES = Object.keys(METRICS);
 const MODES = ['detected', 'jitter'] as const;
 type Mode = (typeof MODES)[number];
 
-const complementary = (a: SideKind, b: SideKind) => (a === 'tab' && b === 'blank') || (a === 'blank' && b === 'tab');
+/** Sides the fit hints compare: complementary kinds (tab ↔ blank as detected) whose neighbouring sides agree (`neighboursAgree`). */
+const candidate = (a: SideRec, b: SideRec) =>
+  ((a.kind === 'tab' && b.kind === 'blank') || (a.kind === 'blank' && b.kind === 'tab')) && neighboursAgree(a.shape, a.i, b.shape, b.i);
 
 interface Tally {
   queries: number;
   kindOk: number;
   top1: Record<string, number>;
   top5: Record<string, number>;
+  /** Sum of ln(rank of the true partner) over the kindOk queries. */
+  logRank: Record<string, number>;
 }
-const newTally = (): Tally => ({ queries: 0, kindOk: 0, top1: {}, top5: {} });
+const newTally = (): Tally => ({ queries: 0, kindOk: 0, top1: {}, top5: {}, logRank: {} });
 const tallies = (): Record<Mode, Tally> => ({ detected: newTally(), jitter: newTally() });
 
 const perScenario: Record<string, Record<Mode, Tally>> = {};
@@ -115,7 +134,7 @@ describe('side retrieval benchmark', () => {
         await yieldToEventLoop();
         if (!paintings.has(s.painting)) paintings.set(s.painting, loadTestAsset(s.painting));
         const src = paintings.get(s.painting)!;
-        const cut = generateJigsaw(s.grid.rows, s.grid.cols, src.width, src.height, seed);
+        const cut = generateJigsaw(s.grid.rows, s.grid.cols, src.width, src.height, seed, { variation: s.variation });
         const rng = new Rng(seed * 7 + 11);
         const [bh, bw] = s.block;
         const r0 = 1 + rng.int(s.grid.rows - bh - 1), c0 = 1 + rng.int(s.grid.cols - bw - 1);
@@ -147,7 +166,7 @@ describe('side retrieval benchmark', () => {
             const corners = cornerPositions(arc, p.shape).map((c, j) => c + (shifts?.[j] ?? 0));
             const strips = edgeStripsAt(p.sr.image, p.sr.mask, origin, arc, corners, p.shape.bodySize);
             for (let i = 0; i < 4; i++) {
-              const rec: SideRec = { region: p.sr.region.id, kind: p.shape.sides[i].kind, profile: profiles?.[i].profile ?? p.shape.sides[i].profile, strip: strips?.sides[i] };
+              const rec: SideRec = { region: p.sr.region.id, shape: p.shape, i, kind: p.shape.sides[i].kind, profile: profiles?.[i].profile ?? p.shape.sides[i].profile, strip: strips?.sides[i] };
               sides.push(rec);
               byPuzzleSide.set(`${p.sr.region.id}|${puzzleSideOf(p.shape, p.truth.rotationDeg, i)}`, rec);
             }
@@ -163,9 +182,9 @@ describe('side retrieval benchmark', () => {
               if (!a || !b) continue;
               for (const [x, y] of [[a, b], [b, a]] as const) {
                 tally.queries++;
-                if (!complementary(x.kind, y.kind)) continue;
+                if (!candidate(x, y)) continue;
                 tally.kindOk++;
-                const cands = sides.filter((o) => o.region !== x.region && complementary(x.kind, o.kind));
+                const cands = sides.filter((o) => o.region !== x.region && candidate(x, o));
                 for (const k of NAMES) {
                   const f = METRICS[k];
                   const dt = f(x, y);
@@ -173,6 +192,7 @@ describe('side retrieval benchmark', () => {
                   for (const o of cands) if (o !== y && f(x, o) < dt) rank++;
                   if (rank === 1) tally.top1[k] = (tally.top1[k] ?? 0) + 1;
                   if (rank <= 5) tally.top5[k] = (tally.top5[k] ?? 0) + 1;
+                  tally.logRank[k] = (tally.logRank[k] ?? 0) + Math.log(rank);
                 }
               }
             }
@@ -187,6 +207,7 @@ describe('side retrieval benchmark', () => {
         for (const k of NAMES) {
           P.top1[k] = (P.top1[k] ?? 0) + (t[mode].top1[k] ?? 0);
           P.top5[k] = (P.top5[k] ?? 0) + (t[mode].top5[k] ?? 0);
+          P.logRank[k] = (P.logRank[k] ?? 0) + (t[mode].logRank[k] ?? 0);
         }
       }
       if (UPDATE_BASELINE) return;
@@ -198,9 +219,12 @@ describe('side retrieval benchmark', () => {
   afterAll(() => {
     const rows: Record<string, MetricRecord> = {};
     for (const [name, t] of [...Object.entries(perScenario), ['all', pooled] as const]) {
-      for (const mode of MODES) rows[`${name} ${mode}`] = { queries: t[mode].queries, kindOk: rate(t[mode].kindOk, t[mode].queries), ...rates(t[mode]) };
+      for (const mode of MODES) {
+        const lr = Object.fromEntries(NAMES.map((k) => [`${k}@lr`, rate(t[mode].logRank[k] ?? 0, t[mode].kindOk)]));
+        rows[`${name} ${mode}`] = { queries: t[mode].queries, kindOk: rate(t[mode].kindOk, t[mode].queries), ...rates(t[mode]), ...lr };
+      }
     }
-    console.log('\n' + report('sides', rows, ['queries', 'kindOk', ...NAMES.flatMap((k) => [`${k}@1`, `${k}@5`])]) + '\n');
+    console.log('\n' + report('sides', rows, ['queries', 'kindOk', ...NAMES.flatMap((k) => [`${k}@1`, `${k}@5`, `${k}@lr`])]) + '\n');
     if (UPDATE_BASELINE) saveBaselineSuite('sides', Object.fromEntries(Object.entries(perScenario).map(([name, t]) => [name, record(t)])));
   });
 });

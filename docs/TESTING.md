@@ -17,6 +17,8 @@ so changes can be made and judged without manual photo-taking feedback loops.
 | Real-photo corpus | `npm run bench -- --corpus` | Real photos confirmed by the user still match | locally / CI when present |
 | Feedback replay | `npm run bench` (`bench/feedback.eval.ts`) | Users' feedback files (`test-corpus/feedback/`): reviewed marks stay fixed; answer keys score found / separate / false regions | CI (gate) |
 | Private placement truth | `npm run bench` (`bench/private.eval.ts`) | Full feedback files of the user's own puzzle (with its commercial picture) in the ignored `test-corpus/private/`, each with a `<file>.truth.json` of true cells and turns: top-1 / top-3 cell, rotation, confident share and precision, found / merged — report only | locally when present (skipped otherwise) |
+| Placed-cell robustness | `npm run bench` (`bench/placed.eval.ts`) | Scan scenes analysed with simulated "placed" marks from their truth (`bench/placed.ts`): all other cells, or a share f ∈ {0.3, 0.7} of all cells with a share e ∈ {0, 0.1, 0.25} of them wrong (the scan's own cells among them): top-1 / top-3, confident precision and share per setting; with marks, wrong ones included, never worse than no marks (within the tolerance). `PLACED=1 npm run bench` runs the settings on the private files too | CI (gate) |
+| Calibration | `npm run bench`, then `npm run bench:calibration` | Reliability of the confidences pooled over scan, private and Puzzle-Map single pieces: bins, Brier score, ECE, unsure accuracy and top-3, turn rate of confident placements, unsure placements by their reason – report only | locally |
 | Grid convergence | `npm run bench` (`bench/grid.eval.ts`) | Synthetic puzzles at known grids (square and long cells, few pieces): from the right grid no question, from a neighbouring grid, no count or a wrong count at most one question and the right final grid | CI (gate) |
 | Grid replay on real scans | `npx vite-node scripts/grid-replay.ts -- --dir <full feedback files>` | The scans of one real puzzle replayed through the grid belief from the right grid, wrong neighbours, no count and a wrong count, in the order taken and shuffled: when it first asks, whether right, how often, final grid – report only | locally |
 | Grid measurement cost | `npx vite-node scripts/grid-cost.ts -- --dir <full feedback files> --only <files> --grids <ref=grid:start,…>` | analyzeScan per scan and start condition with the cell-size measurement inline and deferred (as the app runs it), alternately, best of 3: time to the result, the work after it, its longest step – report only | locally |
@@ -124,5 +126,7 @@ places the labelled pieces of the Puzzle-Map dataset (CC BY 4.0; fetched by
 `npm run corpus:fetch-puzzlemap` into `test-corpus/puzzle-map/`, which is not committed because
 the pictures show publishers' artwork) in their puzzles' reference pictures: once from the
 labelled piece body alone (appearance matching) and once through our segmentation of the photo.
-The suite is skipped without the data and takes about 15 minutes with it (`PUZZLEMAP_LIMIT=<n>`
+A segmented region is often a patch (a crop of the assembled puzzle, touching pieces); it is
+scored by the cell the app shows its labelled piece's body centre in (`patchCellAt`: the covered
+cell of its lattice holding that point, per candidate), not by its top-left covered cell. The suite is skipped without the data and takes about 15 minutes with it (`PUZZLEMAP_LIMIT=<n>`
 for a quick, ungated run).

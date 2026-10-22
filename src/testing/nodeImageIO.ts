@@ -10,6 +10,7 @@ import { dirname, resolve } from 'node:path';
 import jpeg from 'jpeg-js';
 import { PNG } from 'pngjs';
 import type { RGBAImage } from '../cv/image';
+import type { PlacementTuning } from '../pipeline/analyzeScan';
 
 export const REPO_ROOT = resolve(dirname(new URL(import.meta.url).pathname), '../..');
 
@@ -55,3 +56,17 @@ export const SEGMENT_OPTIONS: { graphCut?: boolean; grain?: boolean } = {
  * CONSISTENCY=1 / 0 turns it on / off (unset: the pipeline's default).
  */
 export const CONSISTENCY: boolean | undefined = process.env.CONSISTENCY === undefined ? undefined : process.env.CONSISTENCY !== '0';
+
+/**
+ * Placement knobs of analyzeScan for A/B runs and sweeps of the benchmark and the feedback tools
+ * (unset: the pipeline's defaults): PLACED_PENALTY=<score> (placed-cell penalty), PLACED_GAIN=<confidence>
+ * (most the marks may lift a confidence over the photo's own), UNIQUE_CELLS=1 / 0
+ * (one cell per piece within a scan), CLAIM_SLACK=<score> (how far down a piece may move to a free
+ * candidate).
+ */
+export const PLACEMENT_TUNING: PlacementTuning = {
+  ...(process.env.PLACED_PENALTY === undefined ? {} : { placedPenalty: Number(process.env.PLACED_PENALTY) }),
+  ...(process.env.PLACED_GAIN === undefined ? {} : { placedGain: Number(process.env.PLACED_GAIN) }),
+  ...(process.env.UNIQUE_CELLS === undefined ? {} : { uniqueCells: process.env.UNIQUE_CELLS !== '0' }),
+  ...(process.env.CLAIM_SLACK === undefined ? {} : { claimSlack: Number(process.env.CLAIM_SLACK) }),
+};

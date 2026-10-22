@@ -12,6 +12,9 @@
  *   wrongFixed      'wrong_place' marks with a known cell now placed there (top-1)
  *   placementsTop1  confirmed placements still top-1
  *   boxError        largest corner error of detectBox vs. the user's quad (fraction of the diagonal)
+ * Report only: the side kinds the current pipeline reads on all single pieces of the photos, with
+ * their median outward / inward deviation (no side truth here: the files carry no placements; see
+ * bench/private.eval.ts for a confusion matrix against placement truth).
  * Marks are user input: a `<file>.review.json` next to a file records the visual check of each mark
  * (scripts/feedback/review.ts); with one, only marks reviewed 'ok' count.
  * Scan photos from Chromium browsers are decoded with Playwright's Chromium, as on the phone (JPEG
@@ -28,12 +31,13 @@ import { readFeedbackFile } from '../scripts/feedback/io';
 import { feedbackMetrics, replayFeedback } from '../scripts/feedback/replay';
 import { isReviewFile, readReview } from '../scripts/feedback/review';
 import { DEBUG_IMAGES, REPO_ROOT } from '../src/testing/nodeImageIO';
-import { compareToBaseline, report, saveBaselineSuite, UPDATE_BASELINE, yieldToEventLoop, type MetricRecord } from './lib';
+import { compareToBaseline, confusionTable, report, saveBaselineSuite, tallySide, UPDATE_BASELINE, yieldToEventLoop, type MetricRecord, type SideConfusion } from './lib';
 
 const DIR = resolve(REPO_ROOT, 'test-corpus/feedback');
 const files = existsSync(DIR) ? readdirSync(DIR).filter((f) => f.toLowerCase().endsWith('.json') && !isReviewFile(f)).sort() : [];
 const COLUMNS = ['items', 'regions', 'missedFound', 'falseRemoved', 'mergedSplit', 'mergedExact', 'objectRecall', 'objectClean', 'objectPrecision', 'wrongFixed', 'placementsTop1', 'boxError', 'ms'];
 const results: Record<string, MetricRecord> = {};
+const confusion: SideConfusion = {};
 
 describe('feedback replay', () => {
   if (files.length === 0) {
@@ -55,6 +59,7 @@ describe('feedback replay', () => {
       const replay = replayFeedback(bundle, file.replace(/\.json$/i, ''), { review: readReview(path), scanPhoto });
       const metrics = feedbackMetrics(replay);
       results[file] = metrics;
+      for (const r of replay.current?.regions ?? []) if (r.kind === 'piece' && r.shape) for (const side of r.shape.sides) tallySide(confusion, 'any', side);
       if (DEBUG_IMAGES) writeInspection(replay, resolve(REPO_ROOT, '.debug/bench/feedback', replay.name));
       if (UPDATE_BASELINE) return;
       const problems = compareToBaseline('feedback', file, metrics);
@@ -64,6 +69,7 @@ describe('feedback replay', () => {
   afterAll(async () => {
     await chrome?.close();
     console.log('\n' + report('feedback', results, COLUMNS) + '\n');
+    console.log(`Side kinds read on the single pieces (no truth; median outward/inward deviation):\n${confusionTable('feedback', confusion)}\n`);
     if (UPDATE_BASELINE) saveBaselineSuite('feedback', results);
   });
 });

@@ -11,13 +11,6 @@ import type {
 
 export type DisplayStatus = 'confident' | 'ambiguous' | 'unmatched' | 'patch';
 
-export const STATUS_LABEL: Record<DisplayStatus, string> = {
-  confident: 'Confident',
-  ambiguous: 'Unsure',
-  unmatched: 'No match',
-  patch: 'Patch',
-};
-
 export function matchFor(result: ScanResult, regionId: number): RegionMatch | undefined {
   return result.matches.find((m) => m.regionId === regionId);
 }
@@ -123,10 +116,6 @@ export function fitHintTexts(regionId: number, result: ScanResult): FitHintText[
     else if (f.b === regionId) out.push(describe(f.a, f.sideB, f));
   }
   return out;
-}
-
-export function confidencePercent(c: number): number {
-  return Math.round(Math.max(0, Math.min(1, c)) * 100);
 }
 
 export function pieceKindLabel(region: DetectedRegion): string {

@@ -208,6 +208,24 @@ describe('latticeCells', () => {
     expect(got).toEqual([...present].sort());
   });
 
+  it("never counts a lone piece's knob as a cell, even when the lattice's cells are too small", () => {
+    // A lone piece taken for a patch, its lattice from a placement whose scale is 20 % small: the
+    // body spans 1.25 cells and its knob reaches into the middle of the next cell (more than half of
+    // that cell's core), yet covers well under half of the cell.
+    const k: PatchLattice = { origin: { x: 30, y: 30 }, angle: (8 * Math.PI) / 180, pa: 60, pb: 50, strength: [-1, -1] };
+    const mask = createMask(200, 150);
+    fillPolygon(mask, [latticePoint(k, 0, 0), latticePoint(k, 1.25, 0), latticePoint(k, 1.25, 1), latticePoint(k, 0, 1)], 1);
+    const knob: Point[] = [];
+    for (let n = 0; n < 32; n++) {
+      const t = (2 * Math.PI * n) / 32;
+      knob.push(latticePoint(k, 1.47 + 0.21 * Math.cos(t), 0.5 + 0.21 * Math.sin(t)));
+    }
+    fillPolygon(mask, knob, 1);
+    const core = latticeCells(k, mask, undefined, 0).find((c) => c.i === 1 && c.j === 0);
+    expect(core?.coverage).toBeGreaterThan(0.5);
+    expect(latticeCells(k, mask).map((c) => `${c.i},${c.j}`)).toEqual(['0,0']);
+  });
+
   it('decides on the body middle, so a lattice a fifth of a cell off still finds every cell', () => {
     const mask = drawPatch(l, present, 420, 400);
     const off: PatchLattice = { ...l, origin: latticePoint(l, 0.2, -0.2) };

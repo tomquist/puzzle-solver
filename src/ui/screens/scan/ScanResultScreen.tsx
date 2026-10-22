@@ -9,14 +9,16 @@
  * photo to see it without any annotations.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { QualityIssue, ScanRecord } from '../../../model/types';
+import { cellKey, type CellRef, type QualityIssue, type ScanRecord } from '../../../model/types';
 import { describeCell } from '../../../pipeline/grid';
 import { haptic } from '../../../platform/device';
+import { PlacedConflictNote } from '../../components/CertaintyNotes';
 import { Banner, EmptyState, ErrorState, Snackbar, Spinner, type SnackbarMessage } from '../../components/Feedback';
 import { FitAnimation } from '../../components/FitAnimation';
 import { FullscreenView, leaveFullscreenView } from '../../components/FullscreenView';
 import { IconCheck, IconChevron, IconClose, IconEye, IconEyeOff, IconFullscreen, IconPuzzle, IconScan } from '../../components/Icons';
 import { ItemDetail } from '../../components/ItemDetail';
+import { CertaintyMeter } from '../../components/ItemVisuals';
 import { GridJobStrip, GridSuggestionCard } from '../../components/GridSuggestion';
 import { QualityBanner } from '../../components/Quality';
 import { ReferenceOverlay, type RefMarker } from '../../components/ReferenceOverlay';
@@ -34,6 +36,7 @@ import { usePrefersReducedMotion } from '../../hooks/usePieceCutout';
 import { useBitmap, useObjectUrl, useStoredBlob } from '../../hooks/useObjectUrl';
 import { usePrefs, useWakeLock } from '../../hooks/usePrefs';
 import { cellItemOf, scaleAspect, type CellScale } from '../../lib/cellSpots';
+import { cardReason, certaintyBadge, certaintyLine, cellWords, conflictKeptKey, itemCertainty, placedConflictCell } from '../../lib/certainty';
 import { fitDescription, fitPose, glidePath, type FitItem } from '../../lib/fit';
 import { formatDate, plural } from '../../lib/format';
 import {
@@ -51,8 +54,8 @@ import {
 } from '../../lib/items';
 import { selectionLevels } from '../../lib/linkGraph';
 import { cellSize, paddedBox, unionRect } from '../../lib/overlay';
-import { confidencePercent } from '../../lib/pieces';
-import { placeCells, unplaceCells } from '../../lib/progress';
+import { setDismissed } from '../../lib/prefs';
+import { isPlaced, placeCells, restorePlaced, unplaceCells } from '../../lib/progress';
 import { turnBadge, turnInstruction } from '../../lib/rotation';
 import { linkRoute } from '../../lib/route';
 import { href } from '../../lib/routes';
@@ -249,6 +252,27 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
     setSnack({ id: Date.now(), text: `#${item.label} placed`, actionLabel: 'Undo', onAction: () => void updateProgress((current) => unplaceCells(current, p.cells)) });
   };
 
+  // A spot marked as placed that a piece seems to belong in: a small note with Unmark / Keep.
+  const conflictOf = (item: ScanItem): CellRef | undefined =>
+    placedConflictCell(item, (cell) => isPlaced(progress, cell), puzzle.grid, (i) => prefs.dismissed.includes(conflictKeptKey(scan.id, i)));
+  const unmarkConflict = async (cell: CellRef) => {
+    haptic();
+    const key = cellKey(cell);
+    const entry = progress?.placed[key];
+    await updateProgress((current) => unplaceCells(current, [cell]));
+    setSnack({
+      id: Date.now(),
+      text: `${cellWords(cell)} unmarked`,
+      actionLabel: 'Undo',
+      onAction: () => void updateProgress((current) => (entry ? restorePlaced(current, { [key]: entry }) : placeCells(current, [cell]))),
+    });
+  };
+  const keepConflict = (item: ScanItem) => updatePrefs((p) => setDismissed(p, conflictKeptKey(scan.id, item), true));
+  const conflictProps = (item: ScanItem) => {
+    const cell = conflictOf(item);
+    return cell ? { cell, onUnmark: () => void unmarkConflict(cell), onKeep: () => keepConflict(item) } : undefined;
+  };
+
   const confidentToPlace = toPlace.filter((i) => i.status === 'confident' && (rejected[i.key] ?? 0) === 0);
   const placeAllConfident = async () => {
     haptic();
@@ -347,6 +371,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
         fitText={fitShow?.text}
         onFit={playFit}
         onSelectKey={(key) => select(key, { reveal: true })}
+        conflict={conflictProps(selected)}
         onDetails={() => {
           // The details are a sheet of the page: leave the full-screen view for them.
           if (fullscreen) leaveFullscreenView(() => setFullscreen(undefined));
@@ -483,6 +508,8 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
               const placed = isPlacedItem(item);
               const tone = itemTone(item);
               const badge = p?.rotationDeg !== undefined && !placed ? turnBadge(p.rotationDeg) : '';
+              const cert = placed ? '' : certaintyBadge(item);
+              const conflict = !placed && conflictOf(item);
               return (
                 <li key={item.key}>
                   <button
@@ -497,10 +524,10 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
                       </span>
                       <span className="muted xsmall">
                         {itemKindText(item)}
-                        {item.status === 'ambiguous' ? ' · unsure' : ''}
-                        {p && item.status === 'ambiguous' ? ` · ${confidencePercent(p.confidence)}%` : ''}
+                        {cert ? ` · ${cert}` : ''}
                         {badge ? ` · ${badge}` : ''}
                         {placed ? ' · placed' : ''}
+                        {conflict ? ' · its spot is marked placed' : ''}
                       </span>
                     </span>
                   </button>
@@ -554,6 +581,12 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
             setOpenKey(key);
           }}
           onClose={() => setOpenKey(undefined)}
+          conflictCell={conflictOf(openItem)}
+          onUnmarkConflict={() => {
+            const cell = conflictOf(openItem);
+            if (cell) void unmarkConflict(cell);
+          }}
+          onKeepConflict={() => keepConflict(openItem)}
         />
       )}
       {fullscreen && (
@@ -647,6 +680,7 @@ function SelectionBar({
   fitText,
   onFit,
   onSelectKey,
+  conflict,
   onDetails,
   onClear,
 }: {
@@ -664,12 +698,15 @@ function SelectionBar({
   fitText?: string;
   onFit: (key: string) => void;
   onSelectKey: (key: string) => void;
+  /** A spot marked as placed that the item seems to belong in. */
+  conflict?: { cell: CellRef; onUnmark: () => void; onKeep: () => void };
   onDetails: () => void;
   onClear: () => void;
 }) {
   const where = placement ? cellsText(placement) : 'No place left';
   const fitKeys = connections.flatMap((t) => ('key' in t && canFit(t.key) ? [{ key: t.key, label: t.label }] : []));
   const turn = placement?.rotationDeg !== undefined ? turnInstruction(placement.rotationDeg).text : undefined;
+  const why = placed ? undefined : cardReason(item);
   return (
     <div className={variant === 'bar' ? 'action-bar selection-bar' : 'selection-bar overlay'} data-testid="selection-bar" role="region" aria-label={`Selected: ${itemTitle(item)}`}>
       <div className="action-bar-inner">
@@ -682,6 +719,16 @@ function SelectionBar({
               {placed ? ' · placed' : ''}
             </span>
             <span className="muted xsmall">{[itemKindText(item), turn].filter(Boolean).join(' · ')}</span>
+            {!placed && (
+              <span className="selection-cert" data-testid="selection-certainty">
+                <CertaintyMeter certainty={itemCertainty(item)} text={certaintyLine(item, true)} />
+              </span>
+            )}
+            {why && (
+              <span className="selection-why xsmall" data-testid="uncertain-reason">
+                {why}
+              </span>
+            )}
             {connections.length > 0 && (
               <span className="selection-links small" data-testid="selection-links">
                 {connections.map((t, i) =>
@@ -730,6 +777,11 @@ function SelectionBar({
           <IconClose />
         </button>
       </div>
+      {conflict && (
+        <div className="selection-note">
+          <PlacedConflictNote cell={conflict.cell} compact onUnmark={conflict.onUnmark} onKeep={conflict.onKeep} />
+        </div>
+      )}
       {/* "Show the fit": one big button per connection, in a row that scrolls sideways when they
           don't fit (the card stays one row taller at most). */}
       {fitKeys.length > 0 && (
