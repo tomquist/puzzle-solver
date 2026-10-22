@@ -82,6 +82,25 @@ describe('generateJigsaw', () => {
     }
   });
 
+  it('cuts near-uniform knobs on a nearly regular grid with a small variation', () => {
+    expect(generateJigsaw(6, 8, 800, 600, 11, { variation: 1 }).pieces[17].outline).toEqual(cut.pieces[17].outline);
+    // Profile of a side in its own frame (along, across), as a fraction of its length.
+    const shapeOf = (path: { x: number; y: number }[]) => {
+      const a = path[0], b = path[path.length - 1];
+      const L = Math.hypot(b.x - a.x, b.y - a.y), dx = (b.x - a.x) / L, dy = (b.y - a.y) / L;
+      return path.map((p) => Math.abs(((p.x - a.x) * dy - (p.y - a.y) * dx) / L));
+    };
+    // Largest difference between the right sides of two interior pieces (knobs mirrored by direction).
+    const spread = (c: ReturnType<typeof generateJigsaw>) => {
+      const p = shapeOf(c.pieces[9].sidePaths[1]), q = shapeOf(c.pieces[21].sidePaths[1]);
+      return Math.max(...p.map((v, i) => Math.abs(v - q[i])));
+    };
+    const uniform = generateJigsaw(6, 8, 800, 600, 11, { variation: 0 });
+    expect(spread(uniform)).toBeLessThan(1e-9);
+    expect(uniform.pieces[9].corners[0]).toEqual({ x: 99.5, y: 99.5 });
+    expect(spread(generateJigsaw(6, 8, 800, 600, 11, { variation: 0.2 }))).toBeLessThan(0.3 * spread(cut));
+  });
+
   it('builds patch outlines without the shared edges', () => {
     const idx = [9, 10, 17, 18];
     const outline = patchOutline(cut, idx);

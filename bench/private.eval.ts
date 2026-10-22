@@ -10,6 +10,9 @@
  *   confidentShare      pieces placed confidently; confidentPrecision: of those, right (top-1)
  *   blockTop1 / blockJaccard / blockRotationOk   assembled blocks (cell Jaccard ≥ 0.5)
  *   dupClaims           single pieces whose best cell another single piece of the scan also has
+ * Also a side confusion matrix: the sides of every sure, unmerged single piece with a shape as the
+ * current pipeline reads them, against the truth (sides facing the puzzle border are flat, the
+ * others have a knob).
  * Report only (no baseline: the files exist on one machine). Skips when the folder is empty.
  *
  * PLACED=1 (or a list of settings, bench/placed.ts) also analyses every file with simulated
@@ -31,7 +34,7 @@ import { analyzeScan } from '../src/pipeline/analyzeScan';
 import { buildReferenceIndex, duplicateClaims } from '../src/pipeline/match';
 import { CONSISTENCY, PLACEMENT_TUNING, REPO_ROOT, SEGMENT_OPTIONS } from '../src/testing/nodeImageIO';
 import { saveCalibrationPairs } from './calibration';
-import { report, yieldToEventLoop, type CalibrationPair, type MetricRecord } from './lib';
+import { confusionTable, report, tallyPlacedSides, yieldToEventLoop, type CalibrationPair, type MetricRecord, type SideConfusion } from './lib';
 import { NO_MARKS, PLACED_TOLERANCE_PRIVATE, placedSettingsFromEnv, simulatePlacedCells } from './placed';
 
 const DIR = resolve(REPO_ROOT, 'test-corpus/private');
@@ -49,6 +52,7 @@ const PLACED_COLUMNS = ['pieces', 'top1', 'top3', 'rotationOk', 'confidentShare'
 const placedTally = new Map<string, Record<string, number>>();
 /** Placed settings: pieces placed confidently in a wrong cell. */
 const placedMisses: string[] = [];
+const confusion: SideConfusion = {};
 
 const describeMiss = (name: string, j: TruthJudgement) =>
   `${name} ${j.kind} ${j.index} at ${Math.round(j.at.x)},${Math.round(j.at.y)}: truth ${j.truth}, ` +
@@ -84,6 +88,12 @@ describe('private placement evaluation', () => {
       results[`${name} (current)`] = { ...current.metrics, dupClaims: duplicateClaims(replay.current!.regions, replay.current!.matches).all, ms: replay.timings.analyze ?? 0 };
       pairs.push(...truthCalibrationPairs(current.items));
       for (const j of current.items) if (!j.unsure && (!j.top1 || !j.rotationOk || j.merged || j.regionId === undefined)) misses.push(describeMiss(name, j));
+      for (const j of current.items) {
+        const shape = replay.current!.regions.find((r) => r.id === j.regionId && r.kind === 'piece')?.shape;
+        if (j.kind !== 'piece' || j.unsure || j.merged || !shape) continue;
+        const p = truth.pieces![j.index];
+        tallyPlacedSides(confusion, shape, p, p.rotationDeg, bundle.puzzle.grid);
+      }
       if (placedSettings.length === 0) return;
       // Simulated placed marks: the scan's own cells are those of its truth pieces and blocks.
       const photo = scanPhoto ?? decodeFeedbackImage(bundle.scan.photo);
@@ -139,6 +149,7 @@ describe('private placement evaluation', () => {
     if (placedTally.size > 0) console.log('\n' + report('private-placed', placedResults(), PLACED_COLUMNS) + '\n');
     if (placedMisses.length > 0) console.log(`Confident and wrong with placed marks:\n${placedMisses.join('\n')}\n`);
     saveCalibrationPairs('private', pairs);
+    console.log(`Side kinds of the sure single pieces (current pipeline; median outward/inward deviation):\n${confusionTable('private', confusion)}\n`);
   });
 });
 

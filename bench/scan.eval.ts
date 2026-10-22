@@ -13,6 +13,9 @@
  * dupClaims (report only): single pieces whose best cell another single piece of the scan has too.
  * The single pieces' (confidence, right cell, right turn) go to .debug/bench/calibration/scan.json
  * for `npm run bench:calibration` (bench/calibration.ts).
+ * cornerError / cornersOk / sideAccuracy: single pieces with a shape: mean largest corner error
+ * (fraction of the body size), share within 3 %, sides read right (flat / tab / blank); the side
+ * confusion matrix over all scenarios is printed after the table.
  * outlineIoU / boundaryF (report only): outline accuracy of the regions matched to a truth item.
  * shapeFits / shapeFitsTrue (report only): mutually best side fits among the scan's pieces wherever
  * they are placed (`shapeFits`, the consistency pass's evidence), and those that are true neighbours.
@@ -25,17 +28,18 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { analyzeScan, DEFAULT_SIDE_COMPARISON } from '../src/pipeline/analyzeScan';
 import { duplicateClaims, impliedPlacement, shapeFits } from '../src/pipeline/match';
 import { CONSISTENCY, DEBUG_IMAGES, PLACEMENT_TUNING, savePng, SEGMENT_OPTIONS } from '../src/testing/nodeImageIO';
-import { angleError, average, compareToBaseline, yieldToEventLoop, evaluateScan, overlay, report, saveBaselineSuite, UPDATE_BASELINE, type CalibrationPair, type MetricRecord } from './lib';
+import { angleError, average, compareToBaseline, yieldToEventLoop, evaluateScan, overlay, report, saveBaselineSuite, UPDATE_BASELINE, confusionTable, type CalibrationPair, type MetricRecord, type SideConfusion } from './lib';
 import { saveCalibrationPairs } from './calibration';
 import { renderScene, SCENARIOS } from './scanScenarios';
 
 const COLUMNS = [
-  'segRecall', 'segPrecision', 'shapeRate', 'kindAccuracy', 'top1', 'top3', 'rotationOk', 'confidentPrecision', 'confidentTurnPrecision', 'confidentRate',
+  'segRecall', 'segPrecision', 'shapeRate', 'kindAccuracy', 'cornerError', 'cornersOk', 'sideAccuracy', 'top1', 'top3', 'rotationOk', 'confidentPrecision', 'confidentTurnPrecision', 'confidentRate',
   'fitPrecision', 'fitRecall', 'assembledRecall', 'assembledPrecision', 'neighborPrecision', 'neighborRecall', 'hiddenRate', 'warnings', 'outlineIoU', 'boundaryF',
   'shapeFits', 'shapeFitsTrue', 'ambFixed', 'ambBroken', 'ambConfirmed', 'confMoved', 'consistencyMs', 'dupClaims', 'ms',
 ];
 const results: Record<string, MetricRecord> = {};
 const pairs: CalibrationPair[] = [];
+const confusion: SideConfusion = {};
 
 describe('scan benchmark', () => {
   for (const s of SCENARIOS) {
@@ -47,7 +51,7 @@ describe('scan benchmark', () => {
         const t0 = performance.now();
         const { result, consistency } = analyzeScan(index, photo, { maxSide: Math.max(photo.width, photo.height), segment: SEGMENT_OPTIONS, consistency: CONSISTENCY, tuning: PLACEMENT_TUNING });
         const ms = performance.now() - t0;
-        const { metrics, regionToTruth, pairs: scenePairs } = evaluateScan(result, truth, cut, ms);
+        const { metrics, regionToTruth, pairs: scenePairs } = evaluateScan(result, truth, cut, ms, confusion);
         pairs.push(...scenePairs);
         const changes: MetricRecord = {};
         if (consistency) {
@@ -92,6 +96,7 @@ describe('scan benchmark', () => {
   afterAll(() => {
     console.log('\n' + report('scan', results, COLUMNS) + '\n');
     saveCalibrationPairs('scan', pairs);
+    console.log(`Side kinds of the single pieces (median outward/inward deviation):\n${confusionTable('scan', confusion)}\n`);
     if (UPDATE_BASELINE) saveBaselineSuite('scan', results);
   });
 });

@@ -119,7 +119,7 @@ function cubic(p0: Point, p1: Point, p2: Point, p3: Point, t: number): Point {
  * Edge path from A to B in edge-local (u along, v perpendicular, units of edge length) coordinates,
  * then mapped. `bulge` = +1/-1 selects the knob side along n = (-d.y, d.x) (d = unit A->B), 0 = flat.
  */
-function edgePath(A: Point, B: Point, bulge: number, rng: Rng): Point[] {
+function edgePath(A: Point, B: Point, bulge: number, rng: Rng, variation = 1): Point[] {
   const L = Math.hypot(B.x - A.x, B.y - A.y);
   const d = { x: (B.x - A.x) / L, y: (B.y - A.y) / L };
   const n = { x: -d.y, y: d.x };
@@ -131,8 +131,9 @@ function edgePath(A: Point, B: Point, bulge: number, rng: Rng): Point[] {
     return pts;
   }
   // Classic knob made of three cubic Béziers (after Draradech's jigsaw generator).
-  const j = 0.035;
-  const t = rng.uniform(0.09, 0.112);
+  const j = 0.035 * variation;
+  const t0 = rng.uniform(0.09, 0.112);
+  const t = variation === 1 ? t0 : 0.101 + variation * (t0 - 0.101);
   const a = rng.uniform(-j, j), b = rng.uniform(-j, j), c = rng.uniform(-j, j), dd = rng.uniform(-j, j), e = rng.uniform(-j, j);
   const P = (u: number, v: number): Point => ({ x: u, y: v * bulge });
   const p = [
@@ -140,7 +141,7 @@ function edgePath(A: Point, B: Point, bulge: number, rng: Rng): Point[] {
     P(0.5 - 2 * t + b - dd, 3 * t + c), P(0.5 + 2 * t + b - dd, 3 * t + c), P(0.5 + t + b, t + c),
     P(0.5 + b + dd, -t + c), P(0.8, e), P(1, 0),
   ];
-  const w1 = rng.uniform(-0.018, 0.018), w2 = rng.uniform(-0.01, 0.01);
+  const w1 = variation * rng.uniform(-0.018, 0.018), w2 = variation * rng.uniform(-0.01, 0.01);
   const wave = (u: number) => w1 * Math.sin(Math.PI * u) + w2 * Math.sin(2 * Math.PI * u);
   const pts: Point[] = [];
   const S = 18;
@@ -155,14 +156,25 @@ function edgePath(A: Point, B: Point, bulge: number, rng: Rng): Point[] {
   return pts;
 }
 
+/** Options of {@link generateJigsaw}. */
+export interface JigsawOptions {
+  /**
+   * How much the grid corners and the knobs vary (default 1, a Ravensburger-like cut: every knob
+   * different). Smaller values give near-uniform knobs on a nearly regular grid, as many other
+   * brands cut them; 0 makes every knob the same.
+   */
+  variation?: number;
+}
+
 /**
  * Classic grid cut in reference coordinates: jittered grid corners, gently wavy edges, one knob per
  * interior edge (random direction and shape), flat border edges. Deterministic for a seed.
  */
-export function generateJigsaw(rows: number, cols: number, width: number, height: number, seed: number): JigsawCut {
+export function generateJigsaw(rows: number, cols: number, width: number, height: number, seed: number, opts: JigsawOptions = {}): JigsawCut {
   const rng = new Rng(seed);
+  const variation = opts.variation ?? 1;
   const cw = width / cols, ch = height / rows;
-  const jit = 0.07;
+  const jit = 0.07 * variation;
   const corners: Point[][] = [];
   for (let r = 0; r <= rows; r++) {
     const line: Point[] = [];
@@ -179,7 +191,7 @@ export function generateJigsaw(rows: number, cols: number, width: number, height
     const line: { path: Point[]; bulge: number }[] = [];
     for (let c = 0; c < cols; c++) {
       const bulge = r === 0 || r === rows ? 0 : rng.bool() ? 1 : -1;
-      line.push({ path: edgePath(corners[r][c], corners[r][c + 1], bulge, rng), bulge });
+      line.push({ path: edgePath(corners[r][c], corners[r][c + 1], bulge, rng, variation), bulge });
     }
     hEdges.push(line);
   }
@@ -189,7 +201,7 @@ export function generateJigsaw(rows: number, cols: number, width: number, height
     const line: { path: Point[]; bulge: number }[] = [];
     for (let c = 0; c <= cols; c++) {
       const bulge = c === 0 || c === cols ? 0 : rng.bool() ? 1 : -1;
-      line.push({ path: edgePath(corners[r][c], corners[r + 1][c], bulge, rng), bulge });
+      line.push({ path: edgePath(corners[r][c], corners[r + 1][c], bulge, rng, variation), bulge });
     }
     vEdges.push(line);
   }

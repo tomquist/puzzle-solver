@@ -12,6 +12,13 @@
  *   detected  profiles and strips at the corners the shape analysis found
  *   jitter    every corner moved 2–5 % of the side length along the outline (random direction, in
  *             this evaluation only), as a corner found a few pixels off on a real photo would be
+ * Report columns `<comparison>@lr`: mean natural log of the true partner's rank among the
+ * complementary candidates, over the queries whose partner was detected as complementary (0 = always
+ * first; lower is better).
+ *
+ * The 'uniform-knobs' scenarios cut the puzzle with near-uniform knobs on a nearly regular grid (as
+ * many brands other than Ravensburger do): how much of the shape matching relies on every knob
+ * being different.
  *
  *   npx vitest run --config vitest.bench.config.ts bench/sides.eval.ts
  * Gated by bench/baseline.json (suite 'sides').
@@ -38,6 +45,8 @@ interface Scenario {
   extra: number;
   seeds: number[];
   render: (rng: Rng) => RenderOptions;
+  /** Variation of the cut's corners and knobs (generateJigsaw; default 1). */
+  variation?: number;
 }
 
 const gain = (rng: Rng, spread: number): RGB => [rng.uniform(1 - spread, 1 + spread), rng.uniform(1 - spread, 1 + spread), rng.uniform(1 - spread, 1 + spread)];
@@ -70,6 +79,8 @@ const SCENARIOS: Scenario[] = [
     name: 'starry-small-pieces', painting: 'starry-night', grid: { rows: 16, cols: 20 }, block: [5, 6], extra: 6, seeds: [10],
     render: (rng) => ({ ...standard(rng), scale: 0.6 }),
   },
+  { name: 'starry-uniform-knobs', painting: 'starry-night', grid: { rows: 16, cols: 20 }, block: [5, 6], extra: 6, seeds: [11, 12], render: standard, variation: 0.2 },
+  { name: 'wave-uniform-knobs', painting: 'great-wave', grid: { rows: 20, cols: 30 }, block: [5, 6], extra: 6, seeds: [13], render: standard, variation: 0.2 },
 ];
 
 /** One side of a detected piece in one scoring mode. */
@@ -99,8 +110,10 @@ interface Tally {
   kindOk: number;
   top1: Record<string, number>;
   top5: Record<string, number>;
+  /** Sum of ln(rank of the true partner) over the kindOk queries. */
+  logRank: Record<string, number>;
 }
-const newTally = (): Tally => ({ queries: 0, kindOk: 0, top1: {}, top5: {} });
+const newTally = (): Tally => ({ queries: 0, kindOk: 0, top1: {}, top5: {}, logRank: {} });
 const tallies = (): Record<Mode, Tally> => ({ detected: newTally(), jitter: newTally() });
 
 const perScenario: Record<string, Record<Mode, Tally>> = {};
@@ -115,7 +128,7 @@ describe('side retrieval benchmark', () => {
         await yieldToEventLoop();
         if (!paintings.has(s.painting)) paintings.set(s.painting, loadTestAsset(s.painting));
         const src = paintings.get(s.painting)!;
-        const cut = generateJigsaw(s.grid.rows, s.grid.cols, src.width, src.height, seed);
+        const cut = generateJigsaw(s.grid.rows, s.grid.cols, src.width, src.height, seed, { variation: s.variation });
         const rng = new Rng(seed * 7 + 11);
         const [bh, bw] = s.block;
         const r0 = 1 + rng.int(s.grid.rows - bh - 1), c0 = 1 + rng.int(s.grid.cols - bw - 1);
@@ -173,6 +186,7 @@ describe('side retrieval benchmark', () => {
                   for (const o of cands) if (o !== y && f(x, o) < dt) rank++;
                   if (rank === 1) tally.top1[k] = (tally.top1[k] ?? 0) + 1;
                   if (rank <= 5) tally.top5[k] = (tally.top5[k] ?? 0) + 1;
+                  tally.logRank[k] = (tally.logRank[k] ?? 0) + Math.log(rank);
                 }
               }
             }
@@ -187,6 +201,7 @@ describe('side retrieval benchmark', () => {
         for (const k of NAMES) {
           P.top1[k] = (P.top1[k] ?? 0) + (t[mode].top1[k] ?? 0);
           P.top5[k] = (P.top5[k] ?? 0) + (t[mode].top5[k] ?? 0);
+          P.logRank[k] = (P.logRank[k] ?? 0) + (t[mode].logRank[k] ?? 0);
         }
       }
       if (UPDATE_BASELINE) return;
@@ -198,9 +213,12 @@ describe('side retrieval benchmark', () => {
   afterAll(() => {
     const rows: Record<string, MetricRecord> = {};
     for (const [name, t] of [...Object.entries(perScenario), ['all', pooled] as const]) {
-      for (const mode of MODES) rows[`${name} ${mode}`] = { queries: t[mode].queries, kindOk: rate(t[mode].kindOk, t[mode].queries), ...rates(t[mode]) };
+      for (const mode of MODES) {
+        const lr = Object.fromEntries(NAMES.map((k) => [`${k}@lr`, rate(t[mode].logRank[k] ?? 0, t[mode].kindOk)]));
+        rows[`${name} ${mode}`] = { queries: t[mode].queries, kindOk: rate(t[mode].kindOk, t[mode].queries), ...rates(t[mode]), ...lr };
+      }
     }
-    console.log('\n' + report('sides', rows, ['queries', 'kindOk', ...NAMES.flatMap((k) => [`${k}@1`, `${k}@5`])]) + '\n');
+    console.log('\n' + report('sides', rows, ['queries', 'kindOk', ...NAMES.flatMap((k) => [`${k}@1`, `${k}@5`, `${k}@lr`])]) + '\n');
     if (UPDATE_BASELINE) saveBaselineSuite('sides', Object.fromEntries(Object.entries(perScenario).map(([name, t]) => [name, record(t)])));
   });
 });
