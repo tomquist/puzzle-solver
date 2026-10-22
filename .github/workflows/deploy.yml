@@ -47,7 +47,10 @@ jobs:
   bench:
     name: Accuracy benchmark
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    # Chromium and its system libraries come with the image (see e2e).
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.1-noble
     steps:
       - uses: actions/checkout@v4
 
@@ -58,9 +61,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Install Chromium (feedback files are decoded as on the phone)
-        run: npx playwright install --with-deps chromium
 
       - name: Run benchmark (gated by bench/baseline.json)
         run: npm run bench
