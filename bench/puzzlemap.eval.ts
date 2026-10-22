@@ -35,7 +35,8 @@ import type { GridSpec, PieceShape, RegionMatch, SideKind } from '../src/model/t
 import { buildReferenceIndex, matchRegions, type MatchInput, type ReferenceIndex } from '../src/pipeline/match';
 import { segmentPieces, type Segmentation } from '../src/pipeline/pieces';
 import { DEBUG_IMAGES, loadImageFile, REPO_ROOT, savePng, SEGMENT_OPTIONS } from '../src/testing/nodeImageIO';
-import { angleError, compareToBaseline, report, saveBaselineSuite, UPDATE_BASELINE, yieldToEventLoop, type MetricRecord } from './lib';
+import { angleError, compareToBaseline, report, saveBaselineSuite, UPDATE_BASELINE, yieldToEventLoop, type CalibrationPair, type MetricRecord } from './lib';
+import { saveCalibrationPairs } from './calibration';
 
 const DIR = resolve(REPO_ROOT, 'test-corpus/puzzle-map');
 const PIECES = resolve(DIR, 'pieces/annotations.json');
@@ -201,6 +202,7 @@ describe('puzzle-map placement', () => {
   }
   const results: Record<string, MetricRecord> = {};
   const all = newTally(0);
+  const pairs: CalibrationPair[] = [];
 
   for (const [name, items] of [...byPuzzle].sort(([a], [b]) => a.localeCompare(b))) {
     it(name, async () => {
@@ -232,6 +234,10 @@ describe('puzzle-map placement', () => {
           t.confident++;
           if (a.top1) t.confidentOk++;
         }
+        const best = a.m?.candidates[0];
+        if (a.m && best && a.m.status !== 'unmatched') {
+          pairs.push({ confidence: best.confidence, status: a.m.status, cell: a.top1, turn: a.top1 && angleError(best.rotationDeg, truthRot) <= 10, top3: a.top3, reason: a.m.uncertainReason });
+        }
         const segInput = segmentedInput(img, piece);
         if (segInput instanceof Error) {
           t.segErrors++;
@@ -258,6 +264,7 @@ describe('puzzle-map placement', () => {
     delete overall.cells;
     results.overall = overall;
     console.log('\n' + report('puzzlemap', results, COLUMNS) + '\n');
+    if (LIMIT === Infinity) saveCalibrationPairs('puzzlemap', pairs);
     if (UPDATE_BASELINE && LIMIT === Infinity) saveBaselineSuite('puzzlemap', results);
   });
 });

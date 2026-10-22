@@ -8,7 +8,7 @@ import type { Point, Quad } from '../src/cv/geometry';
 import { distanceTransform } from '../src/cv/distance';
 import { createMask, createRGBA, type Mask, type Rect, type RGBAImage } from '../src/cv/image';
 import { drawPolygon, fillPolygon } from '../src/cv/raster';
-import type { CellRef, DetectedRegion, PuzzleSide, RegionMatch, ScanResult } from '../src/model/types';
+import type { CellRef, DetectedRegion, PuzzleSide, RegionMatch, ScanResult, UncertainReason } from '../src/model/types';
 import { patchOutline, pieceKindOf, Rng, type JigsawCut, type PieceTruth } from '../src/testing/synth';
 import { REPO_ROOT } from '../src/testing/nodeImageIO';
 
@@ -222,6 +222,8 @@ export interface ScanMetrics {
   rotationOk: number;
   /** Fraction of 'confident' regions that are placed correctly. */
   confidentPrecision: number;
+  /** Fraction of 'confident' regions placed correctly and turned within 10°. */
+  confidentTurnPrecision: number;
   /** Fraction of truth items reported as 'confident'. */
   confidentRate: number;
   fitPrecision: number;
@@ -319,8 +321,23 @@ export function associateRegions(regions: Pick<DetectedRegion, 'id' | 'contour'>
   return { regionToTruth, truthToRegion, truthMasks, regionMasks };
 }
 
-/** Associate regions with ground-truth items and compute all scan metrics. */
-export function evaluateScan(result: ScanResult, truth: PieceTruth[], cut: JigsawCut, ms: number): { metrics: ScanMetrics; regionToTruth: Map<number, number> } {
+/**
+ * One placement judged against the truth, for the calibration report (bench/calibration.ts): the
+ * best placement's confidence and status, and whether its cell (and turn, within 10°) is right and
+ * the right cell among the best three.
+ */
+export interface CalibrationPair {
+  confidence: number;
+  status: RegionMatch['status'];
+  cell: boolean;
+  turn: boolean;
+  top3: boolean;
+  /** Why an unsure placement is unsure (`RegionMatch.uncertainReason`). */
+  reason?: UncertainReason;
+}
+
+/** Associate regions with ground-truth items and compute all scan metrics (`pairs`: single pieces, for the calibration report). */
+export function evaluateScan(result: ScanResult, truth: PieceTruth[], cut: JigsawCut, ms: number): { metrics: ScanMetrics; regionToTruth: Map<number, number>; pairs: CalibrationPair[] } {
   const { regionToTruth, truthToRegion, truthMasks, regionMasks } = associateRegions(result.regions, truth);
   // Regions that lie (≥ 80 %) inside a truth item: parts of it (a patch split into several regions).
   const partsOf = new Map<number, number[]>();
@@ -335,7 +352,8 @@ export function evaluateScan(result: ScanResult, truth: PieceTruth[], cut: Jigsa
   const cellsOf = (t: PieceTruth): CellRef[] => t.pieces.map((i) => ({ row: cut.pieces[i].row, col: cut.pieces[i].col }));
   const key = (c: CellRef) => `${c.row},${c.col}`;
 
-  let singles = 0, shapes = 0, kindsOk = 0, top1 = 0, top3 = 0, rotOk = 0, confident = 0, confidentOk = 0, matchedItems = 0, hidden = 0;
+  let singles = 0, shapes = 0, kindsOk = 0, top1 = 0, top3 = 0, rotOk = 0, confident = 0, confidentOk = 0, confidentTurnOk = 0, matchedItems = 0, hidden = 0;
+  const pairs: CalibrationPair[] = [];
   const correct = new Set<number>();
   truth.forEach((t, i) => {
     const rid = truthToRegion.get(i);
@@ -368,7 +386,7 @@ export function evaluateScan(result: ScanResult, truth: PieceTruth[], cut: Jigsa
       if (region.shape.kind === pieceKindOf(cut.pieces[t.pieces[0]].sides)) kindsOk++;
     }
     const best = match?.candidates[0];
-    let ok = false;
+    let ok = false, inTop3 = false;
     if (best) {
       if (isPatch) {
         const truthCells = new Set(cellsOf(t).map(key));
@@ -378,18 +396,22 @@ export function evaluateScan(result: ScanResult, truth: PieceTruth[], cut: Jigsa
         ok = inter / (truthCells.size + covered.size - inter) >= 0.5;
       } else {
         ok = best.row === t.row && best.col === t.col;
-        if (match!.candidates.slice(0, 3).some((c) => c.row === t.row && c.col === t.col)) top3++;
+        inTop3 = match!.candidates.slice(0, 3).some((c) => c.row === t.row && c.col === t.col);
+        if (inTop3) top3++;
       }
     }
+    const turnOk = ok && angleError(best!.rotationDeg, t.rotationDeg) <= 10;
     if (ok) {
       top1++;
       correct.add(rid);
-      if (angleError(best!.rotationDeg, t.rotationDeg) <= 10) rotOk++;
+      if (turnOk) rotOk++;
     }
     if (match?.status === 'confident') {
       confident++;
       if (ok) confidentOk++;
+      if (turnOk) confidentTurnOk++;
     }
+    if (!isPatch && best && match && match.status !== 'unmatched') pairs.push({ confidence: best.confidence, status: match.status, cell: ok, turn: turnOk, top3: inTop3, reason: match.uncertainReason });
   });
   // Confident regions without any truth item count against precision, unless they are part of a
   // patch that was split into several regions and placed within it.
@@ -403,7 +425,10 @@ export function evaluateScan(result: ScanResult, truth: PieceTruth[], cut: Jigsa
     if (owner === undefined || !c) continue;
     const truthCells = new Set(cellsOf(truth[owner]).map(key));
     const cells = m.coveredCells && m.coveredCells.length ? m.coveredCells : [{ row: c.row, col: c.col }];
-    if (cells.every((x) => truthCells.has(key(x)))) confidentOk++;
+    if (cells.every((x) => truthCells.has(key(x)))) {
+      confidentOk++;
+      if (angleError(c.rotationDeg, truth[owner].rotationDeg) <= 10) confidentTurnOk++;
+    }
   }
 
   // Fits: truth adjacency between items.
@@ -504,6 +529,7 @@ export function evaluateScan(result: ScanResult, truth: PieceTruth[], cut: Jigsa
   const rate = (a: number, b: number) => (b === 0 ? 1 : a / b);
   return {
     regionToTruth,
+    pairs,
     metrics: {
       items: truth.length,
       regions: result.regions.length,
@@ -515,6 +541,7 @@ export function evaluateScan(result: ScanResult, truth: PieceTruth[], cut: Jigsa
       top3: rate(top3, singles),
       rotationOk: rate(rotOk, top1),
       confidentPrecision: rate(confidentOk, confident),
+      confidentTurnPrecision: rate(confidentTurnOk, confident),
       confidentRate: rate(confident, truth.length),
       fitPrecision: rate(hintsOk, hintsScored),
       fitRecall: rate(foundPairs.size, truthPairs.size),
@@ -564,7 +591,7 @@ export function quadError(found: Quad, truth: Quad): number {
 
 /** Metrics where lower is better; everything else is higher-is-better. Timing is report-only. */
 const LOWER_IS_BETTER = new Set(['warnings', 'meanError', 'maxError', 'falseWarnings', 'hiddenRate', 'boxError', 'segErrors', 'questionsAtTruth', 'maxQuestions', 'wrongQuestions']);
-const REPORT_ONLY = new Set(['ms', 'silentSwitches', 'items', 'regions', 'scenes', 'confidentRate', 'outlineIoU', 'boundaryF', 'shapeFits', 'shapeFitsTrue', 'ambFixed', 'ambBroken', 'ambConfirmed', 'confMoved', 'consistencyMs']);
+const REPORT_ONLY = new Set(['ms', 'silentSwitches', 'items', 'regions', 'scenes', 'confidentRate', 'outlineIoU', 'boundaryF', 'shapeFits', 'shapeFitsTrue', 'ambFixed', 'ambBroken', 'ambConfirmed', 'confMoved', 'consistencyMs', 'dupClaims', 'marks', 'wrong', 'marked', 'markedTop1', 'conflicts']);
 
 export type MetricRecord = Record<string, number>;
 
