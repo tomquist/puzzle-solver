@@ -1,4 +1,5 @@
 /** Puzzle workspace: header with progress and the Scan / Picture / History / Settings tabs. */
+import { useEffect } from 'react';
 import { Banner } from '../../components/Feedback';
 import { GridJobStrip, GridSuggestionCard } from '../../components/GridSuggestion';
 import { IconHistory, IconImage, IconScan, IconSettings } from '../../components/Icons';
@@ -6,6 +7,7 @@ import { TopBar } from '../../components/TopBar';
 import { usePuzzle } from '../../context/PuzzleContext';
 import { placedCount, progressPercent, totalCells } from '../../lib/progress';
 import { href, type PuzzleTab } from '../../lib/routes';
+import { rememberTab } from '../../lib/lastTab';
 import { HistoryTab } from './HistoryTab';
 import { PictureTab } from './PictureTab';
 import { ScanTab } from './ScanTab';
@@ -36,6 +38,7 @@ export function ProgressSummary() {
 export function PuzzleWorkspace({ tab }: { tab: PuzzleTab }) {
   const { puzzle, matcher, scanJob } = usePuzzle();
   const analysing = scanJob?.kind === 'running';
+  useEffect(() => rememberTab(puzzle.id, tab), [puzzle.id, tab]);
   return (
     <>
       <TopBar title={puzzle.name} back={href.home()} backLabel="All puzzles" subtitle={<ProgressSummary />} />

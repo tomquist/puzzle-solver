@@ -84,6 +84,27 @@ async function createPuzzleAndScan(page: Page) {
   await expect(page.locator('[data-testid^="item-"]').first()).toBeVisible();
 }
 
+test('back from a scan returns to the tab it was opened from', async ({ page }) => {
+  await createPuzzleAndScan(page);
+  // Opened right after scanning (Scan tab): back goes to Scan.
+  await page.locator('.topbar').getByRole('link', { name: 'Back' }).click();
+  await expect(page.getByTestId('tab-scan')).toBeVisible();
+  // Opened from History: back goes to History.
+  await page.getByRole('link', { name: 'History' }).click();
+  await expect(page.getByTestId('tab-history')).toBeVisible();
+  await page.getByTestId('scan-row').first().click();
+  await expect(page.getByTestId('scan-result')).toBeVisible();
+  await page.locator('.topbar').getByRole('link', { name: 'Back' }).click();
+  await expect(page.getByTestId('tab-history')).toBeVisible();
+  // Also after a reload of the scan screen.
+  await page.getByTestId('scan-row').first().click();
+  await expect(page.getByTestId('scan-result')).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId('scan-result')).toBeVisible();
+  await page.locator('.topbar').getByRole('link', { name: 'Back' }).click();
+  await expect(page.getByTestId('tab-history')).toBeVisible();
+});
+
 /**
  * createPuzzleAndScan until the scan has connection lines: the mock pipeline seeds its pieces with
  * the (random) puzzle id, and a few seeds give no linked pair that is shown.

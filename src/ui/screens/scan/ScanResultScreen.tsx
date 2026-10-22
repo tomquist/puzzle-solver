@@ -56,6 +56,7 @@ import { placeCells, unplaceCells } from '../../lib/progress';
 import { turnBadge, turnInstruction } from '../../lib/rotation';
 import { linkRoute } from '../../lib/route';
 import { href } from '../../lib/routes';
+import { lastTab } from '../../lib/lastTab';
 import { Legend } from './Legend';
 import { useScanModel } from './useScanModel';
 
@@ -68,7 +69,7 @@ export function ScanResultScreen({ scanId }: { scanId: string }) {
   // Reloaded when a new grid re-derives the scans' cells (pipeline/remap.ts) – not when the scan's
   // cell size is measured after it is shown (that would reset the screen under the user).
   const scan = useAsync(() => repo.getScan(scanId), [repo, scanId, cellsVersion]);
-  const back = href.puzzle(puzzle.id, 'scan');
+  const back = href.puzzle(puzzle.id, lastTab(puzzle.id));
 
   if (scan.loading && !scan.data) {
     return (
@@ -361,7 +362,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
   if (all.items.length === 0) {
     return (
       <>
-        <TopBar title="Scan result" subtitle={formatDate(scan.createdAt)} back={href.puzzle(puzzle.id, 'scan')} />
+        <TopBar title="Scan result" subtitle={formatDate(scan.createdAt)} back={href.puzzle(puzzle.id, lastTab(puzzle.id))} />
         <main className="page stack" data-testid="scan-result">
           <GridSuggestionCard />
           <GridJobStrip />
@@ -386,7 +387,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
 
   return (
     <>
-      <TopBar title="Scan result" subtitle={subtitle} back={href.puzzle(puzzle.id, 'scan')} />
+      <TopBar title="Scan result" subtitle={subtitle} back={href.puzzle(puzzle.id, lastTab(puzzle.id))} />
       <main className={`page wide stack with-action-bar${selected ? ' with-selection' : ''}`} data-testid="scan-result">
         <GridSuggestionCard />
         <GridJobStrip />
