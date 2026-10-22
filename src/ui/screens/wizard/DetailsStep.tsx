@@ -1,7 +1,12 @@
-/** Step 3: name, piece count, physical size, grid and cut style. */
+/**
+ * Step 3: name, piece count, physical size, grid and cut style. The piece count may be exact (from
+ * the box), approximate or unknown: the scans measure the grid either way (pipeline/gridBelief.ts),
+ * and without a count the grid starts as an estimate from the picture's shape and a typical count.
+ */
 import { useMemo, useState } from 'react';
-import type { CutStyle, GridSpec, PhysicalSize } from '../../../model/types';
+import type { CutStyle, GridSpec, PhysicalSize, PieceCountKind } from '../../../model/types';
 import { estimateGrid } from '../../../pipeline/grid';
+import { provisionalGrid } from '../../../pipeline/gridBelief';
 import { Segmented } from '../../components/Segmented';
 import { parsePositive } from '../../lib/format';
 import type { PuzzleDetails } from './types';
@@ -9,6 +14,8 @@ import type { PuzzleDetails } from './types';
 export interface DetailsForm {
   name: string;
   pieces: string;
+  /** How sure the count is ('unknown': no count, the grid is estimated). */
+  countKind: PieceCountKind;
   physW: string;
   physH: string;
   unit: PhysicalSize['unit'];
@@ -21,6 +28,7 @@ export interface DetailsForm {
 export const EMPTY_DETAILS: DetailsForm = {
   name: '',
   pieces: '',
+  countKind: 'exact',
   physW: '',
   physH: '',
   unit: 'cm',
@@ -39,10 +47,11 @@ export function physicalAspect(f: DetailsForm): number | undefined {
   return w && h ? w / h : undefined;
 }
 
-export function gridOptions(f: DetailsForm, quadAspect: number): { candidates: GridSpec[]; grid: GridSpec | undefined } {
-  const pieces = parsePositive(f.pieces);
+export function gridOptions(f: DetailsForm, quadAspect: number): { candidates: GridSpec[]; grid: GridSpec | undefined; estimated: boolean } {
+  const pieces = f.countKind === 'unknown' ? undefined : parsePositive(f.pieces);
   const aspect = physicalAspect(f) ?? quadAspect;
-  const candidates = pieces ? estimateGrid(Math.round(pieces), aspect).candidates : [];
+  const estimated = f.countKind === 'unknown';
+  const candidates = estimated ? [provisionalGrid(aspect)] : pieces ? estimateGrid(Math.round(pieces), aspect).candidates : [];
   let grid: GridSpec | undefined;
   if (f.gridChoice === 'custom') {
     const rows = parsePositive(f.rows);
@@ -51,20 +60,30 @@ export function gridOptions(f: DetailsForm, quadAspect: number): { candidates: G
   } else {
     grid = candidates[f.gridChoice] ?? candidates[0];
   }
-  return { candidates, grid };
+  return { candidates, grid, estimated: estimated && f.gridChoice !== 'custom' };
 }
 
 export function toDetails(f: DetailsForm, grid: GridSpec): PuzzleDetails {
   const w = parsePositive(f.physW);
   const h = parsePositive(f.physH);
+  const unknown = f.countKind === 'unknown';
   return {
     name: f.name.trim() || 'Untitled puzzle',
-    pieceCount: Math.round(parsePositive(f.pieces) ?? grid.rows * grid.cols),
+    pieceCount: Math.round((unknown ? undefined : parsePositive(f.pieces)) ?? grid.rows * grid.cols),
+    pieceCountKind: f.countKind,
     physicalSize: w && h ? { width: w, height: h, unit: f.unit } : undefined,
     grid,
+    // Without a count the grid is a guess that the scans replace; a chosen grid is the user's.
+    gridStatus: unknown && f.gridChoice !== 'custom' ? 'estimated' : 'unconfirmed',
     cut: f.cut,
   };
 }
+
+const COUNT_KINDS: { value: PieceCountKind; label: string }[] = [
+  { value: 'exact', label: 'From the box' },
+  { value: 'about', label: 'About' },
+  { value: 'unknown', label: 'I don’t know' },
+];
 
 export function DetailsStep({
   form,
@@ -80,10 +99,11 @@ export function DetailsStep({
   onNext: (details: PuzzleDetails) => void;
 }) {
   const [touched, setTouched] = useState(false);
-  const { candidates, grid } = useMemo(() => gridOptions(form, quadAspect), [form, quadAspect]);
+  const { candidates, grid, estimated } = useMemo(() => gridOptions(form, quadAspect), [form, quadAspect]);
   const set = (patch: Partial<DetailsForm>) => onChange({ ...form, ...patch });
-  const pieces = parsePositive(form.pieces);
-  const piecesError = touched && !pieces ? 'Enter the number of pieces from the box.' : undefined;
+  const unknown = form.countKind === 'unknown';
+  const pieces = unknown ? undefined : parsePositive(form.pieces);
+  const piecesError = touched && !unknown && !pieces ? 'Enter the number of pieces, or choose “I don’t know”.' : undefined;
   const aspect = physicalAspect(form);
 
   return (
@@ -92,7 +112,7 @@ export function DetailsStep({
       onSubmit={(e) => {
         e.preventDefault();
         setTouched(true);
-        if (pieces && grid) onNext(toDetails(form, grid));
+        if ((unknown || pieces) && grid) onNext(toDetails(form, grid));
       }}
     >
       <label className="field">
@@ -104,25 +124,43 @@ export function DetailsStep({
         <label className="field-label" htmlFor="pieces">
           Number of pieces
         </label>
-        <input
-          id="pieces"
-          name="pieces"
-          type="number"
-          inputMode="numeric"
-          min={4}
-          max={50000}
-          value={form.pieces}
-          placeholder="e.g. 1000"
-          aria-invalid={!!piecesError}
-          onChange={(e) => set({ pieces: e.target.value, gridChoice: form.gridChoice === 'custom' ? 'custom' : 0 })}
+        <Segmented
+          label="How sure is the number of pieces"
+          size="sm"
+          value={form.countKind}
+          options={COUNT_KINDS}
+          onChange={(countKind) => set({ countKind, gridChoice: form.gridChoice === 'custom' ? 'custom' : 0 })}
         />
-        <div className="chips">
-          {PRESETS.map((n) => (
-            <button type="button" key={n} className={`chip${pieces === n ? ' active' : ''}`} onClick={() => set({ pieces: String(n), gridChoice: form.gridChoice === 'custom' ? 'custom' : 0 })}>
-              {n}
-            </button>
-          ))}
-        </div>
+        {!unknown && (
+          <>
+            <input
+              id="pieces"
+              name="pieces"
+              type="number"
+              inputMode="numeric"
+              min={4}
+              max={50000}
+              value={form.pieces}
+              placeholder={form.countKind === 'about' ? 'e.g. about 1000' : 'e.g. 1000'}
+              aria-invalid={!!piecesError}
+              onChange={(e) => set({ pieces: e.target.value, gridChoice: form.gridChoice === 'custom' ? 'custom' : 0 })}
+            />
+            <div className="chips">
+              {PRESETS.map((n) => (
+                <button type="button" key={n} className={`chip${pieces === n ? ' active' : ''}`} onClick={() => set({ pieces: String(n), gridChoice: form.gridChoice === 'custom' ? 'custom' : 0 })}>
+                  {n}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+        <span className="field-help" data-testid="count-help">
+          {unknown
+            ? 'No problem: your first scans measure the pieces and set the grid.'
+            : form.countKind === 'about'
+              ? 'A rough number is enough – your scans measure the exact grid.'
+              : 'Boxes round the count (“1500” can be 45 × 34 = 1530); your scans check the grid.'}
+        </span>
         {piecesError && <span className="field-error">{piecesError}</span>}
       </div>
 
@@ -142,7 +180,7 @@ export function DetailsStep({
       <fieldset className="field">
         <legend className="field-label">Grid (columns × rows)</legend>
         {candidates.length === 0 && form.gridChoice !== 'custom' ? (
-          <span className="field-help">Enter the number of pieces to get a suggestion.</span>
+          <span className="field-help">Enter the number of pieces to get a suggestion, or choose “I don’t know”.</span>
         ) : (
           <div className="chips">
             {candidates.map((g, i) => (
@@ -156,7 +194,7 @@ export function DetailsStep({
                 <span>
                   {g.cols} × {g.rows}
                 </span>
-                <span className="chip-sub">{i === 0 ? 'best fit' : `${g.cols * g.rows} pcs`}</span>
+                <span className="chip-sub">{unknown ? 'estimated' : i === 0 ? 'best fit' : `${g.cols * g.rows} pcs`}</span>
               </button>
             ))}
             <button type="button" className={`chip${form.gridChoice === 'custom' ? ' active' : ''}`} onClick={() => set({ gridChoice: 'custom', cols: form.cols || String(grid?.cols ?? ''), rows: form.rows || String(grid?.rows ?? '') })}>
@@ -171,11 +209,15 @@ export function DetailsStep({
             <input aria-label="Rows" type="number" inputMode="numeric" min={1} value={form.rows} placeholder="Rows" onChange={(e) => set({ rows: e.target.value })} />
           </div>
         )}
-        {grid && (
+        {grid && estimated ? (
+          <span className="field-help grid-estimated" data-testid="grid-estimated">
+            Estimated – will be measured from your first scans.
+          </span>
+        ) : grid ? (
           <span className="field-help">
             {grid.cols} pieces across, {grid.rows} down = {grid.cols * grid.rows} pieces.
           </span>
-        )}
+        ) : null}
       </fieldset>
 
       <div className="field">

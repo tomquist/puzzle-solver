@@ -36,13 +36,20 @@ import type {
   RegionMatch,
   SideKind,
   SideShape,
+  GridEvidence,
 } from '../model/types';
-import { SIDE_PROFILE_SAMPLES, cellKey } from '../model/types';
+import { GRID_EVIDENCE_VERSION, SIDE_PROFILE_SAMPLES, cellKey } from '../model/types';
 import type { AnalyzeOptions, AnalyzeResponse, ComposeOptions, PipelineApi, ProgressCallback } from './api';
+import { gridVerdict, remapGrid } from './gridOps';
 
 export interface MockPipelineOptions {
   /** Multiplies all simulated latencies (0 = instant). Default 1. */
   delayScale?: number;
+  /**
+   * The grid the simulated scans measure (`?mockGrid=rowsxcols` in the page URL; default: the
+   * puzzle's own grid, so the scans agree with it).
+   */
+  measuredGrid?: GridSpec;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -694,6 +701,9 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
     return groups;
   }
 
+  const followUps = new Map<string, { evidence: GridEvidence; steps: number }>();
+  let followUpSeq = 0;
+
   async function analyzeScan(
     puzzleId: string,
     photo: RGBAImage,
@@ -765,11 +775,52 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
       issues,
       metrics: { brightness: mean, clipped, sharpness: 0.7, medianPieceSize: slots[0]?.body.s ?? 0, regions: regions.length },
     };
+    const measured = mockEvidence(ref, options.measuredGrid ?? ref.grid, rnd);
+    // As the real pipeline: the evidence is measured after the result (gridFollowUpStep), a
+    // placeholder until then.
+    const gridFollowUp = `mock-grid-${++followUpSeq}`;
+    followUps.set(gridFollowUp, { evidence: measured, steps: 2 });
+    const gridEvidence: GridEvidence = { ...measured, sources: [], pending: true };
     await step('done', 1, 'Done', 0);
     timings.total = Date.now() - t0;
     return {
-      result: { width: w, height: h, regions, matches, fits, groups, quality, timings },
+      result: { width: w, height: h, regions, matches, fits, groups, quality, timings, gridEvidence },
       analysedImage: image,
+      gridFollowUp,
+    };
+  }
+
+  /**
+   * What a scan of a puzzle with grid `truth` measures (match/cellSize.ts): an assembled 4 × 3 patch
+   * and a handful of loose pieces, sizes within a per cent, cell centres a few px off.
+   */
+  function mockEvidence(ref: LoadedReference, truth: GridSpec, rnd: () => number): GridEvidence {
+    const cw = ref.width / truth.cols, ch = ref.height / truth.rows;
+    const noise = () => (rnd() - 0.5) * 0.01;
+    const cell = () => ({ c: Math.floor(rnd() * truth.cols), r: Math.floor(rnd() * truth.rows) });
+    const patchX: number[] = [], patchY: number[] = [];
+    const p0 = { c: Math.floor(rnd() * Math.max(1, truth.cols - 4)), r: Math.floor(rnd() * Math.max(1, truth.rows - 3)) };
+    for (let i = 0; i < Math.min(4, truth.cols); i++) {
+      for (let j = 0; j < Math.min(3, truth.rows); j++) {
+        patchX.push((p0.c + i + 0.5) * cw);
+        patchY.push((p0.r + j + 0.5) * ch);
+      }
+    }
+    const piecesX: number[] = [], piecesY: number[] = [];
+    for (let k = 0; k < 8; k++) {
+      const q = cell();
+      piecesX.push((q.c + 0.5) * cw + (rnd() - 0.5) * 6);
+      piecesY.push((q.r + 0.5) * ch + (rnd() - 0.5) * 6);
+    }
+    return {
+      version: GRID_EVIDENCE_VERSION,
+      grid: { ...ref.grid },
+      refWidth: ref.width,
+      refHeight: ref.height,
+      sources: [
+        { kind: 'patch', regionIds: [1], w: { log: Math.log(cw) + noise(), se: 0.01, n: 4 }, h: { log: Math.log(ch) + noise(), se: 0.012, n: 3 }, x: patchX, y: patchY },
+        { kind: 'pieces', regionIds: [2, 3, 4], w: { log: Math.log(cw) + 2 * noise(), se: 0.025, n: 8 }, h: { log: Math.log(ch) + 2 * noise(), se: 0.025, n: 8 }, x: piecesX, y: piecesY },
+      ],
     };
   }
 
@@ -783,5 +834,21 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
     hasReference,
     analyzeScan,
     assessFrame,
+    async assessGrid(ctx) {
+      await wait(30);
+      return gridVerdict(ctx);
+    },
+    async remapGrid(req) {
+      await wait(30);
+      return remapGrid(req);
+    },
+    async gridFollowUpStep(token) {
+      await wait(40);
+      const f = followUps.get(token);
+      if (!f) return { done: true };
+      if (--f.steps > 0) return { done: false };
+      followUps.delete(token);
+      return { done: true, evidence: f.evidence };
+    },
   };
 }

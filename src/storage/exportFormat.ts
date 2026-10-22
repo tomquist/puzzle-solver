@@ -212,6 +212,16 @@ export async function decodePuzzleExport(
     return { ...s, id, puzzleId, photoBlobId: mapBlob(s.photoBlobId) };
   });
 
+  // The grid evidence is kept per scan id: carry it over to the new ids (and drop what has no scan).
+  if (puzzle.gridState) {
+    const scansEvidence: NonNullable<PuzzleRecord['gridState']>['scans'] = {};
+    for (const [oldId, ev] of Object.entries(puzzle.gridState.scans ?? {})) {
+      const id = scanIdMap.get(oldId);
+      if (id !== undefined) scansEvidence[id] = ev;
+    }
+    puzzle.gridState = { ...puzzle.gridState, scans: scansEvidence };
+  }
+
   const placed: Record<string, PlacedCell> = {};
   for (const [key, cell] of Object.entries(data.progress.placed)) {
     const { scanId, ...rest } = cell;

@@ -70,6 +70,12 @@ export function createMemoryRepository(): PuzzleRepository {
     async saveScan(scan) {
       scans.set(scan.id, structuredClone(scan));
     },
+    async updateScan(id, change) {
+      const cur = scans.get(id);
+      const next = cur && change(structuredClone(cur));
+      if (next) scans.set(id, structuredClone(next));
+      return next && structuredClone(next);
+    },
     async deleteScan(id) {
       const scan = scans.get(id);
       if (scan) blobs.delete(scan.photoBlobId);

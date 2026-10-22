@@ -229,6 +229,12 @@ export interface Mapping {
   phi: number;
   /** Reference px per photo px. */
   s: number;
+  /**
+   * Optional stretch along the reference's x / y axis after the similarity (default 1): a photo
+   * taken a little obliquely shows the picture shorter along one axis (match/cellSize.ts measures it).
+   */
+  ax?: number;
+  ay?: number;
 }
 
 /** A template in a pyramid level: only pixels whose footprint lies (mostly) inside the eroded mask. */
@@ -259,7 +265,8 @@ export interface Template {
  * are dropped. Returns null when fewer than `minPixels` remain.
  */
 export function buildTemplate(src: PhotoSource, m: Mapping, level: RefLevel, minCov = 0.6, minPixels = 12): Template | null {
-  const lx = level.scaleX, ly = level.scaleY;
+  const ax = m.ax ?? 1, ay = m.ay ?? 1;
+  const lx = level.scaleX * ax, ly = level.scaleY * ay;
   const c = Math.cos(m.phi), s = Math.sin(m.phi);
   // Template bounds from the mask bounds mapped into level coordinates (pivot at 0).
   const b = src.bounds;
@@ -275,7 +282,7 @@ export function buildTemplate(src: PhotoSource, m: Mapping, level: RefLevel, min
   const iu0 = Math.floor(u0), iu1 = Math.ceil(u1), iv0 = Math.floor(v0), iv1 = Math.ceil(v1);
   const gw = iu1 - iu0 + 1, gh = iv1 - iv0 + 1;
   // Pyramid level: coarsest one that is still at least as fine as the template.
-  const t = m.s * (lx + ly) * 0.5;
+  const t = m.s * (level.scaleX + level.scaleY) * 0.5;
   let li = 0;
   while (li + 1 < src.levels.length && src.levels[li + 1].fx >= t * 0.98) li++;
   const pl = src.levels[li];

@@ -6,7 +6,7 @@
  * correction; `matchRegion` matches a single region), then `findFits(regions, matches, grid)` and
  * `buildGroups(...)` (assembled grids, loose neighbours; may place weak members of assembled grids).
  */
-export { buildReferenceIndex } from './referenceIndex';
+export { buildReferenceIndex, withCells } from './referenceIndex';
 export { matchRegion, cellAt, matchConfidence, patchBodySize, scorePlacement, CONFIDENT_THRESHOLD, type MatchDetail } from './matchRegion';
 export { matchRegions, matchRegionsDetailed, estimateColorCorrection } from './colorCorrection';
 export { findFits, shapeFits, puzzleSideOf, profileMismatch, sideMismatch, type FitOptions, type ShapeFit, type ShapeMetric } from './fits';

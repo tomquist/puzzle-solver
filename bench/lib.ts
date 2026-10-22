@@ -563,8 +563,8 @@ export function quadError(found: Quad, truth: Quad): number {
 // ---------------------------------------------------------------------------------------------
 
 /** Metrics where lower is better; everything else is higher-is-better. Timing is report-only. */
-const LOWER_IS_BETTER = new Set(['warnings', 'meanError', 'maxError', 'falseWarnings', 'hiddenRate', 'boxError', 'segErrors']);
-const REPORT_ONLY = new Set(['ms', 'items', 'regions', 'scenes', 'confidentRate', 'outlineIoU', 'boundaryF', 'shapeFits', 'shapeFitsTrue', 'ambFixed', 'ambBroken', 'ambConfirmed', 'confMoved', 'consistencyMs']);
+const LOWER_IS_BETTER = new Set(['warnings', 'meanError', 'maxError', 'falseWarnings', 'hiddenRate', 'boxError', 'segErrors', 'questionsAtTruth', 'maxQuestions', 'wrongQuestions']);
+const REPORT_ONLY = new Set(['ms', 'silentSwitches', 'items', 'regions', 'scenes', 'confidentRate', 'outlineIoU', 'boundaryF', 'shapeFits', 'shapeFitsTrue', 'ambFixed', 'ambBroken', 'ambConfirmed', 'confMoved', 'consistencyMs']);
 
 export type MetricRecord = Record<string, number>;
 

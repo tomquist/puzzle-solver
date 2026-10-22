@@ -13,10 +13,12 @@ to be analysed. Everything runs locally in the browser – no server, no upload.
 2. **Find the picture** – `detectBox` proposes the quadrilateral of the picture on the box (several
    candidates: whole lid, picture inside a printed frame). The user can drag the four corners (with
    a magnifier) and cycle candidates.
-3. **Details** – name, number of pieces, physical width × height (cm/in). The physical size fixes
-   the aspect ratio for perspective correction and, together with the piece count, determines the
-   grid (`estimateGrid`, e.g. 1000 pieces at 70×50 cm → 38 × 27). The grid can be overridden. Cut
-   style: grid (default) or irregular.
+3. **Details** – name, number of pieces (from the box, about, or unknown), physical width ×
+   height (cm/in). The physical size fixes the aspect ratio for perspective correction and,
+   together with the piece count, determines the grid (`estimateGrid`, e.g. 1000 pieces at 70×50 cm
+   → 38 × 27). The grid can be overridden. Without a count the grid is estimated from the picture's
+   shape and a typical 1000 pieces and labelled as such; the scans measure it (§5 *Grid belief*).
+   Cut style: grid (default) or irregular.
 4. **Rectify** – the picture is perspective-corrected into the *reference image*.
 5. **Optional close-ups** – if the reference has too few pixels per piece (quality check
    `reference_low_resolution`), the user can add close-up photos of parts of the box. Each is
@@ -88,6 +90,13 @@ to be analysed. Everything runs locally in the browser – no server, no upload.
    are shaded on the reference and de-prioritised in later matches.
 5. **Quality feedback** – blurry, dark, glare, low contrast, too small, touching pieces, pieces cut
    off by the photo border … each with an actionable hint.
+6. **The grid corrects itself** – every scan measures the picture's cell size; when the scans
+   clearly measure another grid than the puzzle's, a small card asks once ("Your pieces measure
+   45 × 34, not 44 × 34" – *Use* / *Keep*), on the scan result and the workspace. *Use* switches,
+   confirms the grid and carries the scans' cells and the placed pieces over (re-analysing in the
+   background what cannot be carried exactly); *Keep* is remembered. An estimated grid follows the
+   measurement without asking. Settings shows the grid's status (confirmed / measured from N scans
+   / estimated).
 
 ### 1.3 Additions beyond the original brief
 - Export/import puzzles as a single file (backup, move to another device).
@@ -113,6 +122,8 @@ src/
     features/         keypoints, descriptors, matching, RANSAC           [stitch]
   pipeline/           Higher-level algorithms built on cv/ (pure TS, worker-safe)
     grid.ts           piece count + aspect → rows × cols                 [storage]
+    gridBelief.ts     scans' cell-size evidence → odds between grids, decisions
+    remap.ts          scans' cells and placed progress carried to another grid
     box/              box/picture quad detection, reference quality      [box]
     stitch/           close-up registration + high-res compositing       [stitch]
     pieces/           segmentation, piece shape analysis, photo quality  [pieces]
@@ -305,6 +316,57 @@ badge, the last pieces of a puzzle). A region whose size says it is not what it 
 single piece far from one piece's area (merged pieces, table attached, half a piece), or a small
 patch of touching loose pieces – is placed at most ambiguously, also when its neighbours would
 place it (groups).
+
+**Grid belief** – the grid comes from the piece count, and boxes round ("1500" for 45 × 34) or the
+count is unknown; one column off puts the right half of the picture a cell off. Each scan measures
+the reference's cell size (`match/cellSize.ts`): for a confidently placed patch, the print scale
+(`measureScale`: the raw score at its placement swept over ±12 % in 1 % steps, then the picture's x
+against y ±6 % – a slightly oblique photo foreshortens one axis) times its seam pitch per axis
+(`measureLatticePitch`: every internal seam located on its own and a weighted line through them; the
+lattice is first refitted from priors 0.8–1.25× along each axis, so a grid far off does not echo
+itself); for the scan's single pieces together, body sides × scale (weak: corner detection, outlines
+with a rim). Every source also lists the reference positions of the cell centres it saw (piece
+centres; a patch's lattice cells along fitted axes, used only where its seam pitch was measured
+too). When the measured cell is more than 6 %
+off the grid's, a few regions are matched again with cells of the measured size (`withCells`, the
+same pyramid) – a grid from a wrong count would otherwise only be corrected in steps – and with no
+count at all, a ladder of cell sizes (0.64–10×) is tried – on the first three scans at most, until
+two have measured a size (`probeModeFor`). None of this delays the scan's result: the app's
+analysis leaves it for after the result (`deferGridEvidence`; the result carries a `pending`
+placeholder the belief ignores), and `ui/lib/gridMeasurements.ts` runs it a step at a time on the
+worker (`gridFollowUpStep`; generators, `pipeline/steps.ts`, down to a few scores of a scale sweep
+or one candidate's refinement inside a region's match – about a second at most on a desktop),
+starting a second after the result and pausing while a newer scan is analysed, then saves the
+evidence into the scan (a measurement a reload cut short leaves the scan counting by its
+positions). A region re-matched at other scales reuses its photo source (`photoSourceOf`: seconds
+for a large patch). Saving the evidence does not
+reload an open result (screens showing a scan follow `cellsVersion`, bumped only when a grid change
+remaps or re-analyses scans). A scan's analysis and a grid change share the puzzle's lane
+(`ui/lib/puzzleLane.ts`): a change waits for the scan being analysed and carries it over, and a
+scan asked for during a change is analysed with the new grid; a scan started while the picture is
+still being read from storage waits for it.
+`gridBelief.ts` keeps one evidence entry
+per scan id in the puzzle (`PuzzleRecord.gridState`; re-analysis replaces, deletion removes) and
+scores whole grids: per axis, sizes (Student-t, ν = 4, floors 0.8 % patch / 3 % pieces) and
+positions (where cell centres sit in a grid's cells: wrapped normal + 30 % outliers, a source
+counting as at most two positions) are integrated over shared nuisances of the puzzle – the cells'
+overall scale against L/N (σ 0.5 %; this is what tells neighbouring grids apart, through positions
+far from the edge), a size bias (σ 1.5 %: real blocks of one box measured −1…−2 % in width while
+their positions sit where 45 columns put them) and an offset (σ 0.15 cells) – so evidence saturates
+instead of piling up; plus a robust prior from the stated count (80 % within 3.5 % / 15 % for
+"about", else uniform within ±0.8 in ln) and a weak squareness prior (Laplace 0.25 in ln aspect).
+Decisions (`decideGrid`, `GRID_RULES`): ask when an alternative has ≥ 20:1 posterior odds over the
+current grid and over every other alternative, from ≥ 2 sources in ≥ 2 scans (one photo's sources
+share its geometry), with the cell size measured from the evidence alone (no prior) closer to it
+by more than its spread; a confirmed grid or a declined alternative needs ≥ 1000:1 from 3 sources
+in 3 scans; the current grid becomes confirmed silently at ≥ 100:1 over the runner-up from 3
+sources; an estimated grid switches silently at ≥ 20:1 (one scan is enough) and is a measured
+grid from then on, never back to a grid it left below the high bar. The question is stored with the puzzle until answered. A change re-derives every scan's cells
+from their stored continuous placements (`remap.ts`: pieces by position, patches by their lattice in
+reference px, `RegionMatch.lattice`; then fits and groups) and moves placed cells with the pieces
+they came from; scans analysed more than 8 % away in cell size, or saved before patches stored their
+lattice, are re-analysed in the background. `scripts/grid-replay.ts` replays real scans
+(TESTING.md).
 
 **Fits** – two regions fit when their best placements are adjacent cells with consistent
 rotations (location), and/or when complementary sides (tab ↔ blank) have matching profiles and

@@ -14,9 +14,13 @@ import type {
   CloseupRegistration,
   CutStyle,
   FrameQuality,
+  GridEvidence,
   GridSpec,
+  Id,
+  ProgressRecord,
   ScanResult,
 } from '../model/types';
+import type { GridContext, GridDecision, PooledMeasure } from '../pipeline/gridBelief';
 
 export interface ProgressEvent {
   /** Pipeline stage, e.g. 'segment', 'shape', 'match', 'fits'. */
@@ -33,13 +37,58 @@ export interface AnalyzeOptions {
   placedCells?: CellRef[];
   /** Longest side the photo is reduced to before analysis (default 2400). */
   maxSide?: number;
+  /**
+   * Measure the cell size at the scan's own scale when far from the grid's: 'near' while the grid
+   * is not confirmed, 'wide' (also a ladder of scales when nothing matched) while it is a guess.
+   */
+  gridProbe?: 'near' | 'wide';
+}
+
+/** The grid belief's verdict (pipeline/gridBelief.ts), computed in the worker. */
+export interface GridVerdict {
+  decision: GridDecision;
+  /** Most probable grid and its odds over the current one. */
+  best: GridSpec;
+  odds: number;
+  /** Measured cell width / height (ln reference px), from the evidence alone. */
+  w?: PooledMeasure;
+  h?: PooledMeasure;
+  /** Scans with evidence. */
+  scans: number;
+}
+
+/** Scans and progress carried over to another grid (pipeline/remap.ts). */
+export interface RemapRequest {
+  scans: { id: Id; result: ScanResult }[];
+  progress: ProgressRecord;
+  from: GridSpec;
+  to: GridSpec;
+  ref: { width: number; height: number };
+}
+
+export interface RemapResponse {
+  /** `exact` false: a patch had no stored lattice (older scan) – worth re-analysing. */
+  scans: { id: Id; result: ScanResult; exact: boolean }[];
+  progress: ProgressRecord;
+  /** Placed cells that moved, and those that landed on a cell already placed (dropped). */
+  moved: number;
+  dropped: number;
 }
 
 export interface AnalyzeResponse {
   result: ScanResult;
   /** The exact image that was analysed (downscaled photo); store it with the scan. */
   analysedImage: RGBAImage;
+  /**
+   * The cell-size measurement left for after the result (`result.gridEvidence` is a `pending`
+   * placeholder): run it with {@link PipelineApi.gridFollowUpStep} until done and store its
+   * evidence in the scan.
+   */
+  gridFollowUp?: string;
 }
+
+/** One step of a deferred grid probe; when done, the evidence to store (undefined: it was dropped). */
+export type GridFollowUpStep = { done: false } | { done: true; evidence?: GridEvidence };
 
 export interface ComposeOptions {
   /** Output scale relative to the current reference (e.g. 2 = twice the resolution). */
@@ -85,4 +134,17 @@ export interface PipelineApi {
 
   /** Fast quality feedback for a (downscaled) live camera frame. */
   assessFrame(frame: RGBAImage): Promise<FrameQuality>;
+
+  /** Weigh the scans' evidence about the grid and decide what to do (pure, but heavy enough for the worker). */
+  assessGrid(ctx: GridContext): Promise<GridVerdict>;
+
+  /** Carry scans' cells and the placed progress over to another grid without re-analysing photos. */
+  remapGrid(req: RemapRequest): Promise<RemapResponse>;
+
+  /**
+   * Run one step of a scan's deferred grid probe (AnalyzeResponse.gridFollowUp): a re-match or
+   * measurement of a few regions, so a new scan waits at most that long. The worker keeps the
+   * last few; an older one is dropped (done, no evidence).
+   */
+  gridFollowUpStep(token: string): Promise<GridFollowUpStep>;
 }

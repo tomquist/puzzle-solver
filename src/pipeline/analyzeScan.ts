@@ -6,7 +6,7 @@
 import type { RGBAImage } from '../cv/image';
 import { convexHull, polygonArea } from '../cv/polygon';
 import { limitSize } from '../cv/resize';
-import type { CellRef, RegionMatch, ScanResult } from '../model/types';
+import { GRID_EVIDENCE_VERSION, type CellRef, type GridEvidence, type RegionMatch, type ScanResult } from '../model/types';
 import type { ProgressCallback } from '../worker/api';
 import {
   buildGroups,
@@ -27,7 +27,9 @@ import {
   type ReferenceIndex,
   type ShapeMetric,
 } from './match';
+import { measureGridEvidence, measureGridEvidenceSteps, probeGridEvidence, probeGridSteps, probeWanted, type CellSizeSample, type GridProbe, type MeasuredEvidence } from './match/cellSize';
 import { resolveRegionIssues, segmentPieces, type SegmentOptions } from './pieces';
+import type { Steps } from './steps';
 
 /** How the fit hints compare piece sides (see `FitOptions`). */
 export interface SideComparison {
@@ -65,6 +67,20 @@ export interface AnalyzeScanOptions {
    * hints and groups are derived (match/consistency.ts; default {@link DEFAULT_CONSISTENCY}).
    */
   consistency?: boolean;
+  /**
+   * Measure the cell size at the scale the scan shows when it is far from the grid's (match/
+   * cellSize.ts `probeGridEvidence`): re-matches a few regions, so only while the grid is not
+   * confirmed; 'wide' while it is only a guess). Off by default (the placements do not change, only
+   * `result.gridEvidence`).
+   */
+  gridProbe?: GridProbe;
+  /**
+   * Leave the cell-size measurement (and the probe) for after the result: `gridFollowUp` runs it a
+   * step at a time once the result is shown (the app: it re-matches patches at fine scales, up to a
+   * second per scan on a desktop, and the wide probe's ladder many regions), and
+   * `result.gridEvidence` is an empty placeholder marked `pending` until it is replaced.
+   */
+  deferGridEvidence?: boolean;
 }
 
 /**
@@ -82,6 +98,14 @@ export interface AnalyzeScanOutput {
   analysedImage: RGBAImage;
   /** What the consistency pass did, when it ran. */
   consistency?: ConsistencyReport;
+  /** Per-region cell-size measurements behind `result.gridEvidence` (calibration tools). */
+  cellSizes?: CellSizeSample[];
+  /**
+   * With `deferGridEvidence`: the cell-size measurement and probe, to run to completion (each
+   * `next()` one part of a region's measurement or one re-match of a few regions); its value is the
+   * evidence to store in place of the placeholder `result.gridEvidence`.
+   */
+  gridFollowUp?: Steps<GridEvidence>;
 }
 
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -186,6 +210,32 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
   });
   const fits = findFits(regions, matches, index.grid, fitOptions);
   timings.fits = now() - t;
+  // What the scan says about the cell size, whatever the grid (match/cellSize.ts): here, or after
+  // the result (deferGridEvidence).
+  t = now();
+  const confidentCount = matches.filter((m) => m.status === 'confident').length;
+  const mode = opts.gridProbe;
+  let measured: MeasuredEvidence | undefined;
+  let gridFollowUp: Steps<GridEvidence> | undefined;
+  if (opts.deferGridEvidence) {
+    gridFollowUp = (function* () {
+      const plain = yield* measureGridEvidenceSteps(index, inputs, details);
+      if (!mode || !probeWanted(index.cellW, index.cellH, plain.evidence, confidentCount, mode)) return plain.evidence;
+      const probed = yield* probeGridSteps(index, inputs, plain.evidence, confidentCount, mode);
+      return (probed ?? plain).evidence;
+    })();
+  } else {
+    measured = measureGridEvidence(index, inputs, details);
+    timings.cellSizeMeasure = now() - t;
+    if (mode && probeWanted(index.cellW, index.cellH, measured.evidence, confidentCount, mode)) {
+      const probed = probeGridEvidence(index, inputs, measured.evidence, confidentCount, mode);
+      if (probed) {
+        measured = probed;
+        timings.cellSizeProbes = probed.tried;
+      }
+    }
+  }
+  timings.cellSize = now() - t;
   // A region placed confidently was evidently segmented well enough: no low-contrast warning for it.
   resolveRegionIssues(seg, new Set(matches.filter((m) => m.status === 'confident').map((m) => m.regionId)), ['low_contrast']);
   timings.total = now() - tStart;
@@ -201,8 +251,11 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
       groups,
       quality: seg.quality,
       timings,
+      gridEvidence: measured?.evidence ?? { version: GRID_EVIDENCE_VERSION, grid: { ...index.grid }, refWidth: index.width, refHeight: index.height, sources: [], pending: true },
     },
     analysedImage: image,
     consistency,
+    cellSizes: measured?.samples,
+    gridFollowUp,
   };
 }

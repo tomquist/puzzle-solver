@@ -11,12 +11,13 @@
  * when reporting row/col.
  */
 import { findSimilarity, type Point } from '../../cv/geometry';
-import { cellKey, type CellRef, type MatchStatus, type Placement, type RegionMatch, type SideKind } from '../../model/types';
+import { cellKey, type CellRef, type MatchStatus, type Placement, type RefLattice, type RegionMatch, type SideKind } from '../../model/types';
 import { buildTemplate, colourDistanceMap, DEFAULT_SCORE, makePhotoSource, scoreAt, scoreMap, type ColorCorrection, type Mapping, type PhotoSource, type ScoreParams, type Template } from './template';
 import { estimatePatchPitch } from '../pieces/patchPitch';
 import { fitPatchLattice, latticeCells, latticePoint, type LatticeCell, type PatchLattice } from '../pieces/patchLattice';
 import { NOT_ONE_PIECE_CAP, onePieceArea } from './groups';
 import type { MatchInput, MatchOptions, RefLevel, ReferenceIndex } from './types';
+import { runSteps, type Steps } from '../steps';
 
 /** A similarity hypothesis to search. */
 interface Hypothesis {
@@ -323,7 +324,7 @@ class TemplateCache {
   private readonly cache = new Map<string, Template | null>();
   constructor(private readonly src: PhotoSource) {}
   get(level: RefLevel, li: number, m: Mapping): Template | null {
-    const key = `${li}|${m.pivot.x.toFixed(3)}|${m.pivot.y.toFixed(3)}|${m.phi.toFixed(5)}|${m.s.toFixed(6)}`;
+    const key = `${li}|${m.pivot.x.toFixed(3)}|${m.pivot.y.toFixed(3)}|${m.phi.toFixed(5)}|${m.s.toFixed(6)}${m.ax === undefined && m.ay === undefined ? '' : `|${(m.ax ?? 1).toFixed(5)}|${(m.ay ?? 1).toFixed(5)}`}`;
     let t = this.cache.get(key);
     if (t === undefined) {
       t = buildTemplate(this.src, m, level, 0.6, level.ppc < 6 ? 5 : 12);
@@ -547,6 +548,8 @@ export interface MatchDetail {
   features?: MatchFeatures;
   /** Score parameters of the run (with the colour hinge for featureless regions), for {@link scorePlacement}. */
   params?: ScoreParams;
+  /** Patches: the seam-fitted cell lattice in the photo crop at the best placement. */
+  lattice?: PatchLattice;
 }
 
 /** Template std with and without a per-channel linear ramp (plane fit over template coordinates). */
@@ -596,6 +599,16 @@ export function matchRegion(index: ReferenceIndex, input: MatchInput, opts: Matc
 
 /** {@link matchRegion} with internal options and the winning similarity. */
 export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, opts: MatchOptions = {}, ctx: MatchContext = {}): MatchDetail {
+  return runSteps(matchRegionDetailedSteps(index, input, opts, ctx));
+}
+
+/**
+ * {@link matchRegionDetailed} in steps (pipeline/steps.ts): it yields after the set-up, each
+ * rotation's coarse search and each candidate's refinement, so a background re-match of a large
+ * patch (the grid probe) can let a new scan go first within a fraction of a second rather than
+ * after the whole match.
+ */
+export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInput, opts: MatchOptions = {}, ctx: MatchContext = {}): Steps<MatchDetail> {
   const maxCandidates = opts.maxCandidates ?? 5;
   const isPatch = input.kind === 'patch';
   let sp = ctx.score ?? DEFAULT_SCORE;
@@ -607,10 +620,11 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   const erode = Math.max(2, Math.round(roughBody * 0.045));
   // Assembled patches: ignore the seams and gaps between their pieces (not in the printed picture).
   const seams = isPatch ? { radius: Math.max(2, Math.round(roughBody * 0.035)), angleDeg: input.orientationDeg, body: roughBody } : undefined;
-  const src = makePhotoSource(input.image, input.mask, input.origin, erode, index.channelWeights, ctx.correction, seams);
+  const src = photoSourceOf(input, erode, index.channelWeights, ctx.correction, seams);
   if (src.area < 50) return empty;
   const { hyps } = makeHypotheses(index, input, src, pitch);
   if (hyps.length === 0) return empty;
+  yield;
 
   const cache = new TemplateCache(src);
   const L = index.levels.length;
@@ -627,7 +641,10 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
     if (flatness > 0.01) sp = { ...sp, hinge: FLAT_COLOUR_HINGE * flatness };
   }
   const coarse: Candidate[] = [];
-  for (const h of hyps) coarseSearch(index, ci, h, cache, sp, coarse);
+  for (const h of hyps) {
+    coarseSearch(index, ci, h, cache, sp, coarse);
+    yield;
+  }
   if (coarse.length === 0) return empty;
   const nKeep = isPatch ? 24 : 30;
   let cands = suppress(coarse, 0.6 * cell, nKeep);
@@ -639,14 +656,19 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
     for (const c of cands) {
       const rc = refinePosition(index, li, c, cache, r, sp);
       if (rc) next.push(rc);
+      yield;
     }
     cands = suppress(next, 0.3 * cell, nKeep);
   }
+  if (cands.length === 0) return empty;
 
   // 3. Angle / scale refinement of the best few on the finest level.
   const nFine = Math.min(cands.length, 6);
   cands.sort((a, b) => b.score - a.score);
-  for (let i = 0; i < nFine; i++) cands[i] = refineAngleScale(index, L - 1, cands[i], cache, sp);
+  for (let i = 0; i < nFine; i++) {
+    cands[i] = refineAngleScale(index, L - 1, cands[i], cache, sp);
+    yield;
+  }
 
   // 4. Placed-cell penalty and ranking.
   const placed = new Set((opts.placedCells ?? []).map(cellKey));
@@ -662,6 +684,7 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   const margin = second ? best.score - second.score : 0.3;
   const features = informationFeatures(index, cache, Math.min(ci + 1, L - 1), best, cands, distinct, sp, input, !!ctx.correction);
   features.margin = margin;
+  yield;
 
   // Distinct places (one per cell, well apart; best rotation each) for the candidate list. The
   // likelihood shares of all places (listed or not) give the alternatives' confidences.
@@ -701,12 +724,14 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   });
 
   let coveredCells: CellRef[] | undefined;
+  let lattice: PatchLattice | undefined;
   if (isPatch) {
     // Patches report the top-most, then left-most covered cell as row/col.
     // One lattice for all candidates: it is the photo's own geometry, only its place on the grid differs.
-    const lattice = patchLatticeOf(index, input, best);
+    lattice = patchLatticeOf(index, input, best);
+    const lat = lattice;
     chosen.forEach((c, i) => {
-      const cells = patchCoveredCells(index, input, c, lattice);
+      const cells = patchCoveredCells(index, input, c, lat);
       if (i === 0) coveredCells = cells;
       if (cells.length > 0) {
         const tl = cells.reduce((a, b) => (b.row < a.row || (b.row === a.row && b.col < a.col) ? b : a));
@@ -719,7 +744,47 @@ export function matchRegionDetailed(index: ReferenceIndex, input: MatchInput, op
   // region's score is noise, so it stays a (low-confidence) ambiguous match with alternatives.
   const status: MatchStatus =
     best.score < UNMATCHED_SCORE && features.detail >= TEXTURE_DETAIL ? 'unmatched' : conf >= CONFIDENT_THRESHOLD ? 'confident' : 'ambiguous';
-  return { match: { regionId: input.regionId, candidates, coveredCells, status }, best: { map: best.map, ref: best.ref }, src, features, params: sp };
+  const match: RegionMatch = { regionId: input.regionId, candidates, coveredCells, status };
+  if (lattice) match.lattice = refLattice(input, best, lattice);
+  return { match, best: { map: best.map, ref: best.ref }, src, features, params: sp, lattice };
+}
+
+/**
+ * The region's photo source (template pyramid). It does not depend on the grid, so a region matched
+ * again at other cell sizes (the grid probe: up to a dozen times) reuses it – for a large patch it
+ * takes seconds. Not kept with a colour correction (one per scan, second pass only).
+ */
+function photoSourceOf(input: MatchInput, erode: number, weights: readonly number[], correction: ColorCorrection | undefined, seams: { radius: number; angleDeg: number; body: number } | undefined): PhotoSource {
+  if (correction) return makePhotoSource(input.image, input.mask, input.origin, erode, weights, correction, seams);
+  const key = `${erode}|${weights.join(',')}|${seams ? `${seams.radius},${seams.angleDeg},${seams.body}` : ''}`;
+  let byKey = photoSources.get(input);
+  if (!byKey) photoSources.set(input, (byKey = new Map()));
+  let src = byKey.get(key);
+  if (!src) byKey.set(key, (src = makePhotoSource(input.image, input.mask, input.origin, erode, weights, undefined, seams)));
+  return src;
+}
+const photoSources = new WeakMap<MatchInput, Map<string, PhotoSource>>();
+
+/** A patch's photo lattice carried into the reference through placement `c` (see `RefLattice`). */
+export function refLattice(input: MatchInput, c: Pick<Candidate, 'map' | 'ref'>, lat: PatchLattice): RefLattice {
+  const { pivot, phi, s } = c.map;
+  const cos = Math.cos(phi), sin = Math.sin(phi);
+  const toRef = (p: Point): Point => {
+    const dx = (p.x + input.origin.x - pivot.x) * s, dy = (p.y + input.origin.y - pivot.y) * s;
+    return { x: c.ref.x + cos * dx - sin * dy, y: c.ref.y + sin * dx + cos * dy };
+  };
+  const o = toRef(latticePoint(lat, 0, 0)), ea = toRef(latticePoint(lat, 1, 0)), eb = toRef(latticePoint(lat, 0, 1));
+  const r3 = (v: number) => Math.round(v * 1000) / 1000;
+  const cells: number[] = [];
+  for (const q of latticeCells(lat, input.mask, input.table)) cells.push(q.i, q.j, Math.round(q.coverage * 100) / 100);
+  return {
+    at: { x: c.ref.x, y: c.ref.y },
+    rotationDeg: norm360(phi * DEG) % 360,
+    origin: { x: r3(o.x), y: r3(o.y) },
+    a: { x: r3(ea.x - o.x), y: r3(ea.y - o.y) },
+    b: { x: r3(eb.x - o.x), y: r3(eb.y - o.y) },
+    cells,
+  };
 }
 
 /**
@@ -753,6 +818,101 @@ export function scorePlacement(index: ReferenceIndex, input: MatchInput, detail:
   const placed = new Set((opts.placedCells ?? []).map(cellKey));
   if (placed.has(cellKey(cell))) best.score -= PLACED_PENALTY;
   return { row: cell.row, col: cell.col, x: best.ref.x, y: best.ref.y, rotationDeg: norm360(best.map.phi * DEG) % 360, score: best.score, confidence: 0 };
+}
+
+/** Result of {@link measureScale}. */
+export interface ScaleMeasurement {
+  /** Reference px per photo px at the score peak (geometric mean of the two axes). */
+  s: number;
+  /** Reference px per photo px along the picture's x and y axes (equal to `s` unless `aspect` was measured). */
+  sx: number;
+  sy: number;
+  /** Raw score at the peak. */
+  peak: number;
+  /**
+   * Curvature of the raw score over ln(scale) at the peak (score units per ln², ≥ 0): how sharply
+   * the print pins the scale down.
+   */
+  curvature: number;
+  /** True when the peak lies at the end of the searched range (the scale is outside it). */
+  clipped: boolean;
+}
+
+/** Step (ln scale) and half-range of {@link measureScale}'s sweep, and of its aspect sweep. */
+const SCALE_STEP = 0.01;
+const SCALE_RANGE = 0.12;
+const ASPECT_RANGE = 0.06;
+
+/** Peak of sampled scores (step `step`, first sample at `x0`) with a parabola through the best three. */
+function sweepPeak(raws: number[], x0: number, step: number): { x: number; peak: number; curvature: number; clipped: boolean } | null {
+  let bi = -1;
+  for (let i = 0; i < raws.length; i++) if (raws[i] > -Infinity && (bi < 0 || raws[i] > raws[bi])) bi = i;
+  if (bi < 0) return null;
+  const clipped = bi === 0 || bi === raws.length - 1;
+  let off = 0, curvature = 0;
+  if (!clipped && raws[bi - 1] > -Infinity && raws[bi + 1] > -Infinity) {
+    const l = raws[bi - 1], r = raws[bi + 1], den = l - 2 * raws[bi] + r;
+    if (den < 0) off = Math.max(-0.5, Math.min(0.5, (0.5 * (l - r)) / den));
+    curvature = Math.max(0, -den) / (step * step);
+  }
+  return { x: x0 + (bi + off) * step, peak: raws[bi], curvature, clipped };
+}
+
+/**
+ * The scale (reference px per photo px) at which the region's print best matches its placement,
+ * measured finer than the matcher's own refinement (2.5 % steps, enough to place a piece but not
+ * to tell a 44- from a 45-column grid): the raw score at its best placement is swept over ±12 % of
+ * the scale in 1 % steps on the finest level, the position re-searched ±2 px at each, and a parabola
+ * through the best three gives the peak. The angle stays the placement's. With `aspect`, a second
+ * sweep (±6 %) stretches the picture's x axis against its y axis at that scale: a photo taken a
+ * little obliquely foreshortens one axis by a few per cent, which a large patch shows. Grid cells
+ * play no part: the scale is a property of the photo and the picture, so it measures the cell size
+ * whatever the grid (see `cellSize.ts`). `centre` (ln) shifts the sweep (default: the placement's
+ * scale).
+ */
+export function measureScale(index: ReferenceIndex, detail: MatchDetail, opts: { centre?: number; aspect?: boolean } = {}): ScaleMeasurement | null {
+  return runSteps(measureScaleSteps(index, detail, opts));
+}
+
+/** Scores of {@link measureScaleSteps}'s sweeps computed per step (a large patch: ~100 ms each on a desktop). */
+const SWEEP_PER_STEP = 4;
+
+/** {@link measureScale} in steps (pipeline/steps.ts): a few of its sweep's scores per step. */
+export function* measureScaleSteps(index: ReferenceIndex, detail: MatchDetail, opts: { centre?: number; aspect?: boolean } = {}): Steps<ScaleMeasurement | null> {
+  if (!detail.src || !detail.best) return null;
+  const sp = detail.params ?? DEFAULT_SCORE;
+  const cache = new TemplateCache(detail.src);
+  const li = index.levels.length - 1;
+  const base = detail.best.map;
+  const ref = detail.best.ref;
+  const c0 = opts.centre ?? Math.log(base.s);
+  const hyp: Hypothesis = { map: base, group: 0, sideWeight: 0 };
+  const scoreOf = (m: Mapping) => {
+    const c = refinePosition(index, li, { hyp, map: m, ref, raw: -Infinity, score: -Infinity, level: li }, cache, 2, sp, m);
+    return c ? c.raw : -Infinity;
+  };
+  const n = Math.round(SCALE_RANGE / SCALE_STEP);
+  const raws: number[] = [];
+  for (let k = -n; k <= n; k++) {
+    raws.push(scoreOf({ pivot: base.pivot, phi: base.phi, s: Math.exp(c0 + k * SCALE_STEP) }));
+    if (raws.length % SWEEP_PER_STEP === 0) yield;
+  }
+  const iso = sweepPeak(raws, c0 - n * SCALE_STEP, SCALE_STEP);
+  if (!iso) return null;
+  const s = Math.exp(iso.x);
+  let q = 0;
+  if (opts.aspect && !iso.clipped) {
+    const na = Math.round(ASPECT_RANGE / SCALE_STEP);
+    const ar: number[] = [];
+    for (let k = -na; k <= na; k++) {
+      const h = (k * SCALE_STEP) / 2;
+      ar.push(scoreOf({ pivot: base.pivot, phi: base.phi, s, ax: Math.exp(h), ay: Math.exp(-h) }));
+      if (ar.length % SWEEP_PER_STEP === 0) yield;
+    }
+    const asp = sweepPeak(ar, -na * SCALE_STEP, SCALE_STEP);
+    if (asp && !asp.clipped) q = asp.x;
+  }
+  return { s, sx: s * Math.exp(q / 2), sy: s * Math.exp(-q / 2), peak: iso.peak, curvature: iso.curvature, clipped: iso.clipped };
 }
 
 /** Information content of the best placement: texture detail, peak sharpness and plateau size. */

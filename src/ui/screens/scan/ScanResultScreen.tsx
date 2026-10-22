@@ -17,6 +17,7 @@ import { FitAnimation } from '../../components/FitAnimation';
 import { FullscreenView, leaveFullscreenView } from '../../components/FullscreenView';
 import { IconCheck, IconChevron, IconClose, IconEye, IconEyeOff, IconFullscreen, IconPuzzle, IconScan } from '../../components/Icons';
 import { ItemDetail } from '../../components/ItemDetail';
+import { GridJobStrip, GridSuggestionCard } from '../../components/GridSuggestion';
 import { QualityBanner } from '../../components/Quality';
 import { ReferenceOverlay, type RefMarker } from '../../components/ReferenceOverlay';
 import { itemTone, ScanOverlay, type OverlayItem } from '../../components/ScanOverlay';
@@ -63,8 +64,10 @@ const PLACING_HINT = 'placing-hint';
 
 export function ScanResultScreen({ scanId }: { scanId: string }) {
   const repo = useRepo();
-  const { puzzle } = usePuzzle();
-  const scan = useAsync(() => repo.getScan(scanId), [repo, scanId]);
+  const { puzzle, cellsVersion } = usePuzzle();
+  // Reloaded when a new grid re-derives the scans' cells (pipeline/remap.ts) – not when the scan's
+  // cell size is measured after it is shown (that would reset the screen under the user).
+  const scan = useAsync(() => repo.getScan(scanId), [repo, scanId, cellsVersion]);
   const back = href.puzzle(puzzle.id, 'scan');
 
   if (scan.loading && !scan.data) {
@@ -360,6 +363,8 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
       <>
         <TopBar title="Scan result" subtitle={formatDate(scan.createdAt)} back={href.puzzle(puzzle.id, 'scan')} />
         <main className="page stack" data-testid="scan-result">
+          <GridSuggestionCard />
+          <GridJobStrip />
           <QualityBanner report={result.quality} hideWhenClean />
           <EmptyState
             icon={<IconPuzzle size={32} />}
@@ -383,6 +388,8 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
     <>
       <TopBar title="Scan result" subtitle={subtitle} back={href.puzzle(puzzle.id, 'scan')} />
       <main className={`page wide stack with-action-bar${selected ? ' with-selection' : ''}`} data-testid="scan-result">
+        <GridSuggestionCard />
+        <GridJobStrip />
         <QualityBanner report={result.quality} selected={issue} onSelect={selectIssue} hideWhenClean />
 
         <div className="result-toolbar">

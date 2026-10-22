@@ -31,6 +31,9 @@ function createWorkerPipeline(): PipelineApi {
     analyzeScan: (puzzleId, photo, options, onProgress) =>
       remote.analyzeScan(puzzleId, transfer(photo), options, onProgress ? Comlink.proxy(onProgress) : undefined),
     assessFrame: (frame) => remote.assessFrame(transfer(frame)),
+    assessGrid: (ctx) => remote.assessGrid(ctx),
+    remapGrid: (req) => remote.remapGrid(req),
+    gridFollowUpStep: (token) => remote.gridFollowUpStep(token),
   };
 }
 
@@ -58,11 +61,17 @@ function selectedMode(): 'worker' | 'mock' | 'local' {
   return typeof Worker === 'undefined' ? 'local' : 'worker';
 }
 
+/** `?mockGrid=34x45` (rows × columns): the grid the mock pipeline's scans measure (e2e of the grid suggestion). */
+function mockGrid(): { rows: number; cols: number } | undefined {
+  const m = /^(\d+)x(\d+)$/.exec(new URLSearchParams(location.search).get('mockGrid') ?? '');
+  return m ? { rows: Number(m[1]), cols: Number(m[2]) } : undefined;
+}
+
 export function getPipeline(): PipelineApi {
   if (!instance) {
     const mode = selectedMode();
     instance =
-      mode === 'mock' ? lazyPipeline(async () => (await import('./mockPipeline')).createMockPipeline())
+      mode === 'mock' ? lazyPipeline(async () => (await import('./mockPipeline')).createMockPipeline({ measuredGrid: mockGrid() }))
       : mode === 'local' ? lazyPipeline(async () => (await import('./localPipeline')).createLocalPipeline())
       : createWorkerPipeline();
   }

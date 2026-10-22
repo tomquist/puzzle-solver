@@ -23,6 +23,12 @@ export interface PuzzleRepository {
   listScans(puzzleId: Id): Promise<ScanRecord[]>;
   getScan(id: Id): Promise<ScanRecord | undefined>;
   saveScan(scan: ScanRecord): Promise<void>;
+  /**
+   * Change a stored scan in one step (read and write in one transaction, so a change made
+   * meanwhile – the scan's cell size measured in the background, a grid change – is not lost).
+   * `change` returns the new record, or undefined to leave it. Resolves to what was written.
+   */
+  updateScan(id: Id, change: (scan: ScanRecord) => ScanRecord | undefined): Promise<ScanRecord | undefined>;
   /** Deletes the scan and its photo blob. */
   deleteScan(id: Id): Promise<void>;
 

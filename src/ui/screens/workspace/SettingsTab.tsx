@@ -1,7 +1,8 @@
-/** Settings tab: rename, piece count / grid / cut, export, storage, reset progress, delete. */
-import { useMemo, useState } from 'react';
-import type { CutStyle, GridSpec } from '../../../model/types';
+/** Settings tab: rename, piece count / grid (and what the scans measure) / cut, export, storage, reset progress, delete. */
+import { useEffect, useMemo, useState } from 'react';
+import type { CutStyle, GridSpec, PieceCountKind } from '../../../model/types';
 import { estimateGrid } from '../../../pipeline/grid';
+import { gridStateOf } from '../../../pipeline/gridBelief';
 import { downloadBlob } from '../../../platform/imageio';
 import { exportFileName } from '../../../storage';
 import { Banner, errorText } from '../../components/Feedback';
@@ -21,9 +22,10 @@ import { AppVersion } from '../../components/AppVersion';
 
 export function SettingsTab() {
   const { repo, persistent, persisted, requestPersist } = useRepository();
-  const { puzzle, savePuzzle, progress, saveProgress } = usePuzzle();
+  const { puzzle, savePuzzle, progress, saveProgress, grid: belief } = usePuzzle();
   const [name, setName] = useState(puzzle.name);
   const [pieces, setPieces] = useState(String(puzzle.pieceCount));
+  const [countKind, setCountKind] = useState<PieceCountKind>(puzzle.pieceCountKind ?? 'exact');
   const [grid, setGrid] = useState<GridSpec>(puzzle.grid);
   const [custom, setCustom] = useState({ rows: String(puzzle.grid.rows), cols: String(puzzle.grid.cols) });
   const [cut, setCut] = useState<CutStyle>(puzzle.cut);
@@ -32,14 +34,24 @@ export function SettingsTab() {
   const [exporting, setExporting] = useState(false);
   const usage = useAsync(() => repo.estimateUsage(), [repo]);
   const [prefs, updatePrefs] = usePrefs();
+  // The grid can change while this tab is open (an estimated grid measured by a scan): follow it.
+  useEffect(() => {
+    setGrid(puzzle.grid);
+    setCustom({ rows: String(puzzle.grid.rows), cols: String(puzzle.grid.cols) });
+  }, [puzzle.grid]);
 
   const aspect = puzzle.physicalSize ? puzzle.physicalSize.width / puzzle.physicalSize.height : puzzle.reference.width / puzzle.reference.height;
-  const pieceCount = parsePositive(pieces);
+  const pieceCount = countKind === 'unknown' ? puzzle.grid.rows * puzzle.grid.cols : parsePositive(pieces);
   const candidates = useMemo(() => (pieceCount ? estimateGrid(Math.round(pieceCount), aspect).candidates : []), [pieceCount, aspect]);
   const isCandidate = candidates.some((g) => g.rows === grid.rows && g.cols === grid.cols);
   const res = referenceResolution(puzzle.reference.width, puzzle.reference.height, grid);
   const dirty =
-    name.trim() !== puzzle.name || Math.round(pieceCount ?? 0) !== puzzle.pieceCount || grid.rows !== puzzle.grid.rows || grid.cols !== puzzle.grid.cols || cut !== puzzle.cut;
+    name.trim() !== puzzle.name ||
+    Math.round(pieceCount ?? 0) !== puzzle.pieceCount ||
+    countKind !== (puzzle.pieceCountKind ?? 'exact') ||
+    grid.rows !== puzzle.grid.rows ||
+    grid.cols !== puzzle.grid.cols ||
+    cut !== puzzle.cut;
   const gridChanged = grid.rows !== puzzle.grid.rows || grid.cols !== puzzle.grid.cols;
 
   const save = async () => {
@@ -48,7 +60,10 @@ export function SettingsTab() {
       return;
     }
     try {
-      await savePuzzle({ ...puzzle, name: name.trim() || puzzle.name, pieceCount: Math.round(pieceCount), grid, cut });
+      const changes = { name: name.trim() || puzzle.name, pieceCount: countKind === 'unknown' ? grid.rows * grid.cols : Math.round(pieceCount), pieceCountKind: countKind, cut };
+      // A new grid carries the scans' cells and the placed pieces over (useGridBelief).
+      if (gridChanged) await belief.setGrid(grid, changes);
+      else await savePuzzle({ ...puzzle, ...changes });
       setMessage({ tone: 'ok', text: 'Saved.' });
     } catch (e) {
       setMessage({ tone: 'error', text: errorText(e, 'Could not save.') });
@@ -80,10 +95,23 @@ export function SettingsTab() {
           <span className="field-label">Name</span>
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
         </label>
-        <label className="field">
-          <span className="field-label">Number of pieces</span>
-          <input type="number" inputMode="numeric" min={4} value={pieces} onChange={(e) => setPieces(e.target.value)} />
-        </label>
+        <div className="field">
+          <label className="field-label" htmlFor="settings-pieces">
+            Number of pieces
+          </label>
+          <Segmented
+            label="How sure is the number of pieces"
+            size="sm"
+            value={countKind}
+            options={[
+              { value: 'exact', label: 'From the box' },
+              { value: 'about', label: 'About' },
+              { value: 'unknown', label: 'I don’t know' },
+            ]}
+            onChange={setCountKind}
+          />
+          {countKind !== 'unknown' && <input id="settings-pieces" type="number" inputMode="numeric" min={4} value={pieces} onChange={(e) => setPieces(e.target.value)} />}
+        </div>
         <fieldset className="field">
           <legend className="field-label">Grid (columns × rows)</legend>
           <div className="chips">
@@ -133,13 +161,14 @@ export function SettingsTab() {
           <span className="field-help">
             {res.pxPerCell} px per piece in the reference{res.level === 'low' ? ' – low; matching may be unreliable.' : '.'}
           </span>
+          <GridStatus />
         </fieldset>
         <div className="field">
           <span className="field-label">Cut style</span>
           <Segmented label="Cut style" value={cut} options={[{ value: 'grid', label: 'Classic grid' }, { value: 'irregular', label: 'Irregular' }]} onChange={setCut} />
         </div>
         {gridChanged && placedCount(progress, puzzle.grid) > 0 && (
-          <Banner tone="warning">Placed pieces are stored by row and column. With a different grid they may no longer line up.</Banner>
+          <Banner tone="info">Placed pieces and your scans move to the new grid with their positions.</Banner>
         )}
         <div className="row end">
           <button className="btn btn-primary" disabled={!dirty} onClick={() => void save()}>
@@ -253,5 +282,36 @@ export function SettingsTab() {
         </ConfirmSheet>
       )}
     </div>
+  );
+}
+
+/** Where the grid comes from and what the scans say about it. */
+function GridStatus() {
+  const { puzzle, grid } = usePuzzle();
+  const st = gridStateOf(puzzle);
+  const measured = Object.values(st.scans).filter((e) => e.sources.length > 0).length;
+  const scans = (n: number) => (n === 1 ? '1 scan' : `${n} scans`);
+  const fmt = (g: GridSpec) => `${g.cols} × ${g.rows}`;
+  let kind: 'confirmed' | 'measured' | 'estimated' | 'count';
+  let text: string;
+  if (st.status === 'confirmed') {
+    kind = 'confirmed';
+    text = measured > 0 ? `Confirmed – your ${scans(measured)} agree with ${fmt(puzzle.grid)}.` : `Confirmed.`;
+  } else if (st.status === 'estimated') {
+    kind = 'estimated';
+    text = 'Estimated – will be measured from your first scans.';
+  } else if (measured > 0) {
+    kind = 'measured';
+    const v = grid.verdict;
+    text = v && (v.best.rows !== puzzle.grid.rows || v.best.cols !== puzzle.grid.cols) ? `Measured from ${scans(measured)} – they lean towards ${fmt(v.best)}, not sure yet.` : `Measured from ${scans(measured)} – they agree so far.`;
+  } else {
+    kind = 'count';
+    text = 'From the piece count – your scans will check it.';
+  }
+  return (
+    <span className="grid-status" data-testid="grid-status" data-status={st.status}>
+      <span className={`grid-status-dot ${kind}`} aria-hidden="true" />
+      <span>{text}</span>
+    </span>
   );
 }

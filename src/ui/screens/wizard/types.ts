@@ -1,6 +1,6 @@
 import type { Quad } from '../../../cv/geometry';
 import type { RGBAImage } from '../../../cv/image';
-import type { CloseupRegistration, CutStyle, GridSpec, PhysicalSize } from '../../../model/types';
+import type { CloseupRegistration, CutStyle, GridSpec, GridStatus, PhysicalSize, PieceCountKind } from '../../../model/types';
 import { createObjectUrl, revokeObjectUrl, rgbaToBlob } from '../../../platform/imageio';
 import { Pixels } from '../../lib/pixels';
 
@@ -36,8 +36,11 @@ export interface Closeup {
 export interface PuzzleDetails {
   name: string;
   pieceCount: number;
+  pieceCountKind: PieceCountKind;
   physicalSize?: PhysicalSize;
   grid: GridSpec;
+  /** 'estimated' when the grid is a guess (no piece count), else 'unconfirmed'. */
+  gridStatus: GridStatus;
   cut: CutStyle;
 }
 
