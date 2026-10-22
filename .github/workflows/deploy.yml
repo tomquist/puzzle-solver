@@ -77,6 +77,10 @@ jobs:
     name: Browser end-to-end tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Browsers and their system libraries come with the image (keep its version equal to
+    # @playwright/test): `playwright install --with-deps` hung on a slow Ubuntu mirror.
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.1-noble
     steps:
       - uses: actions/checkout@v4
 
@@ -87,9 +91,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Install browsers (Chromium + WebKit for Mobile Safari)
-        run: npx playwright install --with-deps chromium webkit
 
       - name: Run Playwright tests
         run: npm run test:e2e
