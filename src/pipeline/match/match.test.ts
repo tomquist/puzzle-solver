@@ -8,7 +8,7 @@ import type { CellRef, RegionMatch } from '../../model/types';
 import { DEBUG_IMAGES, loadTestAsset, savePng } from '../../testing/nodeImageIO';
 import { generateJigsaw, perturbReference, renderPiecesPhoto, Rng, type JigsawCut, type PieceTruth } from '../../testing/synth';
 import { matchRegionsDetailed } from './colorCorrection';
-import { capForBorder, capForSize, CONFIDENT_THRESHOLD, matchConfidence, matchRegionDetailed, outlineFactor, patchBodySize, PLACED_PENALTY, scorePlacement, uncertainReasonOf, type MatchDetail } from './matchRegion';
+import { capForBorder, capForSize, CONFIDENT_THRESHOLD, MARK_CONFLICT_CAP, matchConfidence, matchRegionDetailed, outlineFactor, patchBodySize, PLACED_PENALTY, scorePlacement, uncertainReasonOf, type MatchDetail } from './matchRegion';
 import { buildReferenceIndex, cellAt, matchRegion, matchRegions, type MatchInput, type ReferenceIndex } from './index';
 import { accuracy, angleError, inputFromTruth, renderScenario, type Accuracy } from './testkit';
 
@@ -277,6 +277,8 @@ describe('matchRegion — Starry Night 20×16 (320 pieces)', () => {
     expect(right(marked)).toBeGreaterThanOrEqual(right(plain));
     expect(confidentRight(marked)).toBeGreaterThanOrEqual(confidentRight(plain) - 1);
     for (const m of marked) if (m.status === 'confident') expect(m.placedConflict).toBeDefined();
+    // A piece the marks moved away from the photo's own best place (a marked cell) is never confident.
+    for (const m of marked) if (m.placedConflict && (m.candidates[0].row !== m.placedConflict.row || m.candidates[0].col !== m.placedConflict.col)) expect(m.candidates[0].confidence).toBeLessThanOrEqual(MARK_CONFLICT_CAP);
     // A conflict names a marked cell the photo prefers, whether or not the marks moved the piece.
     for (const m of marked) if (m.placedConflict) expect([...own, ...others].some((c) => c.row === m.placedConflict!.row && c.col === m.placedConflict!.col)).toBe(true);
   });

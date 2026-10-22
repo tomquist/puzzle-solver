@@ -15,8 +15,10 @@
  * on, so the shortlists keep free cells, but the best few places by the photo alone stay in the
  * shortlists too. When the photo alone places the region confidently in a marked cell, the photo
  * wins. The marks reorder the places, but lift a confidence by at most {@link PLACED_GAIN} over the
- * photo's own. Whenever the photo's own best place is a marked cell, the match names it in
- * `placedConflict` (a wrong mark, or a piece that came off the board).
+ * photo's own, and a single piece whose place the marks decided (the photo rates a marked cell
+ * within {@link MARK_TIE} of it) stays ambiguous ({@link MARK_CONFLICT_CAP}). Whenever the photo's
+ * own best place is a marked cell, the match names it in `placedConflict` (a wrong mark, or a piece
+ * that came off the board).
  */
 import { findSimilarity, type Point } from '../../cv/geometry';
 import { cellKey, type CellRef, type MatchStatus, type Placement, type PlacedConflict, type RefLattice, type RegionMatch, type SideKind, type UncertainReason } from '../../model/types';
@@ -82,6 +84,20 @@ const PHOTO_KEEP = 3;
  * photo's support.
  */
 export const PLACED_GAIN = 0.2;
+/**
+ * Most confidence of a single piece whose placement the marks decided: the photo alone rates a
+ * place in a marked cell within {@link MARK_TIE} of it, or better. A wrong mark on the piece's own
+ * cell removes the true place and makes its neighbour confident (bench/placed.ts 'frame-e0.1' on
+ * the private files: a piece at 0.705 next to its own marked cell at 0.691, confident precision
+ * 0.967 against 0.983 without marks). The marks still reorder; such a placement stays ambiguous.
+ */
+export const MARK_CONFLICT_CAP = 0.6;
+/**
+ * Photo score difference within which a marked rival makes a placement one the marks decided. With
+ * 0.04 the synthetic scenes' confident share with right marks drops (every other cell marked:
+ * 0.874 → 0.857); 0.02 keeps it at 0.866 and still catches the private files' case.
+ */
+const MARK_TIE = 0.02;
 
 function norm360(deg: number): number {
   const d = deg % 360;
@@ -792,6 +808,13 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
   }
   ranked ??= rank(cands);
   if (photoView && !photoWins) capMarkedGain(ranked, photoView, placed!.gain, cell);
+  // Marks deciding a near tie: a place the photo rates about as well as the chosen one (or better)
+  // lies in a marked cell. The marks took it away, but a wrong mark on the piece's own cell does
+  // exactly that – the place next to it would become confident on the user's word alone.
+  if (photoView && !photoWins && !isPatch && ranked.conf > MARK_CONFLICT_CAP && markedRival(index, placed!, photoView, ranked.best)) {
+    ranked.confidences = ranked.confidences.map((p) => Math.min(p, MARK_CONFLICT_CAP));
+    ranked.conf = ranked.confidences[0];
+  }
   yield;
   const { best, chosen, conf, confidences, features } = ranked;
 
@@ -842,6 +865,18 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
   const reason = uncertainReasonOf(features, input, roughBody);
   if (status === 'ambiguous') match.uncertainReason = reason;
   return { match, best: { map: best.map, ref: best.ref }, src, features, params: sp, lattice, reason, placements };
+}
+
+/**
+ * Whether the photo alone rates a place in a marked cell, other than `chosen`'s, within
+ * {@link MARK_TIE} of `chosen` or better (see {@link MARK_CONFLICT_CAP}).
+ */
+function markedRival(index: ReferenceIndex, placed: PlacedPrior, photoView: Ranking, chosen: Candidate): boolean {
+  const own = cellKey(cellAt(index, chosen.ref));
+  return photoView.chosen.some((c) => {
+    const k = cellKey(cellAt(index, c.ref));
+    return k !== own && placed.cells.has(k) && c.score >= chosen.photo - MARK_TIE;
+  });
 }
 
 /** The placed-cell prior of a run (undefined without placed cells or with no penalty). */
