@@ -8,7 +8,7 @@ import type { CellRef, RegionMatch } from '../../model/types';
 import { DEBUG_IMAGES, loadTestAsset, savePng } from '../../testing/nodeImageIO';
 import { generateJigsaw, perturbReference, renderPiecesPhoto, Rng, type JigsawCut, type PieceTruth } from '../../testing/synth';
 import { matchRegionsDetailed } from './colorCorrection';
-import { capForBorder, capForSize, CONFIDENT_THRESHOLD, MARK_CONFLICT_CAP, matchConfidence, matchRegionDetailed, outlineFactor, patchBodySize, PLACED_PENALTY, scorePlacement, uncertainReasonOf, type MatchDetail } from './matchRegion';
+import { capForBorder, capForSize, CONFIDENT_THRESHOLD, matchConfidence, matchRegionDetailed, outlineFactor, patchBodySize, PLACED_PENALTY, placedConflictOfMatch, scorePlacement, uncertainReasonOf, type MatchDetail } from './matchRegion';
 import { buildReferenceIndex, cellAt, matchRegion, matchRegions, type MatchInput, type ReferenceIndex } from './index';
 import { accuracy, angleError, inputFromTruth, renderScenario, type Accuracy } from './testkit';
 
@@ -277,8 +277,10 @@ describe('matchRegion — Starry Night 20×16 (320 pieces)', () => {
     expect(right(marked)).toBeGreaterThanOrEqual(right(plain));
     expect(confidentRight(marked)).toBeGreaterThanOrEqual(confidentRight(plain) - 1);
     for (const m of marked) if (m.status === 'confident') expect(m.placedConflict).toBeDefined();
-    // A piece the marks moved away from the photo's own best place (a marked cell) is never confident.
-    for (const m of marked) if (m.placedConflict && (m.candidates[0].row !== m.placedConflict.row || m.candidates[0].col !== m.placedConflict.col)) expect(m.candidates[0].confidence).toBeLessThanOrEqual(MARK_CONFLICT_CAP);
+    // The marks never make a placement confident that the photo alone is unsure of.
+    marked.forEach((m, i) => {
+      if (m.status === 'confident') expect(plain[i].status).toBe('confident');
+    });
     // A conflict names a marked cell the photo prefers, whether or not the marks moved the piece.
     for (const m of marked) if (m.placedConflict) expect([...own, ...others].some((c) => c.row === m.placedConflict!.row && c.col === m.placedConflict!.col)).toBe(true);
   });
@@ -568,5 +570,20 @@ describe('matchRegion — an 18-piece portrait puzzle (6 rows × 3 columns, cell
       expect(angleError(m.candidates[0].rotationDeg, truth[0].rotationDeg)).toBeLessThan(5);
       expect(m.status).toBe('confident');
     }
+  });
+});
+
+describe('placedConflictOfMatch', () => {
+  const place = (row: number, col: number) => ({ row, col, x: 0, y: 0, rotationDeg: 90, score: 0.8, confidence: 0.95 });
+  it('names a piece’s best place when it is a marked cell', () => {
+    const m: RegionMatch = { regionId: 1, status: 'confident', candidates: [place(2, 3), place(4, 4)] };
+    expect(placedConflictOfMatch(m, [{ row: 2, col: 3 }])).toEqual({ row: 2, col: 3, rotationDeg: 90 });
+    expect(placedConflictOfMatch(m, [{ row: 4, col: 4 }])).toBeUndefined();
+    expect(placedConflictOfMatch({ ...m, status: 'unmatched' }, [{ row: 2, col: 3 }])).toBeUndefined();
+  });
+  it('names a patch’s place when most of its covered cells are marked', () => {
+    const m: RegionMatch = { regionId: 1, status: 'confident', candidates: [place(0, 0)], coveredCells: [{ row: 0, col: 0 }, { row: 0, col: 1 }, { row: 1, col: 0 }] };
+    expect(placedConflictOfMatch(m, [{ row: 0, col: 0 }, { row: 0, col: 1 }])).toEqual({ row: 0, col: 0, rotationDeg: 90 });
+    expect(placedConflictOfMatch(m, [{ row: 0, col: 0 }])).toBeUndefined();
   });
 });

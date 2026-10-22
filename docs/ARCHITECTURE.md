@@ -336,15 +336,19 @@ patch of touching loose pieces – is placed at most ambiguously, also when its 
 place it (groups).
 
 **Placed cells are soft evidence.** Users make mistakes when marking pieces as placed, and their
-mistakes must not cost accuracy. A cell marked as placed lowers the score of every candidate in it
-by `PLACED_PENALTY` from the first (coarse) search on, so the shortlists keep the free cells; the
-best few places by the photo alone stay in the shortlists too. When the photo alone places a region
-confidently in a marked cell, the photo wins. Marks take competitors away, which would raise the
-confidence of what is left – also of a wrong place – so they lift a placement's confidence by at
-most `PLACED_GAIN` (0.2) over the photo's own for that place, and a single piece whose place the
-marks decided – the photo rates a marked cell within `MARK_TIE` (0.02) of it, or better – stays
-ambiguous (`MARK_CONFLICT_CAP`): a wrong mark on a piece's own cell would otherwise make the cell
-next to it confident on the user's word alone. Whenever the photo's own best place
+mistakes must not cost accuracy: with wrong marks a piece may move among places the photo cannot
+tell apart, or become unsure, but never become sure in a wrong place. The scan's first matching
+pass ignores the marks, so the colour correction comes from the photo alone (with marks, other
+pieces were confident there, and a different correction lost true places in the second pass); a
+piece the photo alone places surely keeps that place. In the second pass a cell marked as placed
+lowers the score of every candidate in it by `PLACED_PENALTY` from the first (coarse) search on, so
+the shortlists keep the free cells; the photo's own best places stay in the shortlists too (as many
+as the free ones at the coarse level, where a true place in a wrongly marked cell can rank far down).
+When the photo alone places a region confidently in a marked cell, the photo wins. Marks take
+competitors away, which would raise the confidence of what is left – also of a wrong place – so they
+lift a placement's confidence by at most `PLACED_GAIN` (0.2) over the photo's own for that place,
+and never make a placement confident that the photo alone is unsure of (`MARKED_UNSURE_CAP`).
+Whenever the photo's own best place
 is a marked cell, `RegionMatch.placedConflict` names it (whether the photo won there or the marks
 moved the piece): the UI can offer to unmark it. The marks are never an exclusion: the
 last-free-cells rule (`placeByElimination`) stays unsure when the piece itself points at a marked
