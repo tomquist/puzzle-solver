@@ -1318,11 +1318,20 @@ input[aria-invalid='true'] {
   background: #fff;
   opacity: 0.7;
 }
-.camera-meter {
+/* The quality meter, and under it the fix for glare with the torch on. */
+.camera-top {
   position: absolute;
   top: 12px;
   left: 50%;
   transform: translateX(-50%);
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 24px);
+}
+.camera-meter {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1383,6 +1392,69 @@ input[aria-invalid='true'] {
 }
 .camera-tips ul {
   padding-left: 18px;
+}
+/* With "More tips" open the box may grow past the view: it scrolls instead. */
+.camera-tips {
+  max-height: calc(100% - 170px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.camera-meter.glare .meter-dot {
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.35), 0 0 10px 2px #fff;
+}
+.camera-torch-off {
+  backdrop-filter: blur(6px);
+  background: rgba(0, 0, 0, 0.55);
+}
+
+/* "More tips": a disclosure under the main tips (live overlay and capture card). */
+.more-tips {
+  width: 100%;
+}
+.more-tips summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  gap: 8px;
+  font-weight: 650;
+  cursor: pointer;
+  list-style: none;
+}
+.more-tips summary::-webkit-details-marker {
+  display: none;
+}
+.more-tips summary::before {
+  content: '';
+  width: 0;
+  height: 0;
+  border-left: 6px solid currentColor;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  transition: transform 0.15s;
+}
+.more-tips[open] summary::before {
+  transform: rotate(90deg);
+}
+.more-tips ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.more-tips.on-card {
+  max-width: 400px;
+  text-align: left;
+  font-size: 0.9rem;
+  color: var(--text-2);
+}
+.more-tips.on-card summary {
+  color: var(--accent);
+  justify-content: center;
+}
+.more-tips.on-card[open] summary {
+  justify-content: flex-start;
 }
 .camera-tips-actions {
   display: flex;
@@ -2179,36 +2251,127 @@ canvas.crop {
 .cand-mini:hover {
   border-color: var(--accent);
 }
-.conf {
+/* The spot shown above, among the spots to compare. */
+.cand-mini.shown {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: var(--accent-soft);
+}
+.cand-mini-name {
+  font-size: 0.8125rem;
+  font-weight: 650;
+  color: var(--text);
+  text-align: center;
+}
+.cand-mini-cell {
+  margin-top: 0;
+}
+.pd-spots-hint {
+  margin-bottom: 8px;
+}
+
+/* How sure a place is: a three-step meter and a word (never a percentage). */
+.cert {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 7px;
+  line-height: 1.35;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  color: var(--cert);
+  --cert: var(--warn);
+}
+.cert-sure {
+  --cert: var(--ok);
+}
+.cert-unlikely {
+  --cert: var(--text-2);
+}
+.cert-steps {
+  flex: none;
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  margin-top: 0.2em;
+}
+.pd-cert {
+  margin-top: 4px;
+}
+.cert-steps span {
+  width: 5px;
+  border-radius: 1.5px;
+  background: color-mix(in srgb, var(--cert) 22%, transparent);
+}
+.cert-steps span:nth-child(1) {
+  height: 6px;
+}
+.cert-steps span:nth-child(2) {
+  height: 9px;
+}
+.cert-steps span:nth-child(3) {
+  height: 12px;
+}
+.cert-steps span.on {
+  background: var(--cert);
+}
+
+/* Why a piece is unsure, and what to do. */
+.why-note {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--warn-soft);
+  color: var(--text);
+  font-size: 0.9375rem;
+}
+.why-note svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warn);
+}
+.why-note.compact {
+  padding: 6px 10px;
+  font-size: 0.875rem;
+}
+
+/* A spot marked as placed that this piece seems to belong in: small, non-blocking. */
+.conflict-note {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.9375rem;
+}
+.conflict-text {
+  display: flex;
+  align-items: flex-start;
   gap: 8px;
 }
-.conf-track {
-  flex: 1;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--surface-3);
-  overflow: hidden;
+.conflict-text svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warn);
 }
-.conf-fill {
-  height: 100%;
-  border-radius: inherit;
+.conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding-left: 26px;
 }
-.conf-fill.ok {
-  background: var(--ok);
+.conflict-note.compact {
+  padding: 6px 8px 4px 10px;
+  font-size: 0.875rem;
+  gap: 2px;
 }
-.conf-fill.warn {
-  background: var(--warn);
-}
-.conf-fill.bad {
-  background: var(--bad);
-}
-.conf-num {
-  font-size: 0.78rem;
-  color: var(--text-2);
-  min-width: 32px;
-  text-align: right;
+.conflict-note.compact .conflict-actions .btn {
+  padding: 0 12px;
 }
 .fit-list {
   list-style: none;
@@ -3233,6 +3396,17 @@ button.turn-stage:focus-visible {
 .selection-where {
   font-weight: 650;
   font-size: 0.95rem;
+}
+.selection-cert {
+  display: flex;
+  margin-top: 1px;
+}
+.selection-why {
+  color: var(--text-2);
+}
+.selection-note {
+  max-width: 680px;
+  margin: 8px auto 0;
 }
 .selection-more {
   flex: none;

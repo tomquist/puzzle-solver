@@ -24,7 +24,10 @@ puzzles are stored in the browser (IndexedDB).
 4. **Scan pieces.** Spread 10–40 pieces on a plain background that contrasts with them, not touching,
    and take one photo from directly above. Already assembled patches can be in the photo too.
 5. **Read the result.** Every piece gets a thin outline and a small number next to it (so the piece
-   itself stays visible): green = confident, amber = unsure, blue = assembled grid; a short pink
+   itself stays visible): green = sure, amber = likely or unsure, blue = assembled grid – in words,
+   never as a percentage ("Unsure – one of these 3 spots", with the reason when the app knows it,
+   such as "Plain area – many spots look alike"; the details show the spots side by side). If a
+   piece seems to belong in a spot you marked as placed, a small note offers to unmark it; a short pink
    bar marks the edge that goes on top, and dotted lines connect pieces that go together – they
    flow for a while toward the biggest piece group of each cluster. Tap a piece to select it: its
    connection lines turn bright cyan, the pieces it joins are outlined, the pieces those join (two
@@ -49,7 +52,10 @@ an app – it works offline after the first visit. On iPhone, *Take photo* uses 
 the sharpest pictures.
 
 Tips for good scans – the app checks these and tells you what to fix:
-- Even light without reflections (glossy pieces and boxes reflect lamps).
+- Even light without reflections (glossy pieces and boxes reflect lamps): flash and torch off, a lamp
+  from the side. The live camera warns about glare.
+- A matte cloth in a colour unlike the puzzle; the 2× lens and the phone a bit higher keep pieces
+  near the edges from looking tilted.
 - Hold still; blurry photos lose the piece outlines.
 - Get close enough that each piece is at least ~60 px wide in the photo.
 - Use a background colour that differs from the pieces (dark cloth for light puzzles, etc.).

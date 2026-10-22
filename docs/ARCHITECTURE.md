@@ -29,11 +29,24 @@ to be analysed. Everything runs locally in the browser – no server, no upload.
 
 ### 1.2 Solve
 1. **Scan** – spread a handful of pieces (or assembled patches) on a contrasting, plain background
-   and take one photo. A live quality meter (sharpness/exposure) helps before pressing the shutter.
+   and take one photo. A live quality meter (sharpness, exposure, glare – `assessFrame`; with the
+   torch on, glare offers "Turn the torch off") helps before pressing the shutter; the tips have
+   "More tips" (glare, a matte cloth, the 2× lens). The still is sized for its purpose
+   (`platform/photoSettings.ts`: piece scans the smallest camera size of ≥ 2400 px on the long side –
+   the analysis size; box photos and close-ups the sensor maximum), and the scan records how it was
+   captured (`ScanRecord.capture`: takePhoto / video frame because takePhoto failed / a file, the
+   original size).
 2. **Analyse** (Web Worker): quality checks → segmentation → per-region shape analysis → matching
    against the reference → fit detection.
 3. **Results** – the photo with every piece thinly outlined (no fill) and a small number label
-   placed just outside the outline (`ui/lib/labels.ts`), colour-coded by confidence; a short pink
+   placed just outside the outline (`ui/lib/labels.ts`), colour-coded by confidence (shown in words,
+   never as a percentage – the matcher's confidence is a heuristic, not calibrated: `ui/lib/certainty.ts`
+   says "Sure", "Likely – check it" (no other spot comes close) or "Unsure – one of these 3 spots"
+   (spots within half the best confidence, or a plain / repeating picture), with the matcher's
+   reason when it gives one (`RegionMatch.uncertainReason`: "Plain area – many spots look alike");
+   the details show the spots side by side; a spot the user marked placed that a piece seems to
+   belong in (`RegionMatch.placedConflict`) gets a small note with "Unmark the spot" / "Keep it");
+   a short pink
    bar on the edge that must end up on top (`topBarFor`, from `upVector`); connection lines are
    dotted light lines with dark-rimmed dots that flow toward the biggest unit of their cluster
    (`flowDirections` in `ui/lib/linkGraph.ts`: the item with the most pieces, then the most links;
@@ -200,6 +213,8 @@ laplacianVariance(gray, mask?): number
 exposureStats(img, mask?): { mean; clippedLow; clippedHigh; p05; p95 }
 glareMask(img, opts?): Mask
 noiseSigma(gray): number
+// src/pipeline/quality/glare.ts: specular blobs – compact, with a washed-out desaturated halo
+measureGlare(img, mask, opts?): { fraction; area? }  // box photo, reference and live frames
 ```
 
 ### stitch (`src/cv/features/`, `src/pipeline/stitch/`)
@@ -228,7 +243,7 @@ segmentPieces(photo: RGBAImage, opts?): Segmentation
 analyzePieceShape(contour: Point[], mask?: Mask, bboxOrigin?: Point): PieceShape | null
 dominantOrientation(contour: Point[]): number                     // degrees in (-45, 45]
 assessPhoto(photo: RGBAImage, seg?: Segmentation): QualityReport
-assessFrame(frame: RGBAImage): FrameQuality
+assessFrame(frame: RGBAImage): FrameQuality   // ~320 px frame: sharpness, exposure, glare (halo vs the pieces, not the table)
 ```
 
 ### match (`src/pipeline/match/`, `src/testing/synth.ts`)

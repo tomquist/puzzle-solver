@@ -8,7 +8,7 @@
  */
 import type { Point } from '../../cv/geometry';
 import type { Rect } from '../../cv/image';
-import { cellKey, type CellRef, type DetectedRegion, type GridSpec, type ProgressRecord, type PuzzleSide, type RegionMatch, type ScanResult } from '../../model/types';
+import { cellKey, type CellRef, type DetectedRegion, type GridSpec, type ProgressRecord, type PuzzleSide, type RegionMatch, type ScanResult, type UncertainReason } from '../../model/types';
 import { plural } from './format';
 import { cellsForPlacement, matchFor } from './pieces';
 import { regionCenter } from './overlay';
@@ -63,6 +63,10 @@ export interface ScanItem {
   bbox: Rect;
   /** Edge or corner piece(s) – for the "edge pieces only" view. */
   edge: boolean;
+  /** Why its place is not sure (single regions, from the matcher; absent when unknown). */
+  uncertainReason?: UncertainReason;
+  /** A cell marked as placed that this item seems to belong in (single regions; absent when none). */
+  placedConflict?: CellRef;
 }
 
 export interface ItemLink {
@@ -224,6 +228,9 @@ export function buildScanItems(result: ScanResult, grid: GridSpec): ScanItems {
       bbox: r.bbox,
       edge: isEdgeShape(r) || (r.kind === 'patch' && onBorder(candidates[0].cells, grid)),
     };
+    if (status === 'ambiguous' && match.uncertainReason) item.uncertainReason = match.uncertainReason;
+    const conflict = match.placedConflict;
+    if (conflict && Number.isInteger(conflict.row) && Number.isInteger(conflict.col)) item.placedConflict = { row: conflict.row, col: conflict.col };
     items.push(item);
     itemOfRegion.set(r.id, item.key);
   }

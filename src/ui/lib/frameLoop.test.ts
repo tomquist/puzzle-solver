@@ -1,5 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { startFrameLoop } from './frameLoop';
+import { meterState, startFrameLoop } from './frameLoop';
+
+describe('meterState', () => {
+  const base = { sharpness: 0.9, brightness: 0.5, clipped: 0.01 };
+  it('says what the frame needs, and to turn the torch off when it causes glare', () => {
+    expect(meterState(undefined, false)).toMatchObject({ tone: 'checking', text: 'Checking…' });
+    expect(meterState({ ...base, ok: true }, true)).toMatchObject({ tone: 'ok', text: 'Looks good', glare: false, torchOff: false });
+    const glare = { ...base, ok: false, problem: 'glare' as const, message: 'Glare – move the light or tilt the lamp', glare: 0.01 };
+    expect(meterState(glare, false)).toEqual({ tone: 'bad', text: glare.message, glare: true, torchOff: false });
+    expect(meterState(glare, true)).toEqual({ tone: 'bad', text: 'Glare – turn the torch off', glare: true, torchOff: true });
+    // Other problems with the torch on: their own message.
+    expect(meterState({ ...base, ok: false, problem: 'blurry', message: 'Blurry' }, true)).toMatchObject({ text: 'Blurry', torchOff: false });
+  });
+});
 
 describe('startFrameLoop', () => {
   beforeEach(() => vi.useFakeTimers());

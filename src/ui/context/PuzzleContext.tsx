@@ -4,7 +4,7 @@
  * switching tabs or opening scan results doesn't reload anything.
  */
 import { createContext, use, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { ProgressRecord, PuzzleRecord } from '../../model/types';
+import type { CaptureInfo, ProgressRecord, PuzzleRecord } from '../../model/types';
 import { resizeRGBA } from '../../cv/resize';
 import { blobToRGBA } from '../../platform/imageio';
 import type { PipelineApi } from '../../worker/api';
@@ -53,7 +53,7 @@ export interface PuzzleContextValue {
   cellsVersion: number;
   /** The running (or failed) scan analysis – kept here so it survives switching tabs. */
   scanJob: ScanJob | undefined;
-  startScan(photo: Blob): void;
+  startScan(photo: Blob, capture?: CaptureInfo): void;
   cancelScan(): void;
   /** The grid as the scans measure it: status, a pending question, background updates. */
   grid: GridBelief;

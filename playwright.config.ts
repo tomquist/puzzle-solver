@@ -64,7 +64,7 @@ export default defineConfig({
     {
       name: 'phone',
       use: phoneChromium(390, 844, 2),
-      testMatch: /(smoke|camera|errors|placing|feedback|grid)\.spec\.ts/,
+      testMatch: /(smoke|camera|errors|placing|feedback|grid|certainty|glare)\.spec\.ts/,
     },
     {
       name: 'desktop',

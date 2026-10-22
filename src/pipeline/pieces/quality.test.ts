@@ -5,7 +5,7 @@ import { resizeRGBA } from '../../cv/resize';
 import type { QualityCode, QualityReport } from '../../model/types';
 import { DEBUG_IMAGES, loadTestAsset, savePng } from '../../testing/nodeImageIO';
 import { generateJigsaw, renderPiecesPhoto, type RGB, type RenderOptions } from '../../testing/synth';
-import { assessFrame, assessPhoto } from './quality';
+import { assessFrame, assessPhoto, FRAME_GLARE } from './quality';
 import { segmentPieces } from './segment';
 import { addGlare, blurPhoto, cropPhoto, drawOverlay, exposePhoto, makeTouching, motionBlurPhoto, perspectivePhoto } from './testkit';
 
@@ -223,5 +223,68 @@ describe('assessFrame', () => {
     // Sharpness decreases monotonically with blur.
     const s = [0, 0.7, 1.2, 2].map((b) => assessFrame(b ? blurPhoto(frame, b) : frame).sharpness);
     for (let i = 1; i < s.length; i++) expect(s[i]).toBeLessThanOrEqual(s[i - 1] + 1e-9);
+  });
+
+  const toFrame = (img: RGBAImage) => resizeRGBA(img, 320, Math.round((320 * img.height) / img.width));
+
+  it('warns about glare on glossy pieces (lamp reflections), not on clean frames', () => {
+    const cases: [Ref, RGB, string][] = [['sn', GREY, 'grey'], ['sn', DARK, 'dark'], ['sn', LIGHT, 'light'], ['sn', WOOD, 'wood'], ['gw', DARK, 'gw-dark'], ['gw', GREEN, 'gw-green']];
+    for (const [ref, bg, label] of cases) {
+      const sc = scene(ref, bg);
+      const clean = assessFrame(toFrame(sc.photo));
+      expect(clean.problem, `${label} clean: glare ${clean.glare}`).toBeUndefined();
+      expect(clean.glare ?? 0, label).toBeLessThan(FRAME_GLARE / 2);
+      // Great Wave pieces are mostly cream paper: a reflection there hides little and is not judged.
+      if (ref === 'gw') continue;
+      const one = assessFrame(toFrame(addGlare(sc.photo, sc.truth.slice(0, 1), 0.3, 5)));
+      expect(one.problem, `${label}, one reflection: glare ${one.glare}`).toBeUndefined();
+      const glared = assessFrame(toFrame(addGlare(sc.photo, sc.truth.slice(0, 4), 0.3, 5)));
+      expect(glared.problem, `${label}: glare ${glared.glare}`).toBe('glare');
+      expect(glared.ok).toBe(false);
+      expect(glared.message).toMatch(/glare/i);
+    }
+  });
+
+  it('warns about the torch reflected by the pieces under it', () => {
+    const sc = scene('sn', DARK);
+    const img = { ...sc.photo, data: new Uint8ClampedArray(sc.photo.data) };
+    // The phone's torch straight above: each glossy piece near the middle of the photo shows a soft
+    // white spot (each tilts a little, so each reflects on its own; the matte cloth does not).
+    const mid = { x: img.width / 2, y: img.height / 2 };
+    const near = [...sc.truth].sort((a, b) => Math.hypot(a.center.x - mid.x, a.center.y - mid.y) - Math.hypot(b.center.x - mid.x, b.center.y - mid.y)).slice(0, 3);
+    for (const piece of near) {
+      const body = Math.hypot(piece.corners[1].x - piece.corners[0].x, piece.corners[1].y - piece.corners[0].y);
+      const cx = piece.center.x, cy = piece.center.y, r = 0.15 * body;
+      for (let y = Math.max(0, Math.floor(cy - 2.2 * r)); y < Math.min(img.height, cy + 2.2 * r); y++) {
+        for (let x = Math.max(0, Math.floor(cx - 2.2 * r)); x < Math.min(img.width, cx + 2.2 * r); x++) {
+          const d = Math.hypot(x - cx, y - cy) / r;
+          const a = d < 1 ? 1 : d < 2.2 ? Math.pow((2.2 - d) / 1.2, 1.5) : 0;
+          if (a <= 0) continue;
+          const o = (y * img.width + x) * 4;
+          if (Math.max(...DARK.map((v, ch) => Math.abs(img.data[o + ch] - v))) < 40) continue;
+          for (let ch = 0; ch < 3; ch++) img.data[o + ch] = img.data[o + ch] * (1 - a) + 255 * a;
+        }
+      }
+    }
+    const q = assessFrame(toFrame(img));
+    expect(q.problem, `glare ${q.glare}`).toBe('glare');
+  });
+
+  it('does not take blown white print or paper for glare', () => {
+    // Great Wave paper (cream / white) pushed into clipping by gain and a lighting gradient.
+    const paper = assessFrame(toFrame(scene('gw', WOOD, { backgroundTexture: 16, illumination: 0.2, gain: [0.99, 1.07, 1.04] }).photo));
+    expect(paper.problem, `glare ${paper.glare}`).not.toBe('glare');
+    // Sharp-edged white shapes printed on the pieces (white paint, a white sky).
+    const sc = scene('sn', GREY);
+    const img = { ...sc.photo, data: new Uint8ClampedArray(sc.photo.data) };
+    for (const t of sc.truth.slice(0, 6)) {
+      const m = createMask(img.width, img.height);
+      const c = t.corners;
+      const s = 0.3;
+      fillPolygon(m, c.map((p) => ({ x: t.center.x + (p.x - t.center.x) * s, y: t.center.y + (p.y - t.center.y) * s })), 1);
+      for (let i = 0; i < m.data.length; i++) if (m.data[i]) img.data.set([255, 255, 255], i * 4);
+    }
+    const white = assessFrame(toFrame(img));
+    expect(white.problem, `glare ${white.glare}`).not.toBe('glare');
   });
 });

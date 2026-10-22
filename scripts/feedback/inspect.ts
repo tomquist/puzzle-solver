@@ -403,6 +403,17 @@ export function analysisVersion(b: FeedbackBundle): string {
   return b.scan?.appVersion ?? `unknown (${b.app.version} or older)`;
 }
 
+/** How the scan photo was captured, in a few words ('' when the file does not say). */
+export function captureText(b: FeedbackBundle): string {
+  const c = b.scan?.capture;
+  if (!c) return '';
+  const size = c.width && c.height ? ` ${c.width}x${c.height}` : '';
+  const asked = c.requested ? ` (asked ${c.requested.width}x${c.requested.height})` : '';
+  const what = c.method === 'takePhoto' ? 'camera still' : c.method === 'video-frame' ? 'video frame' : 'file';
+  const why = c.fallback ? ` – the camera still failed${c.fallbackReason ? `: ${c.fallbackReason}` : ''}` : c.fallbackReason ? ` – ${c.fallbackReason}` : '';
+  return `${what}${size}${asked}${why}`;
+}
+
 const minute = (t: number) => new Date(t).toISOString().slice(0, 16).replace('T', ' ');
 
 function pad(t: string, n: number): string {
@@ -417,6 +428,7 @@ export function formatSummary(r: FeedbackReplay): string {
   lines.push(`${r.name}  app ${b.app.version}  ${date}  ${b.puzzle.pieceCount} pieces (${b.puzzle.grid.rows}x${b.puzzle.grid.cols}, ${b.puzzle.cut})${b.comment ? `  "${b.comment}"` : ''}`);
   if (r.photo && r.original && r.current) {
     lines.push(`scan ${r.photo.width}x${r.photo.height} analysed by ${analysisVersion(b)}${b.scan?.analysedAt ? ` at ${minute(b.scan.analysedAt)}` : ''}`);
+    if (captureText(b)) lines.push(`  captured as ${captureText(b)}`);
     lines.push(`  regions app ${r.original.regions.length} -> now ${r.current.regions.length}${r.matched ? '' : ' (segmentation only: no reference in the file)'}`);
     if (r.objects) {
       const t = (o: ObjectScore) => `found ${o.found}/${o.objects}, alone ${o.clean}/${o.objects}, false regions ${o.regions - o.real}/${o.regions}`;

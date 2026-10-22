@@ -3,14 +3,16 @@
  * it, which items it joins (in words), where it goes in the box picture (with context and an
  * overview), alternatives, notes, and Placed / Not this one.
  */
-import type { DetectedRegion, GridSpec, ScanResult } from '../../model/types';
+import type { CellRef, DetectedRegion, GridSpec, ScanResult } from '../../model/types';
 import { describeCell } from '../../pipeline/grid';
 import { cellsText, describeConnections, itemKindText, itemTitle, SIDE_PHRASE, type Connection, type ItemPlacement, type ScanItem } from '../lib/items';
 import { cropAround } from '../lib/overlay';
-import { borderText, localToPuzzleTurns, pieceKindLabel, STATUS_LABEL } from '../lib/pieces';
+import { certaintyLine, itemCertainty, spotCertainty, spotsToCompare, uncertaintyText } from '../lib/certainty';
+import { borderText, localToPuzzleTurns, pieceKindLabel } from '../lib/pieces';
 import { CropCanvas } from './CropCanvas';
 import { IconCheck, IconChevron, IconClose } from './Icons';
-import { ConfidenceBar, PickupView, TargetContext, type ReferenceImage } from './ItemVisuals';
+import { PlacedConflictNote, UncertainNote } from './CertaintyNotes';
+import { CertaintyMeter, PickupView, TargetContext, type ReferenceImage } from './ItemVisuals';
 import { TurnGuide } from './TurnGuide';
 import { PieceIcon } from './PieceIcon';
 import { IssueList } from './Quality';
@@ -34,6 +36,10 @@ export interface ItemDetailProps {
   onUnplace(placement: ItemPlacement): void;
   onOpen(key: string): void;
   onClose(): void;
+  /** A spot marked as placed that this item seems to belong in (see PlacedConflictNote). */
+  conflictCell?: CellRef;
+  onUnmarkConflict?(): void;
+  onKeepConflict?(): void;
 }
 
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -52,7 +58,14 @@ export function ItemDetail(props: ItemDetailProps) {
   const iconTurn = single?.shape && current?.rotationDeg !== undefined ? localToPuzzleTurns(single.shape.angleDeg, current.rotationDeg) * 90 : (single?.shape?.angleDeg ?? 0);
   const border = single?.shape && current?.rotationDeg !== undefined ? borderText(single, current.rotationDeg) : '';
   const issues = members.flatMap((m) => m.issues).filter((v, i, a) => a.indexOf(v) === i);
-  const heading = item.status === 'ambiguous' && candidateIndex === 0 ? 'Probably goes here' : 'Goes here';
+  const certainty = itemCertainty(item);
+  const spots = spotsToCompare(item);
+  const unsure = certainty === 'unsure';
+  const heading = unsure && spots.includes(candidateIndex) ? `Spot ${candidateIndex + 1} of ${spots.length}` : certainty === 'likely' && candidateIndex === 0 ? 'Probably goes here' : 'Goes here';
+  const why = uncertaintyText(item);
+  // Unsure: all the spots to compare side by side (the shown one marked), then the rest; otherwise
+  // the other possibilities.
+  const others = item.candidates.map((p, i) => ({ p, i })).filter(({ i }) => (unsure ? true : i !== candidateIndex));
   const joins = describeConnections(connections, (k) => connections.find((c) => c.key === k)?.item.label);
 
   return (
@@ -107,7 +120,9 @@ export function ItemDetail(props: ItemDetailProps) {
             {sides && <PieceIcon sides={sides} rotationDeg={iconTurn} size={52} title="Piece shape (finished orientation)" />}
             <div>
               <div className="pd-kind-label">{single ? pieceKindLabel(single) : itemKindText(item)}</div>
-              <div className={`status-chip st-${item.status}`}>{STATUS_LABEL[item.status]}</div>
+              <div className="pd-cert" data-testid="detail-certainty">
+                <CertaintyMeter certainty={certainty} text={certaintyLine(item)} />
+              </div>
             </div>
           </div>
           {item.kind === 'assembled' && current && (
@@ -118,6 +133,11 @@ export function ItemDetail(props: ItemDetailProps) {
           {border && <div className="small">{border}</div>}
         </div>
       </div>
+
+      {why && <UncertainNote reason={why} />}
+      {props.conflictCell && props.onUnmarkConflict && props.onKeepConflict && (
+        <PlacedConflictNote cell={props.conflictCell} onUnmark={props.onUnmarkConflict} onKeep={props.onKeepConflict} />
+      )}
 
       {current?.rotationDeg !== undefined && (
         <section className="pd-section" data-testid="detail-turn">
@@ -150,7 +170,7 @@ export function ItemDetail(props: ItemDetailProps) {
           <TargetContext key={`${item.key}-${candidateIndex}`} placement={current} grid={grid} reference={reference} size={360} label={`Box picture around where ${itemTitle(item)} goes`} />
           <div className="cand-info">
             <div className="cand-where">{placementWhere(item, current, grid)}</div>
-            <ConfidenceBar value={current.confidence} />
+            <CertaintyMeter certainty={spotCertainty(item, candidateIndex)} />
           </div>
         </section>
       ) : (
@@ -160,20 +180,29 @@ export function ItemDetail(props: ItemDetailProps) {
         </div>
       )}
 
-      {item.candidates.length > 1 && (
-        <section className="pd-section">
-          <h3>Other possibilities</h3>
+      {item.candidates.length > 1 && reference && (
+        <section className="pd-section" data-testid="detail-spots">
+          <h3>{unsure ? `One of these ${spots.length} spots` : 'Other possibilities'}</h3>
+          {unsure && <p className="small muted pd-spots-hint">Compare each spot with your piece and pick the one that matches.</p>}
           <div className="cand-strip">
-            {item.candidates.map((p, i) => {
-              if (i === candidateIndex || !reference) return null;
+            {others.map(({ p, i }) => {
               const c = cropAround(p.x, p.y, grid, reference.width, reference.height, 3);
+              const shown = i === candidateIndex;
+              const name = unsure && spots.includes(i) ? `Spot ${i + 1}` : 'Less likely';
               return (
-                <button key={i} className="cand-mini" onClick={() => props.onChoose(i)} aria-label={`Use place ${i + 1}: ${cellsText(p)}`}>
+                <button
+                  key={i}
+                  className={`cand-mini${shown ? ' shown' : ''}`}
+                  onClick={() => props.onChoose(i)}
+                  aria-pressed={unsure ? shown : undefined}
+                  aria-label={`${shown ? 'Shown: ' : 'Use '}${name.toLowerCase()}, ${cellsText(p)}`}
+                  data-testid={`spot-${i}`}
+                >
                   <CropCanvas source={reference.bitmap} rotated={{ ...c, rotationDeg: 0 }} size={96} label={`Picture around ${cellsText(p)}`} />
+                  <span className="cand-mini-name">{shown ? `${name} · shown` : name}</span>
                   <span className="cand-mini-cell">
                     r{p.bounds.row0 + 1} · c{p.bounds.col0 + 1}
                   </span>
-                  <ConfidenceBar value={p.confidence} />
                 </button>
               );
             })}

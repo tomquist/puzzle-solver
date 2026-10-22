@@ -7,8 +7,9 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { APP_VERSION } from '../../appVersion';
-import type { ProgressRecord, PuzzleRecord, ScanRecord } from '../../model/types';
+import type { CaptureInfo, ProgressRecord, PuzzleRecord, ScanRecord } from '../../model/types';
 import { blobToRGBA, decodeExact, isQuotaError, rgbaToBlob } from '../../platform/imageio';
+import { SCAN_ANALYSIS_SIDE } from '../../platform/photoSettings';
 import { newId, type PuzzleRepository } from '../../storage/types';
 import type { PipelineApi } from '../../worker/api';
 import { errorText } from '../components/Feedback';
@@ -20,11 +21,11 @@ import { inPuzzleLane } from '../lib/puzzleLane';
 import { href } from '../lib/routes';
 
 /** Longest side scan photos are analysed and stored at (the pipeline's default analysis size). */
-const SCAN_MAX_SIDE = 2400;
+const SCAN_MAX_SIDE = SCAN_ANALYSIS_SIDE;
 
 export type ScanJob =
   | { kind: 'running'; progress: number; message: string }
-  | { kind: 'error'; title: string; message: string; photo?: Blob };
+  | { kind: 'error'; title: string; message: string; photo?: Blob; capture?: CaptureInfo };
 
 const STAGE_LABEL: Record<string, string> = {
   prepare: 'Preparing photo…',
@@ -47,7 +48,7 @@ export interface ScanJobDeps {
   scansChanged(): void;
 }
 
-export function useScanJob(deps: ScanJobDeps): { job: ScanJob | undefined; start(photo: Blob): void; cancel(): void } {
+export function useScanJob(deps: ScanJobDeps): { job: ScanJob | undefined; start(photo: Blob, capture?: CaptureInfo): void; cancel(): void } {
   const [job, setJob] = useState<ScanJob>();
   const run = useRef(0);
   const mounted = useRef(true);
@@ -78,7 +79,7 @@ export function useScanJob(deps: ScanJobDeps): { job: ScanJob | undefined; start
     void dropStaleMeasurements(latest.current.repo, puzzleId).then((changed) => changed && latest.current.scansChanged());
   }, [puzzleId]);
 
-  const start = useCallback((photo: Blob) => {
+  const start = useCallback((photo: Blob, capture?: CaptureInfo) => {
     const { repo, pipeline, puzzle: shown, getPuzzle, progress, ensureMatcher, scansChanged } = latest.current;
     if (!shown) return;
     const puzzleId = shown.id;
@@ -88,7 +89,7 @@ export function useScanJob(deps: ScanJobDeps): { job: ScanJob | undefined; start
       if (alive()) setJob({ kind: 'running', progress: p, message });
     };
     const fail = (title: string, message: string, retry?: Blob) => {
-      if (alive()) setJob({ kind: 'error', title, message, photo: retry });
+      if (alive()) setJob({ kind: 'error', title, message, ...(retry ? { photo: retry, capture } : {}) });
     };
     void (async () => {
       working(0.01, 'Reading photo…');
@@ -98,7 +99,10 @@ export function useScanJob(deps: ScanJobDeps): { job: ScanJob | undefined; start
         // The photo is analysed at the size the pipeline works at, as the JPEG that is stored: encode
         // once and analyse the decoded JPEG, so the stored photo (and a feedback file made from it)
         // holds exactly the pixels the analysis saw.
-        const jpeg = await rgbaToBlob(await blobToRGBA(photo, SCAN_MAX_SIDE), 'image/jpeg', 0.95);
+        const source: { width?: number; height?: number } = {};
+        const jpeg = await rgbaToBlob(await blobToRGBA(photo, SCAN_MAX_SIDE, undefined, source), 'image/jpeg', 0.95);
+        // How the photo was taken, with its own size (a file: as chosen; the camera: as captured).
+        const captured: CaptureInfo = { ...(capture ?? { method: 'file' }), ...(source.width && source.height ? { width: source.width, height: source.height } : {}) };
         const rgba = await decodeExact(jpeg);
         at.stage = 'prepare';
         working(0.02, 'Preparing the puzzle picture…');
@@ -129,6 +133,7 @@ export function useScanJob(deps: ScanJobDeps): { job: ScanJob | undefined; start
             height: resp.result.height,
             result: resp.result,
             appVersion: APP_VERSION,
+            capture: captured,
           };
           await repo.saveScan(scan);
           if (resp.gridFollowUp) queueGridMeasurement(resp.gridFollowUp, scan.id, puzzleId);

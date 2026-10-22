@@ -141,6 +141,26 @@ export interface ProgressRecord {
   updatedAt: number;
 }
 
+/**
+ * How a photo was taken: the camera's still capture (ImageCapture.takePhoto), a frame of the live
+ * preview (no ImageCapture, or takePhoto failed), or a file (upload, or the phone's camera app).
+ */
+export type CaptureMethod = 'takePhoto' | 'video-frame' | 'file';
+
+/** How a scan's photo was captured. */
+export interface CaptureInfo {
+  method: CaptureMethod;
+  /** True when takePhoto was tried and failed, so the photo is a frame of the live preview. */
+  fallback?: boolean;
+  /** Why takePhoto failed (the error's name), when it fell back. */
+  fallbackReason?: string;
+  /** Size asked of takePhoto (piece scans: about the analysis size; box photos: the sensor maximum). */
+  requested?: { width: number; height: number };
+  /** Size of the photo as captured (upright), before it was scaled down for analysis. */
+  width?: number;
+  height?: number;
+}
+
 /** A photo of loose pieces / patches and its analysis. */
 export interface ScanRecord {
   id: Id;
@@ -154,6 +174,8 @@ export interface ScanRecord {
   label?: string;
   /** Build (git commit) of the app that analysed the photo; missing for scans saved before it was recorded. */
   appVersion?: string;
+  /** How the photo was captured; missing for scans saved before it was recorded. */
+  capture?: CaptureInfo;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -235,11 +257,38 @@ export interface Placement {
   rotationDeg: number;
   /** Raw similarity (higher is better, roughly -1..1 for NCC-based scores). */
   score: number;
-  /** Calibrated 0..1 confidence that this placement is correct. */
+  /**
+   * 0..1 confidence that this placement is correct: a heuristic score (logistic in score and
+   * margin, fitted on synthetic scans, then capped and discounted), NOT a calibrated probability –
+   * nothing has fitted it to real photos. Use it to rank and to tell sure from unsure; the UI
+   * shows words (ui/lib/certainty.ts), never a percentage.
+   */
   confidence: number;
 }
 
 export type MatchStatus = 'confident' | 'ambiguous' | 'unmatched';
+
+/**
+ * Why a match is not sure (set by the matcher for 'ambiguous' matches when it can tell):
+ * - 'plain': little texture (sky, water, a plain colour) – many spots look alike
+ * - 'repeating': a repeating pattern – the same content occurs in several spots
+ * - 'similar-spots': a few distinct spots score about the same
+ * - 'shape': the outline (and so the template) is doubtful – merged pieces, table attached, …
+ * - 'small': the region is small in the photo (few pixels) for a reliable match
+ */
+export type UncertainReason = 'plain' | 'repeating' | 'similar-spots' | 'shape' | 'small';
+
+/**
+ * A cell the user marked as placed whose picture matches this region better than the candidates
+ * it was given (the matcher down-weights placed cells): the piece may belong there, and the spot
+ * may have been marked placed by mistake.
+ */
+export interface PlacedConflict {
+  row: number;
+  col: number;
+  /** Turn from the photo to upright at that cell, when known. */
+  rotationDeg?: number;
+}
 
 /**
  * A patch's seam-fitted cell lattice in reference px at its best placement: where its pieces are in
@@ -268,6 +317,10 @@ export interface RegionMatch {
   status: MatchStatus;
   /** For patches: their lattice at the best placement (absent in scans saved by older versions). */
   lattice?: RefLattice;
+  /** Why the match is not sure (ambiguous matches; absent when unknown, or in older scans). */
+  uncertainReason?: UncertainReason;
+  /** A placed cell this region seems to belong in (absent when none, or in older scans). */
+  placedConflict?: PlacedConflict;
 }
 
 export interface FitHint {
@@ -422,6 +475,9 @@ export interface ScanResult {
   gridEvidence?: GridEvidence;
 }
 
+/** What is wrong with a live frame (FrameQuality.problem). */
+export type FrameProblem = 'too_dark' | 'too_bright' | 'glare' | 'blurry';
+
 /** Quick live-camera feedback (computed on a downscaled video frame). */
 export interface FrameQuality {
   /** 0..1, higher = sharper. */
@@ -430,7 +486,11 @@ export interface FrameQuality {
   brightness: number;
   /** Fraction of clipped (over- or under-exposed) pixels. */
   clipped: number;
+  /** Fraction of the frame covered by specular glare (reflections of a lamp or the torch). */
+  glare?: number;
   ok: boolean;
+  /** What is wrong when not ok. */
+  problem?: FrameProblem;
   /** Short message when not ok ("Too dark", "Hold still", ...). */
   message?: string;
 }

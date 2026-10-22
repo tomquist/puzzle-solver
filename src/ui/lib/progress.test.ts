@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { emptyProgress, isPlaced, placeCells, placedCells, placedCount, progressPercent, unplaceCells } from './progress';
+import { emptyProgress, isPlaced, placeCells, placedCells, placedCount, progressPercent, restorePlaced, unplaceCells } from './progress';
 
 const grid = { rows: 10, cols: 20 };
 
@@ -42,5 +42,13 @@ describe('progress math', () => {
     const p = placeCells(emptyProgress('p'), [{ row: 2, col: 2 }, { row: 3, col: 3 }], {}, 1);
     const q = unplaceCells(p, [{ row: 2, col: 2 }], 2);
     expect(Object.keys(q.placed)).toEqual(['3,3']);
+  });
+
+  it('puts unplaced entries back as they were (undo)', () => {
+    const p = placeCells(emptyProgress('p'), [{ row: 2, col: 2 }], { scanId: 's1', regionId: 4 }, 1);
+    const entry = p.placed['2,2'];
+    const q = restorePlaced(unplaceCells(p, [{ row: 2, col: 2 }], 2), { '2,2': entry }, 3);
+    expect(q.placed['2,2']).toEqual({ at: 1, scanId: 's1', regionId: 4 });
+    expect(q.updatedAt).toBe(3);
   });
 });

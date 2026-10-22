@@ -1,9 +1,11 @@
 /**
- * Camera access: rear camera at high resolution, full-resolution stills, torch, cleanup.
+ * Camera access: rear camera at high resolution, stills sized for their purpose, torch, cleanup.
  * Browser-only. All failures surface as {@link CameraError} with a user-presentable kind.
  */
 import type { RGBAImage } from '../cv/image';
+import type { CaptureInfo } from '../model/types';
 import { canvasToBlob, context2d, createCanvas, sourceToRGBA } from './imageio';
+import { photoSettingsFor, type PhotoCapabilitiesLike, type PhotoPurpose, type PhotoSize } from './photoSettings';
 
 export type CameraErrorKind = 'unsupported' | 'insecure' | 'denied' | 'not_found' | 'in_use' | 'unknown';
 
@@ -26,12 +28,8 @@ export const CAMERA_ERROR_TEXT: Record<CameraErrorKind, string> = {
 };
 
 // Parts of the Image Capture / torch APIs that TypeScript's DOM lib does not describe.
-interface PhotoCapabilitiesLike {
-  imageWidth?: { max?: number };
-  imageHeight?: { max?: number };
-}
 interface ImageCaptureLike {
-  takePhoto(settings?: { imageWidth?: number; imageHeight?: number }): Promise<Blob>;
+  takePhoto(settings?: Partial<PhotoSize>): Promise<Blob>;
   getPhotoCapabilities?(): Promise<PhotoCapabilitiesLike>;
 }
 type ImageCaptureCtor = new (track: MediaStreamTrack) => ImageCaptureLike;
@@ -78,14 +76,29 @@ function toCameraError(e: unknown): CameraError {
   }
 }
 
+/** A still and how it was taken (ScanRecord.capture; the size is filled in when it is decoded). */
+export interface CapturedPhoto {
+  blob: Blob;
+  capture: CaptureInfo;
+}
+
+/** Short name of an error for the capture record ("NotSupportedError"). */
+function errorName(e: unknown): string {
+  const name = e instanceof Error || e instanceof DOMException ? e.name || e.message : String(e);
+  return name.slice(0, 60);
+}
+
 export interface CameraSession {
   readonly stream: MediaStream;
   readonly track: MediaStreamTrack;
   readonly torchSupported: boolean;
   /** Turn the torch on/off. Resolves to the new state (false when not supported). */
   setTorch(on: boolean): Promise<boolean>;
-  /** Full-resolution still (ImageCapture.takePhoto when available, else the current video frame). */
-  takePhoto(video: HTMLVideoElement): Promise<Blob>;
+  /**
+   * A still for `purpose` (ImageCapture.takePhoto at the size photoSettingsFor picks, when
+   * available; else – or when it fails – the current video frame, which the capture info says).
+   */
+  takePhoto(video: HTMLVideoElement, purpose?: PhotoPurpose): Promise<CapturedPhoto>;
   /** Small RGBA copy of the current video frame for live quality feedback, or null if not ready. */
   grabFrame(video: HTMLVideoElement, maxSide?: number): RGBAImage | null;
   stop(): void;
@@ -139,17 +152,26 @@ export async function openCamera(): Promise<CameraSession> {
         return false;
       }
     },
-    async takePhoto(video: HTMLVideoElement) {
+    async takePhoto(video: HTMLVideoElement, purpose: PhotoPurpose = 'box') {
+      let fallbackReason: string | undefined;
       if (capture) {
         try {
-          let settings: { imageWidth?: number; imageHeight?: number } | undefined;
-          const caps = await capture.getPhotoCapabilities?.();
-          if (caps?.imageWidth?.max && caps.imageHeight?.max) {
-            settings = { imageWidth: caps.imageWidth.max, imageHeight: caps.imageHeight.max };
+          const caps = (await capture.getPhotoCapabilities?.()) as PhotoCapabilitiesLike | undefined;
+          const settings = photoSettingsFor(caps, purpose);
+          const requested = settings ? { width: settings.imageWidth, height: settings.imageHeight } : undefined;
+          try {
+            const blob = await capture.takePhoto(settings);
+            return { blob, capture: { method: 'takePhoto', ...(requested ? { requested } : {}) } };
+          } catch (e) {
+            if (!settings) throw e;
+            // A size the camera refuses: its default still is still a still.
+            const blob = await capture.takePhoto();
+            return { blob, capture: { method: 'takePhoto', requested, fallbackReason: `size refused: ${errorName(e)}` } };
           }
-          return await capture.takePhoto(settings);
-        } catch {
-          // Fall through to the video-frame path (some devices reject takePhoto while streaming).
+        } catch (e) {
+          // Fall through to the video-frame path (some devices reject takePhoto while streaming) –
+          // recorded with the scan, so lower-resolution photos can be told apart.
+          fallbackReason = errorName(e);
         }
       }
       const w = video.videoWidth;
@@ -157,7 +179,10 @@ export async function openCamera(): Promise<CameraSession> {
       if (!w || !h) throw new CameraError('unknown', 'The camera is not ready yet.');
       const canvas = createCanvas(w, h);
       context2d(canvas).drawImage(video, 0, 0, w, h);
-      return canvasToBlob(canvas, 'image/jpeg', 0.95);
+      const blob = await canvasToBlob(canvas, 'image/jpeg', 0.95);
+      const info: CaptureInfo = { method: 'video-frame', width: w, height: h };
+      if (capture) Object.assign(info, { fallback: true, fallbackReason });
+      return { blob, capture: info };
     },
     grabFrame(video: HTMLVideoElement, maxSide = 320) {
       if (stopped || video.readyState < 2 || !video.videoWidth) return null;

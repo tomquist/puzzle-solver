@@ -24,6 +24,7 @@ import type {
   CutStyle,
   DetectedRegion,
   FitHint,
+  FrameProblem,
   FrameQuality,
   GridSpec,
   MatchStatus,
@@ -36,6 +37,7 @@ import type {
   RegionMatch,
   SideKind,
   SideShape,
+  UncertainReason,
   GridEvidence,
 } from '../model/types';
 import { GRID_EVIDENCE_VERSION, SIDE_PROFILE_SAMPLES, cellKey } from '../model/types';
@@ -155,6 +157,9 @@ function reportScore(issues: QualityIssue[]): number {
 // ---------------------------------------------------------------------------------------------
 // Fake jigsaw geometry
 // ---------------------------------------------------------------------------------------------
+
+/** Reasons the mock gives unsure pieces (index: region id mod 6; the last slot has none). */
+const UNCERTAIN_REASONS: (UncertainReason | undefined)[] = ['plain', 'repeating', 'similar-spots', 'shape', 'small', undefined];
 
 const UNIT_SAMPLES = 16;
 
@@ -371,12 +376,13 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
     const { mean, clipped } = luminanceStats(frame);
     const lap = meanVariance(laplacian(gray));
     const sharpness = clamp(1 - Math.exp(-lap.variance / 120), 0, 1);
-    let message: string | undefined;
-    if (mean < 0.15) message = 'Too dark';
-    else if (mean > 0.9) message = 'Too bright';
-    else if (clipped > 0.2) message = 'Glare – move the light';
-    else if (sharpness < 0.3) message = 'Hold still';
-    return { sharpness, brightness: mean, clipped, ok: !message, message };
+    let problem: FrameProblem | undefined;
+    if (mean < 0.15) problem = 'too_dark';
+    else if (mean > 0.9) problem = 'too_bright';
+    else if (clipped > 0.2) problem = 'glare';
+    else if (sharpness < 0.3) problem = 'blurry';
+    const message = problem && { too_dark: 'Too dark', too_bright: 'Too bright', glare: 'Glare – move the light', blurry: 'Hold still' }[problem];
+    return { sharpness, brightness: mean, clipped, ok: !problem, problem, message };
   }
 
   // -------------------------------------------------------------------------------------------
@@ -580,6 +586,10 @@ export function createMockPipeline(options: MockPipelineOptions = {}): PipelineA
       conf *= candidates.length === 1 && status === 'ambiguous' ? 0.9 : 0.45 + 0.2 * rnd();
     }
     const match: RegionMatch = { regionId: region.id, candidates, status: candidates.length ? status : 'unmatched' };
+    // Why unsure, from the region id (no draw from rnd: the rest of the scan stays as it was); every
+    // sixth one without a reason, as the matcher leaves it out when it cannot tell.
+    const reason = UNCERTAIN_REASONS[region.id % 6];
+    if (match.status === 'ambiguous' && reason) match.uncertainReason = reason;
     if (slot.kind === 'patch' && candidates[0]) {
       const { row, col } = candidates[0];
       match.coveredCells = [

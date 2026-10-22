@@ -15,6 +15,7 @@ import { describeCell } from '../../../pipeline/grid';
 import { haptic, isCoarsePointer } from '../../../platform/device';
 import { EmptyState, ErrorState, Spinner } from '../../components/Feedback';
 import { IconBack, IconCheck, IconChevron, IconScan } from '../../components/Icons';
+import { UncertainNote } from '../../components/CertaintyNotes';
 import { PickupView, TargetZoomView } from '../../components/ItemVisuals';
 import { TurnGuide } from '../../components/TurnGuide';
 import { itemTone } from '../../components/ScanOverlay';
@@ -24,6 +25,7 @@ import { useRepo } from '../../context/RepositoryContext';
 import { useAsync } from '../../hooks/useAsync';
 import { useBitmap, useStoredBlob } from '../../hooks/useObjectUrl';
 import { usePrefs, useWakeLock } from '../../hooks/usePrefs';
+import { cardReason, certaintyLine, uncertaintyText } from '../../lib/certainty';
 import { plural } from '../../lib/format';
 import { cellsText, connectionsOf, describeConnections, itemKindText, nextFreeCandidate, placingOrder, type ItemPlacement, type ScanItem } from '../../lib/items';
 import { placeCells } from '../../lib/progress';
@@ -161,6 +163,7 @@ function PlacingView({ scan }: { scan: ScanRecord }) {
   const joins = item ? describeConnections(connectionsOf(item.key, links), (k) => byKey.get(k)?.label) : '';
   const turn = p?.rotationDeg !== undefined ? turnInstruction(p.rotationDeg) : undefined;
   const placedNow = item ? isPlacedItem(item) : false;
+  const why = item && !placedNow && cardReason(item) ? uncertaintyText(item) : undefined;
   const total = sequence.length;
   const back = href.scan(puzzle.id, scan.id);
 
@@ -226,7 +229,11 @@ function PlacingView({ scan }: { scan: ScanRecord }) {
               <span className="place-kind" data-testid="place-kind">
                 {itemKindText(item)}
               </span>
-              {item.status === 'ambiguous' && <span className="status-chip st-ambiguous">Unsure – check the picture</span>}
+              {item.status === 'ambiguous' && (
+                <span className="status-chip st-ambiguous" data-testid="place-certainty">
+                  {certaintyLine(item)}
+                </span>
+              )}
               {placedNow && <span className="status-chip st-confident">Placed</span>}
             </div>
             <div className="place-pick">
@@ -261,6 +268,7 @@ function PlacingView({ scan }: { scan: ScanRecord }) {
                 </p>
               )}
             </div>
+            {why && <UncertainNote reason={why} compact />}
             {joins && (
               <p className="muted small place-next-to" data-testid="place-joins">
                 {joins}
