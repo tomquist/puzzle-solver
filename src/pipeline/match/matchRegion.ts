@@ -15,10 +15,9 @@
  * on, so the shortlists keep free cells, but the best few places by the photo alone stay in the
  * shortlists too. When the photo alone places the region confidently in a marked cell, the photo
  * wins. The marks reorder the places, but lift a confidence by at most {@link PLACED_GAIN} over the
- * photo's own, and a single piece whose place the marks decided (the photo rates a marked cell
- * within {@link MARK_TIE} of it) stays ambiguous ({@link MARK_CONFLICT_CAP}). Whenever the photo's
- * own best place is a marked cell, the match names it in `placedConflict` (a wrong mark, or a piece
- * that came off the board).
+ * photo's own and never make a placement confident that the photo alone is unsure of
+ * ({@link MARKED_UNSURE_CAP}). Whenever the photo's own best place is a marked cell, the match names
+ * it in `placedConflict` (a wrong mark, or a piece that came off the board).
  */
 import { findSimilarity, type Point } from '../../cv/geometry';
 import { cellKey, type CellRef, type MatchStatus, type Placement, type PlacedConflict, type RefLattice, type RegionMatch, type SideKind, type UncertainReason } from '../../model/types';
@@ -85,19 +84,14 @@ const PHOTO_KEEP = 3;
  */
 export const PLACED_GAIN = 0.2;
 /**
- * Most confidence of a single piece whose placement the marks decided: the photo alone rates a
- * place in a marked cell within {@link MARK_TIE} of it, or better. A wrong mark on the piece's own
- * cell removes the true place and makes its neighbour confident (bench/placed.ts 'frame-e0.1' on
- * the private files: a piece at 0.705 next to its own marked cell at 0.691, confident precision
- * 0.967 against 0.983 without marks). The marks still reorder; such a placement stays ambiguous.
+ * Confidence (just below {@link CONFIDENT_THRESHOLD}) a placement the photo alone is unsure of gets
+ * from the marks at most: they reorder and lift it by up to {@link PLACED_GAIN}, but never make it
+ * 'confident'. The marks take competitors away; a wrong mark – on the piece's own cell, or a place
+ * correctly marked while the true one is not found at all – would make a wrong place sure on the
+ * user's word alone (scan scenes, every one, marks on 70 % of the cells: confident precision 0.994
+ * against 0.999 without marks; private files: fb20 piece 0, own cell marked, confident one cell off).
  */
-export const MARK_CONFLICT_CAP = 0.6;
-/**
- * Photo score difference within which a marked rival makes a placement one the marks decided. With
- * 0.04 the synthetic scenes' confident share with right marks drops (every other cell marked:
- * 0.874 → 0.857); 0.02 keeps it at 0.866 and still catches the private files' case.
- */
-const MARK_TIE = 0.02;
+export const MARKED_UNSURE_CAP = 0.69;
 
 function norm360(deg: number): number {
   const d = deg % 360;
@@ -392,10 +386,10 @@ function suppressBy(cands: Candidate[], radius: number, limit: number, key: (c: 
  * with placed cells, also the best {@link PHOTO_KEEP} by the photo alone, so a wrong mark cannot
  * drop the photo's own best places. Sorted by score.
  */
-function suppress(cands: Candidate[], radius: number, limit: number, placed?: PlacedPrior): Candidate[] {
+function suppress(cands: Candidate[], radius: number, limit: number, placed?: PlacedPrior, photoKeep = PHOTO_KEEP): Candidate[] {
   const kept = suppressBy(cands, radius, limit, (c) => c.score);
   if (placed && placed.cells.size > 0 && placed.penalty > 0) {
-    for (const c of suppressBy(cands, radius, PHOTO_KEEP, (c) => c.photo)) if (!kept.includes(c)) kept.push(c);
+    for (const c of suppressBy(cands, radius, photoKeep, (c) => c.photo)) if (!kept.includes(c)) kept.push(c);
     kept.sort((a, b) => b.score - a.score);
   }
   return kept;
@@ -764,7 +758,11 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
   }
   if (coarse.length === 0) return empty;
   const nKeep = isPatch ? 24 : 30;
-  let cands = suppress(coarse, 0.6 * cell, nKeep, placed);
+  // The coarse shortlist keeps the photo's own best nKeep places too: at 8 px per cell the true place
+  // of a piece whose own cell is wrongly marked can rank beyond the photo's best few, and with the
+  // penalty beyond the shortlist (wave-neighbors-wood: a piece sure without marks, 0.44 against
+  // 0.30, lost entirely with its own cell marked).
+  let cands = suppress(coarse, 0.6 * cell, nKeep, placed, nKeep);
 
   // 2. Position refinement through the finer levels.
   for (let li = ci + 1; li < L; li++) {
@@ -808,13 +806,6 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
   }
   ranked ??= rank(cands);
   if (photoView && !photoWins) capMarkedGain(ranked, photoView, placed!.gain, cell);
-  // Marks deciding a near tie: a place the photo rates about as well as the chosen one (or better)
-  // lies in a marked cell. The marks took it away, but a wrong mark on the piece's own cell does
-  // exactly that – the place next to it would become confident on the user's word alone.
-  if (photoView && !photoWins && !isPatch && ranked.conf > MARK_CONFLICT_CAP && markedRival(index, placed!, photoView, ranked.best)) {
-    ranked.confidences = ranked.confidences.map((p) => Math.min(p, MARK_CONFLICT_CAP));
-    ranked.conf = ranked.confidences[0];
-  }
   yield;
   const { best, chosen, conf, confidences, features } = ranked;
 
@@ -867,18 +858,6 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
   return { match, best: { map: best.map, ref: best.ref }, src, features, params: sp, lattice, reason, placements };
 }
 
-/**
- * Whether the photo alone rates a place in a marked cell, other than `chosen`'s, within
- * {@link MARK_TIE} of `chosen` or better (see {@link MARK_CONFLICT_CAP}).
- */
-function markedRival(index: ReferenceIndex, placed: PlacedPrior, photoView: Ranking, chosen: Candidate): boolean {
-  const own = cellKey(cellAt(index, chosen.ref));
-  return photoView.chosen.some((c) => {
-    const k = cellKey(cellAt(index, c.ref));
-    return k !== own && placed.cells.has(k) && c.score >= chosen.photo - MARK_TIE;
-  });
-}
-
 /** The placed-cell prior of a run (undefined without placed cells or with no penalty). */
 function placedPriorOf(opts: MatchOptions): PlacedPrior | undefined {
   const penalty = opts.placedPenalty ?? PLACED_PENALTY;
@@ -903,9 +882,25 @@ function placedConflictOf(index: ReferenceIndex, placed: PlacedPrior, photoView:
 }
 
 /**
+ * `RegionMatch.placedConflict` of a match made without the marks (the photo alone): its best place,
+ * when that is a marked cell (patches: when most of their covered cells are marked).
+ */
+export function placedConflictOfMatch(match: RegionMatch, placedCells: readonly CellRef[]): PlacedConflict | undefined {
+  const best = match.candidates[0];
+  if (!best || match.status === 'unmatched') return undefined;
+  const cells = new Set(placedCells.map(cellKey));
+  const covered = match.coveredCells;
+  if (covered && covered.length > 0) {
+    if (2 * covered.filter((c) => cells.has(cellKey(c))).length <= covered.length) return undefined;
+  } else if (!cells.has(cellKey(best))) return undefined;
+  return { row: best.row, col: best.col, rotationDeg: best.rotationDeg };
+}
+
+/**
  * Limit what the placed marks add to the best placement's confidence (see {@link PLACED_GAIN}): at
  * most `gain` over the photo's own confidence for the same place (same position and quarter turn;
- * 0 when the photo does not list it). Alternatives are capped alike.
+ * 0 when the photo does not list it), and never across the confident threshold
+ * ({@link MARKED_UNSURE_CAP}). Alternatives are capped alike.
  */
 function capMarkedGain(ranked: Ranking, photoView: Ranking, gain: number, cell: number): void {
   const rot = (c: Candidate) => norm360(c.map.phi * DEG);
@@ -913,7 +908,10 @@ function capMarkedGain(ranked: Ranking, photoView: Ranking, gain: number, cell: 
     const i = photoView.chosen.findIndex((p) => Math.hypot(p.ref.x - c.ref.x, p.ref.y - c.ref.y) < 0.5 * cell && angleDiff(rot(p), rot(c)) < 45);
     return i >= 0 ? photoView.confidences[i] : 0;
   };
-  ranked.confidences = ranked.confidences.map((p, i) => Math.min(p, own(ranked.chosen[i]) + gain));
+  ranked.confidences = ranked.confidences.map((p, i) => {
+    const o = own(ranked.chosen[i]);
+    return Math.min(p, o + gain, o < CONFIDENT_THRESHOLD ? MARKED_UNSURE_CAP : Infinity);
+  });
   ranked.conf = ranked.confidences[0];
 }
 

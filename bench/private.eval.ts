@@ -21,7 +21,8 @@
  * gapTop1 / gapTop3 for the pieces whose true cell is a gap (not marked, next to a marked cell; `gaps`
  * of them), next to the same pieces' results without marks (gapTop1None / gapTop3None).
  * Gate: with marks, wrong ones included, these are at least the no-marks result minus
- * PLACED_TOLERANCE_PRIVATE (0.015, one piece) for top1, top3 and confidentPrecision.
+ * PLACED_TOLERANCE_PRIVATE (0.015, one piece) for top1 and top3, and no more pieces are placed
+ * confidently in a wrong cell (confidentWrong) than without marks.
  */
 import { existsSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -49,7 +50,7 @@ const misses: string[] = [];
 const pairs: CalibrationPair[] = [];
 const PLACED = process.env.PLACED;
 const placedSettings = PLACED ? placedSettingsFromEnv(PLACED) : [];
-const PLACED_COLUMNS = ['pieces', 'top1', 'top3', 'rotationOk', 'confidentShare', 'confidentPrecision', 'confidentTurnPrecision', 'marked', 'markedTop1', 'conflicts', 'gaps', 'gapTop1', 'gapTop1None', 'gapTop3', 'gapTop3None'];
+const PLACED_COLUMNS = ['pieces', 'top1', 'top3', 'rotationOk', 'confidentShare', 'confidentPrecision', 'confidentTurnPrecision', 'confidentWrong', 'marked', 'markedTop1', 'conflicts', 'gaps', 'gapTop1', 'gapTop1None', 'gapTop3', 'gapTop3None'];
 /** Per placed setting: counts summed over the files' sure pieces. */
 const placedTally = new Map<string, Record<string, number>>();
 /** Placed settings: pieces placed confidently in a wrong cell. */
@@ -132,6 +133,7 @@ describe('private placement evaluation', () => {
           add('confident', +j.confident);
           add('confidentOk', +(j.confident && j.top1));
           add('confidentTurnOk', +(j.confident && j.top1 && j.rotationOk));
+          add('confidentWrong', +(j.confident && !j.top1));
           if (j.confident && !j.top1) placedMisses.push(`${setting.name}: ${describeMiss(name, j)}${marks.onScan.has(cellKey(p)) ? ' (own cell marked)' : ''}`);
           if (marks.onScan.has(cellKey(p))) {
             add('marked', 1);
@@ -151,7 +153,9 @@ describe('private placement evaluation', () => {
       const problems: string[] = [];
       for (const [name, rec] of Object.entries(res)) {
         if (name === 'none') continue;
-        for (const k of ['top1', 'top3', 'confidentPrecision']) if (rec[k] < none[k] - tol - 1e-9) problems.push(`${name}.${k}: ${rec[k].toFixed(3)} < none ${none[k].toFixed(3)} - ${tol}`);
+        for (const k of ['top1', 'top3']) if (rec[k] < none[k] - tol - 1e-9) problems.push(`${name}.${k}: ${rec[k].toFixed(3)} < none ${none[k].toFixed(3)} - ${tol}`);
+        // Not one more piece placed surely in a wrong cell (a right one made unsure is no harm here).
+        if (rec.confidentWrong > none.confidentWrong) problems.push(`${name}.confidentWrong: ${rec.confidentWrong} > none ${none.confidentWrong}`);
       }
       if (problems.length > 0) throw new Error(problems.join('\n'));
     });
@@ -174,7 +178,7 @@ function placedResults(): Record<string, MetricRecord> {
     const r = (a: string, b: string) => ((t[b] ?? 0) > 0 ? (t[a] ?? 0) / t[b] : NaN);
     out[name] = {
       pieces: t.pieces ?? 0, top1: r('top1', 'pieces'), top3: r('top3', 'pieces'), rotationOk: r('rotationOk', 'top1'), confidentShare: r('confident', 'pieces'),
-      confidentPrecision: r('confidentOk', 'confident'), confidentTurnPrecision: r('confidentTurnOk', 'confident'),
+      confidentPrecision: r('confidentOk', 'confident'), confidentTurnPrecision: r('confidentTurnOk', 'confident'), confidentWrong: t.confidentWrong ?? 0,
       marked: t.marked ?? 0, markedTop1: r('markedTop1', 'marked'), conflicts: t.conflicts ?? 0,
       gaps: t.gaps ?? 0, gapTop1: r('gapTop1', 'gaps'), gapTop1None: r('gapTop1None', 'gaps'), gapTop3: r('gapTop3', 'gaps'), gapTop3None: r('gapTop3None', 'gaps'),
     };
