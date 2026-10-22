@@ -352,6 +352,15 @@ const CORE = 0.5;
 const CORE_SAMPLES = 8;
 /** Share of the core that must be patch (and not table) for a cell to count. */
 const CORE_COVERED = 0.5;
+/**
+ * Share of the whole cell that must be patch (and not table) as well. A piece there fills most of
+ * its cell (its blanks take a few per cent each); a knob of the piece next to it, which reaches far
+ * into the cell's middle once the placement's scale is a little small (a lone piece matched as a
+ * patch), or the sliver of a piece cut off by the photo's edge, does not.
+ */
+const CELL_COVERED = 0.5;
+/** Samples per side of the whole cell. */
+const CELL_SAMPLES = 10;
 
 /** A lattice cell of the patch and how much of its body middle the patch covers. */
 export interface LatticeCell {
@@ -390,7 +399,21 @@ export function latticeCells(l: PatchLattice, mask: Mask, table?: Mask, minCover
         }
       }
       const coverage = hit / (CORE_SAMPLES * CORE_SAMPLES);
-      if (coverage >= minCoverage) out.push({ i, j, coverage });
+      if (coverage < minCoverage) continue;
+      if (minCoverage > 0) {
+        let body = 0;
+        for (let t = 0; t < CELL_SAMPLES; t++) {
+          for (let s = 0; s < CELL_SAMPLES; s++) {
+            const p = latticePoint(l, i + (s + 0.5) / CELL_SAMPLES, j + (t + 0.5) / CELL_SAMPLES);
+            const ix = Math.round(p.x), iy = Math.round(p.y);
+            if (ix < 0 || iy < 0 || ix >= w || iy >= h) continue;
+            const k = iy * w + ix;
+            if (mask.data[k] && !(table && table.data[k])) body++;
+          }
+        }
+        if (body < CELL_COVERED * CELL_SAMPLES * CELL_SAMPLES) continue;
+      }
+      out.push({ i, j, coverage });
     }
   }
   return out;

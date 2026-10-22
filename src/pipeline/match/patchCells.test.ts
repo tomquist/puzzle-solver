@@ -3,7 +3,7 @@ import type { RGBAImage } from '../../cv/image';
 import { loadTestAsset } from '../../testing/nodeImageIO';
 import { generateJigsaw, perturbReference, renderPiecesPhoto, type JigsawCut, type PieceTruth } from '../../testing/synth';
 import { segmentPieces } from '../pieces';
-import { matchRegionDetailed, patchCoveredCells } from './matchRegion';
+import { matchRegionDetailed, patchCoveredCells, sameLatticeGeometry } from './matchRegion';
 import { buildReferenceIndex, type MatchInput, type ReferenceIndex } from './index';
 
 /**
@@ -75,5 +75,27 @@ describe('patch cells — a 56-cell block with holes and notches at an odd angle
     expect(ch).toBeCloseTo(index.cellH, 0);
     expect(worst).toBeGreaterThan(0.25);
     expect(keys(patchCoveredCells(index, input, off))).toEqual([...cells].sort());
+  });
+});
+
+describe('patch cells — which candidates share the best placement\'s lattice', () => {
+  const at = (deg: number, s: number) => ({ map: { pivot: { x: 0, y: 0 }, phi: (deg * Math.PI) / 180, s } });
+  const square = { cellW: 100, cellH: 100 }, wide = { cellW: 120, cellH: 100 };
+  const best = at(10, 2);
+
+  it('shares it at about the same scale and turn', () => {
+    expect(sameLatticeGeometry(square, best, at(11.5, 2.08))).toBe(true);
+    expect(sameLatticeGeometry(wide, best, at(190, 1.95))).toBe(true);
+  });
+
+  it('not at another piece count (scale) or turn', () => {
+    // A two-piece hypothesis next to a one-piece one: cells of another size in the photo.
+    expect(sameLatticeGeometry(square, best, at(10, 2 * 0.8))).toBe(false);
+    expect(sameLatticeGeometry(square, best, at(25, 2))).toBe(false);
+  });
+
+  it('a quarter turn keeps square cells but swaps the width and height of oblong ones', () => {
+    expect(sameLatticeGeometry(square, best, at(100, 2))).toBe(true);
+    expect(sameLatticeGeometry(wide, best, at(100, 2))).toBe(false);
   });
 });

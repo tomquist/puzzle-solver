@@ -803,11 +803,14 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
   let lattice: PatchLattice | undefined;
   if (isPatch) {
     // Patches report the top-most, then left-most covered cell as row/col.
-    // One lattice for all candidates: it is the photo's own geometry, only its place on the grid differs.
+    // One lattice for the candidates that see the photo at the best one's cell size and turn: it is
+    // the photo's own geometry, only its place on the grid differs. A candidate at another cell size
+    // (another piece-count hypothesis) or turn has cells of its own size in the photo; the best one's
+    // lattice would put the wrong cells under it.
     lattice = patchLatticeOf(index, input, best);
     const lat = lattice;
     chosen.forEach((c, i) => {
-      const cells = patchCoveredCells(index, input, c, lat);
+      const cells = patchCoveredCells(index, input, c, i === 0 || sameLatticeGeometry(index, best, c) ? lat : undefined);
       if (i === 0) coveredCells = cells;
       if (cells.length > 0) {
         const tl = cells.reduce((a, b) => (b.row < a.row || (b.row === a.row && b.col < a.col) ? b : a));
@@ -1173,6 +1176,26 @@ export function patchLatticeOf(index: ReferenceIndex, input: MatchInput, c: Pick
     strength: [-1, -1],
   };
   return fitPatchLattice(input.image, input.mask, prior);
+}
+
+/**
+ * Largest scale difference (|ln| of the ratio) and turn difference (degrees) between two placements
+ * of a patch that still share one photo lattice: the range the lattice fit searches around its
+ * prior (pieces/patchLattice.ts: ±6 % pitch, ±2.4°).
+ */
+const LATTICE_SHARE_SCALE = 0.06;
+const LATTICE_SHARE_ANGLE = 2.4;
+
+/**
+ * Whether placement `c` sees the patch with the cells of placement `best` (see
+ * {@link LATTICE_SHARE_SCALE}): about the same scale, and the same turn up to a quarter turn when
+ * the cells are square (a half turn otherwise: a quarter turn swaps the cells' width and height).
+ */
+export function sameLatticeGeometry(index: Pick<ReferenceIndex, 'cellW' | 'cellH'>, best: Pick<Candidate, 'map'>, c: Pick<Candidate, 'map'>): boolean {
+  if (Math.abs(Math.log(c.map.s / best.map.s)) > LATTICE_SHARE_SCALE) return false;
+  const period = Math.abs(Math.log(index.cellW / index.cellH)) < 0.02 ? 90 : 180;
+  const d = norm360((c.map.phi - best.map.phi) * DEG) % period;
+  return Math.min(d, period - d) <= LATTICE_SHARE_ANGLE;
 }
 
 /**

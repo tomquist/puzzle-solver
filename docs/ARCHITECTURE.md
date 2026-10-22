@@ -319,11 +319,14 @@ patch without a size reference is also searched at every size up to the whole pu
 cells come from its own cell lattice (`pieces/patchLattice.ts`): starting from the grid its
 placement implies, the angle, both pitches and the phases are fitted to the dark cut lines and
 the straight outline edges (folded seam profiles; an axis without a clear seam peak keeps the
-placement's), and a cell counts when the middle half of its body is patch that does not show the
-table (segmentation reports the table inside a patch: shadowed holes and notches of missing
-pieces). The lattice is rigid, so one integer offset puts all its cells on the grid – a small
-angle or scale error of the placement over a large block no longer drops rim pieces or counts
-holes. One cell, one piece (`match/claims.ts`): a confident
+placement's), and a cell counts when the middle half of its body, and half of the whole cell, is
+patch that does not show the table (segmentation reports the table inside a patch: shadowed holes
+and notches of missing pieces; the whole-cell share keeps a knob that reaches into the middle of
+the next cell – a lone piece matched as a patch at a slightly small scale – or the sliver of a
+piece cut off by the photo's edge from counting). The lattice is rigid, so one integer offset puts
+all its cells on the grid – a small angle or scale error of the placement over a large block no
+longer drops rim pieces or counts holes. Alternative placements at another scale (another piece
+count) or turn fit a lattice of their own. One cell, one piece (`match/claims.ts`): a confident
 loose piece on a cell a patch covers is a contradiction – the less confident placement gives way –
 and when the scan's confident placements and the user's placed cells leave at most three cells
 free, the pieces without a confident place are assigned to them (the corner under a box picture's
