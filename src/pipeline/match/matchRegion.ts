@@ -644,14 +644,6 @@ export interface MatchDetail {
   placements?: CandidatePlacement[];
   /** Why the placement would be unsure (see {@link uncertainReasonOf}; set whatever the status, for later demotions). */
   reason?: UncertainReason;
-  /**
-   * The photo's own confidence for each of `match.candidates` as matched (without the placed
-   * marks; 0 for a place the photo alone does not list): what any use of the marks may lift a
-   * confidence above by at most the placed gain.
-   */
-  photoConfidences?: number[];
-  /** The scan-level colour correction this match ran with, if any. */
-  correction?: ColorCorrection;
 }
 
 /** Body size (photo px) below which a region counts as small: fewer pixels than the finest level's 32 px per cell, by a margin. */
@@ -815,8 +807,7 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
     }
   }
   ranked ??= rank(cands);
-  // The photo's own confidence for each listed place (the marks' gain is measured from it).
-  const photoConfidences = photoView && !photoWins ? capMarkedGain(ranked, photoView, placed!.gain, cell) : [...ranked.confidences];
+  if (photoView && !photoWins) capMarkedGain(ranked, photoView, placed!.gain, cell);
   // Marks deciding a near tie: a place the photo rates about as well as the chosen one (or better)
   // lies in a marked cell. The marks took it away, but a wrong mark on the piece's own cell does
   // exactly that – the place next to it would become confident on the user's word alone.
@@ -873,7 +864,7 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
   if (conflict) match.placedConflict = conflict;
   const reason = uncertainReasonOf(features, input, roughBody);
   if (status === 'ambiguous') match.uncertainReason = reason;
-  return { match, best: { map: best.map, ref: best.ref }, src, features, params: sp, lattice, reason, placements, photoConfidences, correction: ctx.correction };
+  return { match, best: { map: best.map, ref: best.ref }, src, features, params: sp, lattice, reason, placements };
 }
 
 /**
@@ -914,19 +905,16 @@ function placedConflictOf(index: ReferenceIndex, placed: PlacedPrior, photoView:
 /**
  * Limit what the placed marks add to the best placement's confidence (see {@link PLACED_GAIN}): at
  * most `gain` over the photo's own confidence for the same place (same position and quarter turn;
- * 0 when the photo does not list it). Alternatives are capped alike. Returns the photo's own
- * confidences of the ranked places.
+ * 0 when the photo does not list it). Alternatives are capped alike.
  */
-function capMarkedGain(ranked: Ranking, photoView: Ranking, gain: number, cell: number): number[] {
+function capMarkedGain(ranked: Ranking, photoView: Ranking, gain: number, cell: number): void {
   const rot = (c: Candidate) => norm360(c.map.phi * DEG);
   const own = (c: Candidate) => {
     const i = photoView.chosen.findIndex((p) => Math.hypot(p.ref.x - c.ref.x, p.ref.y - c.ref.y) < 0.5 * cell && angleDiff(rot(p), rot(c)) < 45);
     return i >= 0 ? photoView.confidences[i] : 0;
   };
-  const photo = ranked.chosen.map(own);
-  ranked.confidences = ranked.confidences.map((p, i) => Math.min(p, photo[i] + gain));
+  ranked.confidences = ranked.confidences.map((p, i) => Math.min(p, own(ranked.chosen[i]) + gain));
   ranked.conf = ranked.confidences[0];
-  return photo;
 }
 
 /** The ranked candidates of a run with their confidences (see {@link rankCandidates}). */

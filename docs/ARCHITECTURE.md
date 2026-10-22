@@ -353,7 +353,15 @@ two pieces with the same best cell moves to its next free candidate when that sc
 `CLAIM_SLACK` (0.05), otherwise it is no longer confident. A placement
 that is not confident carries `RegionMatch.uncertainReason` ('shape', 'small', 'plain',
 'repeating', 'similar-spots'), from the evidence the confidence was computed from.
-`bench/placed.eval.ts` measures all of this with simulated marks, wrong ones included.
+`bench/placed.eval.ts` measures all of this with simulated marks, wrong ones included, and reports
+the pieces whose true cell is a gap (free, next to a marked cell) separately. Evidence about gaps
+beyond the penalty was tried and dropped (it paid nothing; see the commit that removed
+`match/gaps.ts`): a bonus per placed neighbour, the colours just inside a piece's sides against
+the box picture just across the cut into the placed neighbour, and a clear-reading border check.
+Over every scan scene with marks around an assembled region or random ones, a quarter of them
+wrong, top-1 moved by −0.005 … +0.002 and gap top-1 by −0.004 … +0.007 – the size of one or two
+pieces either way; the border check never fired (the flat-side prior has already ranked such
+places down).
 
 **Grid belief** – the grid comes from the piece count, and boxes round ("1500" for 45 × 34) or the
 count is unknown; one column off puts the right half of the picture a cell off. Each scan measures

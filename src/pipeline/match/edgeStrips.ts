@@ -123,13 +123,13 @@ export function cornerPositions(arc: OutlineArc, shape: Pick<PieceShape, 'corner
 }
 
 /** Cumulative lengths of an open polyline. */
-export function cumulative(path: readonly Point[]): Float64Array {
+function cumulative(path: readonly Point[]): Float64Array {
   const cum = new Float64Array(path.length);
   for (let i = 1; i < path.length; i++) cum[i] = cum[i - 1] + Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y);
   return cum;
 }
 
-export function pointOnPath(path: readonly Point[], cum: Float64Array, s: number): Point {
+function pointOnPath(path: readonly Point[], cum: Float64Array, s: number): Point {
   const n = path.length;
   if (s <= 0) return path[0];
   if (s >= cum[n - 1]) return path[n - 1];

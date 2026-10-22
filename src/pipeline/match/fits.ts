@@ -18,7 +18,6 @@ import {
   type PuzzleSide,
   type RegionMatch,
   type SideKind,
-  type SideShape,
 } from '../../model/types';
 
 const SIDES: PuzzleSide[] = ['top', 'right', 'bottom', 'left'];
@@ -80,19 +79,6 @@ const CLEAR_FLAT = 0.04;
 const CLEAR_KNOB = 0.12;
 
 /**
- * A side's kind when its reading is clear: 'flat' when read flat and straighter than
- * {@link CLEAR_FLAT}, 'knob' when read as a tab or blank deeper than {@link CLEAR_KNOB}; null in
- * between or unknown (real flat sides deviate 0.04–0.08 of their length, a partly filled blank reads
- * shallow).
- */
-export function clearReading(side: Pick<SideShape, 'kind' | 'profile'>): 'flat' | 'knob' | null {
-  let ext = 0;
-  for (const v of side.profile) ext = Math.max(ext, Math.abs(v));
-  if (side.kind === 'flat') return ext < CLEAR_FLAT ? 'flat' : null;
-  return (side.kind === 'tab' || side.kind === 'blank') && ext > CLEAR_KNOB ? 'knob' : null;
-}
-
-/**
  * Whether local side `i` of piece `a` can touch local side `j` of piece `b` as far as their
  * neighbouring sides tell: the sides on either side of the joint run along the same line, so each
  * is flat (the puzzle border) exactly when its counterpart on the other piece is – side i + 1 of A
@@ -100,7 +86,13 @@ export function clearReading(side: Pick<SideShape, 'kind' | 'profile'>): 'flat' 
  * a clear knob rules a pair out; unknown and borderline sides tell nothing.
  */
 export function neighboursAgree(a: PieceShape, i: number, b: PieceShape, j: number): boolean {
-  const reading = (s: PieceShape, k: number) => clearReading(s.sides[((k % 4) + 4) % 4]);
+  const reading = (s: PieceShape, k: number): 'flat' | 'knob' | null => {
+    const side = s.sides[((k % 4) + 4) % 4];
+    let ext = 0;
+    for (const v of side.profile) ext = Math.max(ext, Math.abs(v));
+    if (side.kind === 'flat') return ext < CLEAR_FLAT ? 'flat' : null;
+    return (side.kind === 'tab' || side.kind === 'blank') && ext > CLEAR_KNOB ? 'knob' : null;
+  };
   const same = (x: 'flat' | 'knob' | null, y: 'flat' | 'knob' | null) => x === null || y === null || x === y;
   return same(reading(a, i + 1), reading(b, j - 1)) && same(reading(a, i - 1), reading(b, j + 1));
 }
