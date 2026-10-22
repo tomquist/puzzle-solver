@@ -254,7 +254,7 @@ matchRegions(index, inputs: MatchInput[], opts?): RegionMatch[]   // whole scan;
   // MatchInput { regionId; kind: RegionKind; image: RGBAImage (bbox crop); mask: Mask (same size);
   //              origin: Point (crop origin in photo coords); shape?: PieceShape (photo coords);
   //              orientationDeg: number; expectedBodySize?: number /* photo px per cell */ }
-  // MatchOptions { placedCells?: CellRef[]; maxCandidates?: number }
+  // MatchOptions { placedCells?: CellRef[]; placedPenalty?: number; maxCandidates?: number }
 findFits(regions: DetectedRegion[], matches: RegionMatch[], grid: GridSpec, opts?: FitOptions): FitHint[]
   // FitOptions { shape?: 'rms' | 'dtw' | 'dtw-levelled'; band?; strips?: Map<regionId, EdgeStrips>; colourShare?; cache? }
 sampleEdgeStrips(image, mask, origin, contour, shape): EdgeStrips | null   // Lab strip just inside each side
@@ -331,6 +331,23 @@ badge, the last pieces of a puzzle). A region whose size says it is not what it 
 single piece far from one piece's area (merged pieces, table attached, half a piece), or a small
 patch of touching loose pieces – is placed at most ambiguously, also when its neighbours would
 place it (groups).
+
+**Placed cells are soft evidence.** Users make mistakes when marking pieces as placed, and their
+mistakes must not cost accuracy. A cell marked as placed lowers the score of every candidate in it
+by `PLACED_PENALTY` from the first (coarse) search on, so the shortlists keep the free cells; the
+best few places by the photo alone stay in the shortlists too. When the photo alone places a region
+confidently in a marked cell, the photo wins. Marks take competitors away, which would raise the
+confidence of what is left – also of a wrong place – so they lift a placement's confidence by at
+most `PLACED_GAIN` (0.2) over the photo's own for that place. Whenever the photo's own best place
+is a marked cell, `RegionMatch.placedConflict` names it (whether the photo won there or the marks
+moved the piece): the UI can offer to unmark it. The marks are never an exclusion: the
+last-free-cells rule (`placeByElimination`) stays unsure when the piece itself points at a marked
+cell. Among the scan's loose pieces one cell holds one piece (`uniqueCells`): the less confident of
+two pieces with the same best cell moves to its next free candidate when that scores within
+`CLAIM_SLACK` (0.05), otherwise it is no longer confident. A placement
+that is not confident carries `RegionMatch.uncertainReason` ('shape', 'small', 'plain',
+'repeating', 'similar-spots'), from the evidence the confidence was computed from.
+`bench/placed.eval.ts` measures all of this with simulated marks, wrong ones included.
 
 **Grid belief** – the grid comes from the piece count, and boxes round ("1500" for 45 × 34) or the
 count is unknown; one column off puts the right half of the picture a cell off. Each scan measures

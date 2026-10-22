@@ -19,11 +19,13 @@ import {
   sampleEdgeStrips,
   scorePlacement,
   shapeFits,
+  uniqueCells,
   type ConsistencyReport,
   type EdgeStrips,
   type FitOptions,
   type MatchDetail,
   type MatchInput,
+  type MatchOptions,
   type ReferenceIndex,
   type ShapeMetric,
 } from './match';
@@ -53,8 +55,37 @@ export interface SideComparison {
  */
 export const DEFAULT_SIDE_COMPARISON: SideComparison = { shape: 'dtw-levelled', colour: false };
 
+/**
+ * Knobs of the scan-level placement steps, for benchmark A/B runs and sweeps (defaults below and in
+ * match/; see `PLACEMENT_TUNING` in testing/nodeImageIO.ts).
+ */
+export interface PlacementTuning {
+  /** Score penalty of a place in a cell the user marked as placed (default `PLACED_PENALTY`). */
+  placedPenalty?: number;
+  /** Most the marks may lift a confidence over the photo's own (default `PLACED_GAIN`). */
+  placedGain?: number;
+  /** One cell per piece within the scan (default {@link DEFAULT_UNIQUE_CELLS}; match/claims.ts `uniqueCells`). */
+  uniqueCells?: boolean;
+  /** Score slack of `uniqueCells` (default `CLAIM_SLACK`). */
+  claimSlack?: number;
+}
+
+/**
+ * Whether one cell per piece is enforced among the scan's loose pieces unless the caller chooses
+ * (match/claims.ts `uniqueCells`): on. Scan benchmark: starry-grey-neighbors top-1 0.586 → 0.638,
+ * no other scene changes; with simulated placed marks every other cell marked, confident precision
+ * 0.992 → 1.
+ */
+export const DEFAULT_UNIQUE_CELLS = true;
+
 export interface AnalyzeScanOptions {
+  /**
+   * Cells the user has marked as placed. Soft evidence, never a hard exclusion (the marks may be
+   * wrong): see match/matchRegion.ts and `RegionMatch.placedConflict`.
+   */
   placedCells?: CellRef[];
+  /** Placement knobs (benchmarks). */
+  tuning?: PlacementTuning;
   /** Longest side the photo is reduced to before analysis (default 2400). */
   maxSide?: number;
   onProgress?: ProgressCallback;
@@ -147,7 +178,9 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
       solidity: s.region.contour.length >= 3 ? s.region.area / Math.max(1, polygonArea(convexHull(s.region.contour))) : undefined,
     },
   }));
-  const details = inputs.length > 0 ? matchRegionsDetailed(index, inputs, { placedCells: opts.placedCells }) : [];
+  const tuning = opts.tuning ?? {};
+  const matchOptions: MatchOptions = { placedCells: opts.placedCells, placedPenalty: tuning.placedPenalty, placedGain: tuning.placedGain };
+  const details = inputs.length > 0 ? matchRegionsDetailed(index, inputs, matchOptions) : [];
   timings.match = now() - t;
 
   const byId = new Map<number, RegionMatch>(details.map((d) => [d.match.regionId, d.match]));
@@ -183,20 +216,22 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
       placedCells: opts.placedCells,
       score: (id, cell, rotationDeg) => {
         const inp = inputById.get(id), d = detailById.get(id);
-        return inp && d ? scorePlacement(index, inp, d, cell, rotationDeg, { placedCells: opts.placedCells }) : null;
+        return inp && d ? scorePlacement(index, inp, d, cell, rotationDeg, matchOptions) : null;
       },
     });
     timings.consistency = now() - tc;
   }
-  // A confident loose piece on a cell a patch covers: the weaker placement gives way; the last free
-  // cells go to the pieces without a confident place (claims.ts).
+  // A confident loose piece on a cell a patch covers: the weaker placement gives way; one cell, one
+  // piece among the loose pieces; the last free cells go to the pieces without a confident place
+  // (claims.ts).
   resolveCellClaims(regions, matches);
+  if (tuning.uniqueCells ?? DEFAULT_UNIQUE_CELLS) uniqueCells(regions, matches, tuning.claimSlack);
   {
     const inputById = new Map<number, MatchInput>(inputs.map((inp) => [inp.regionId, inp]));
     const detailById = new Map<number, MatchDetail>(details.map((d) => [d.match.regionId, d]));
     placeByElimination(regions, matches, index.grid, opts.placedCells ?? [], (id, cell, rotationDeg) => {
       const inp = inputById.get(id), d = detailById.get(id);
-      return inp && d ? scorePlacement(index, inp, d, cell, rotationDeg, { placedCells: opts.placedCells }) : null;
+      return inp && d ? scorePlacement(index, inp, d, cell, rotationDeg, matchOptions) : null;
     });
   }
   // Groups first (they may place weak members of assembled grids), then the fit hints.
@@ -236,6 +271,12 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
     }
   }
   timings.cellSize = now() - t;
+  // Why each placement that is not confident is unsure (claims.ts may have said so already).
+  const detailOf = new Map<number, MatchDetail>(details.map((d) => [d.match.regionId, d]));
+  for (const m of matches) {
+    if (m.status === 'confident') delete m.uncertainReason;
+    else if (m.status === 'ambiguous') m.uncertainReason ??= detailOf.get(m.regionId)?.reason;
+  }
   // A region placed confidently was evidently segmented well enough: no low-contrast warning for it.
   resolveRegionIssues(seg, new Set(matches.filter((m) => m.status === 'confident').map((m) => m.regionId)), ['low_contrast']);
   timings.total = now() - tStart;

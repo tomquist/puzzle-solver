@@ -8,7 +8,7 @@ import type { CellRef, RegionMatch } from '../../model/types';
 import { DEBUG_IMAGES, loadTestAsset, savePng } from '../../testing/nodeImageIO';
 import { generateJigsaw, perturbReference, renderPiecesPhoto, Rng, type JigsawCut, type PieceTruth } from '../../testing/synth';
 import { matchRegionsDetailed } from './colorCorrection';
-import { capForBorder, capForSize, CONFIDENT_THRESHOLD, matchConfidence, matchRegionDetailed, outlineFactor, patchBodySize, scorePlacement, type MatchDetail } from './matchRegion';
+import { capForBorder, capForSize, CONFIDENT_THRESHOLD, matchConfidence, matchRegionDetailed, outlineFactor, patchBodySize, PLACED_PENALTY, scorePlacement, uncertainReasonOf, type MatchDetail } from './matchRegion';
 import { buildReferenceIndex, cellAt, matchRegion, matchRegions, type MatchInput, type ReferenceIndex } from './index';
 import { accuracy, angleError, inputFromTruth, renderScenario, type Accuracy } from './testkit';
 
@@ -232,11 +232,53 @@ describe('matchRegion — Starry Night 20×16 (320 pieces)', () => {
     const input = inputFromTruth(scene.photo, cut, scene.truth[0], 1, { withShape: true });
     const a = matchRegion(index, input, { maxCandidates: 3 });
     expect(a.candidates.length).toBe(3);
+    const alt = a.candidates[1];
+    // Marking an alternative leaves the best place alone (and is no conflict).
+    const b = matchRegion(index, input, { placedCells: [{ row: alt.row, col: alt.col }] });
+    expect(b.candidates[0]).toMatchObject({ row: a.candidates[0].row, col: a.candidates[0].col });
+    expect(b.placedConflict).toBeUndefined();
+    // A placed cell scores PLACED_PENALTY (or the given penalty) less, the same in scorePlacement.
+    const d = matchRegionDetailed(index, input);
+    const cell = { row: alt.row, col: alt.col };
+    const free = scorePlacement(index, input, d, cell, alt.rotationDeg)!;
+    const marked = scorePlacement(index, input, d, cell, alt.rotationDeg, { placedCells: [cell] })!;
+    expect(marked.score).toBeCloseTo(free.score - PLACED_PENALTY, 5);
+    const strong = scorePlacement(index, input, d, cell, alt.rotationDeg, { placedCells: [cell], placedPenalty: 0.3 })!;
+    expect(strong.score).toBeCloseTo(free.score - 0.3, 5);
+  });
+
+  it('a wrong placed mark never moves a clearly placed piece: the photo wins and the conflict is flagged', () => {
+    const input = inputFromTruth(scene.photo, cut, scene.truth[0], 1, { withShape: true });
+    const a = matchRegion(index, input);
+    expect(a.status).toBe('confident');
+    expect(a.placedConflict).toBeUndefined();
     const top = a.candidates[0];
-    const b = matchRegion(index, input, { placedCells: [{ row: top.row, col: top.col }] });
-    const same = b.candidates.find((c) => c.row === top.row && c.col === top.col);
-    expect(same).toBeDefined();
-    expect(same!.score).toBeCloseTo(top.score - 0.1, 5);
+    // The user marked the piece's own cell as filled (and a few others).
+    const marks = [{ row: top.row, col: top.col }, { row: 0, col: 0 }, { row: 5, col: 7 }];
+    const b = matchRegion(index, input, { placedCells: marks });
+    expect(b.candidates[0]).toMatchObject({ row: top.row, col: top.col });
+    expect(b.candidates[0].score).toBeCloseTo(top.score, 5);
+    expect(b.candidates[0].confidence).toBeCloseTo(top.confidence, 5);
+    expect(b.status).toBe('confident');
+    expect(b.placedConflict).toMatchObject({ row: top.row, col: top.col });
+  });
+
+  it('wrong marks on the pieces\' own cells keep the pieces placed', () => {
+    const sub = scene.truth.slice(0, 8);
+    const inputs = sub.map((t, i) => inputFromTruth(scene.photo, cut, t, i + 1, { withShape: true }));
+    const plain = matchRegions(index, inputs);
+    // Every piece's own cell marked as filled (all wrong), plus a third of the others (right).
+    const own = sub.map((t) => ({ row: t.row, col: t.col }));
+    const others: CellRef[] = [];
+    for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) if ((row * cols + col) % 3 === 0 && !own.some((c) => c.row === row && c.col === col)) others.push({ row, col });
+    const marked = matchRegions(index, inputs, { placedCells: [...own, ...others] });
+    const right = (ms: RegionMatch[]) => ms.filter((m, i) => m.candidates[0]?.row === sub[i].row && m.candidates[0]?.col === sub[i].col).length;
+    const confidentRight = (ms: RegionMatch[]) => ms.filter((m, i) => m.status === 'confident' && m.candidates[0]?.row === sub[i].row && m.candidates[0]?.col === sub[i].col).length;
+    expect(right(marked)).toBeGreaterThanOrEqual(right(plain));
+    expect(confidentRight(marked)).toBeGreaterThanOrEqual(confidentRight(plain) - 1);
+    for (const m of marked) if (m.status === 'confident') expect(m.placedConflict).toBeDefined();
+    // A conflict names a marked cell the photo prefers, whether or not the marks moved the piece.
+    for (const m of marked) if (m.placedConflict) expect([...own, ...others].some((c) => c.row === m.placedConflict!.row && c.col === m.placedConflict!.col)).toBe(true);
   });
 
   it('returns unmatched for an empty region and ignores background', () => {
@@ -416,6 +458,23 @@ describe('matchRegion — outline reliability', () => {
       status: conf >= CONFIDENT_THRESHOLD ? 'confident' : 'ambiguous',
       candidates: [0, 1].map((i) => ({ row: 0, col: i, x: 0, y: 0, rotationDeg: 0, score: 0.8, confidence: i === 0 ? conf : 0.01 })),
     },
+  });
+
+  it('says why a placement is unsure', () => {
+    const f = { detail: 12, plateau05: 0, areaRatio: 1 };
+    const piece = { kind: 'piece' as const, shape: undefined };
+    expect(uncertainReasonOf(f, piece, 80)).toBe('similar-spots');
+    expect(uncertainReasonOf({ ...f, plateau05: 3 }, piece, 80)).toBe('repeating');
+    expect(uncertainReasonOf({ ...f, detail: 2, plateau05: 3 }, piece, 80)).toBe('plain');
+    expect(uncertainReasonOf({ ...f, detail: 2 }, piece, 20)).toBe('small');
+    expect(uncertainReasonOf({ ...f, detail: 2 }, { ...piece, outline: { issues: ['low_contrast'] } }, 20)).toBe('shape');
+    expect(uncertainReasonOf({ ...f, areaRatio: 2.1 }, piece, 80)).toBe('shape');
+    // A patch's area is no single piece's.
+    expect(uncertainReasonOf({ ...f, areaRatio: 6 }, { kind: 'patch', shape: undefined }, 80)).toBe('similar-spots');
+    // The caps say 'shape' themselves.
+    const capped = detail(0.99);
+    capForBorder(capped, { outline: { borderTable: 0.5 } });
+    expect(capped.reason).toBe('shape');
   });
 
   it('caps the confidence of outlines that include table or shadow', () => {

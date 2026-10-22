@@ -84,8 +84,15 @@ export interface OutlineEvidence {
 }
 
 export interface MatchOptions {
-  /** Cells already placed by the user; candidates there are penalised. */
+  /**
+   * Cells the user has marked as placed: candidates there score `placedPenalty` less (soft, never
+   * excluded: the marks may be wrong; see matchRegion.ts).
+   */
   placedCells?: CellRef[];
+  /** Score penalty of a candidate in a placed cell (default `PLACED_PENALTY`; benchmark sweeps). */
+  placedPenalty?: number;
+  /** Most the marks may lift a confidence over the photo's own (default `PLACED_GAIN`; benchmark sweeps). */
+  placedGain?: number;
   /** Number of distinct candidates to return (default 5). */
   maxCandidates?: number;
 }
