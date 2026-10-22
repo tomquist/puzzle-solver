@@ -336,12 +336,19 @@ patch of touching loose pieces – is placed at most ambiguously, also when its 
 place it (groups).
 
 **Placed cells are soft evidence.** Users make mistakes when marking pieces as placed, and their
-mistakes must not cost accuracy. A cell marked as placed lowers the score of every candidate in it
-by `PLACED_PENALTY` from the first (coarse) search on, so the shortlists keep the free cells; the
-best few places by the photo alone stay in the shortlists too. When the photo alone places a region
-confidently in a marked cell, the photo wins. Marks take competitors away, which would raise the
-confidence of what is left – also of a wrong place – so they lift a placement's confidence by at
-most `PLACED_GAIN` (0.2) over the photo's own for that place. Whenever the photo's own best place
+mistakes must not cost accuracy: with wrong marks a piece may move among places the photo cannot
+tell apart, or become unsure, but never become sure in a wrong place. The scan's first matching
+pass ignores the marks, so the colour correction comes from the photo alone (with marks, other
+pieces were confident there, and a different correction lost true places in the second pass); a
+piece the photo alone places surely keeps that place. In the second pass a cell marked as placed
+lowers the score of every candidate in it by `PLACED_PENALTY` from the first (coarse) search on, so
+the shortlists keep the free cells; the photo's own best places stay in the shortlists too (as many
+as the free ones at the coarse level, where a true place in a wrongly marked cell can rank far down).
+When the photo alone places a region confidently in a marked cell, the photo wins. Marks take
+competitors away, which would raise the confidence of what is left – also of a wrong place – so they
+lift a placement's confidence by at most `PLACED_GAIN` (0.2) over the photo's own for that place,
+and never make a placement confident that the photo alone is unsure of (`MARKED_UNSURE_CAP`).
+Whenever the photo's own best place
 is a marked cell, `RegionMatch.placedConflict` names it (whether the photo won there or the marks
 moved the piece): the UI can offer to unmark it. The marks are never an exclusion: the
 last-free-cells rule (`placeByElimination`) stays unsure when the piece itself points at a marked
@@ -350,7 +357,15 @@ two pieces with the same best cell moves to its next free candidate when that sc
 `CLAIM_SLACK` (0.05), otherwise it is no longer confident. A placement
 that is not confident carries `RegionMatch.uncertainReason` ('shape', 'small', 'plain',
 'repeating', 'similar-spots'), from the evidence the confidence was computed from.
-`bench/placed.eval.ts` measures all of this with simulated marks, wrong ones included.
+`bench/placed.eval.ts` measures all of this with simulated marks, wrong ones included, and reports
+the pieces whose true cell is a gap (free, next to a marked cell) separately. Evidence about gaps
+beyond the penalty was tried and dropped (it paid nothing; see the commit that removed
+`match/gaps.ts`): a bonus per placed neighbour, the colours just inside a piece's sides against
+the box picture just across the cut into the placed neighbour, and a clear-reading border check.
+Over every scan scene with marks around an assembled region or random ones, a quarter of them
+wrong, top-1 moved by −0.005 … +0.002 and gap top-1 by −0.004 … +0.007 – the size of one or two
+pieces either way; the border check never fired (the flat-side prior has already ranked such
+places down).
 
 **Grid belief** – the grid comes from the piece count, and boxes round ("1500" for 45 × 34) or the
 count is unknown; one column off puts the right half of the picture a cell off. Each scan measures

@@ -17,9 +17,12 @@
  *
  * PLACED=1 (or a list of settings, bench/placed.ts) also analyses every file with simulated
  * "placed" marks drawn from its truth – correct ones and wrong ones on the scan's own cells – and
- * reports top1 / top3 / confidentPrecision / confidentShare per setting over all files' pieces.
+ * reports top1 / top3 / confidentPrecision / confidentShare per setting over all files' pieces, and
+ * gapTop1 / gapTop3 for the pieces whose true cell is a gap (not marked, next to a marked cell; `gaps`
+ * of them), next to the same pieces' results without marks (gapTop1None / gapTop3None).
  * Gate: with marks, wrong ones included, these are at least the no-marks result minus
- * PLACED_TOLERANCE_PRIVATE (0.015, one piece) for top1, top3 and confidentPrecision.
+ * PLACED_TOLERANCE_PRIVATE (0.015, one piece) for top1 and top3, and no more pieces are placed
+ * confidently in a wrong cell (confidentWrong) than without marks.
  */
 import { existsSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -35,7 +38,7 @@ import { buildReferenceIndex, duplicateClaims } from '../src/pipeline/match';
 import { CONSISTENCY, PLACEMENT_TUNING, REPO_ROOT, SEGMENT_OPTIONS } from '../src/testing/nodeImageIO';
 import { saveCalibrationPairs } from './calibration';
 import { confusionTable, report, tallyPlacedSides, yieldToEventLoop, type CalibrationPair, type MetricRecord, type SideConfusion } from './lib';
-import { NO_MARKS, PLACED_TOLERANCE_PRIVATE, placedSettingsFromEnv, simulatePlacedCells } from './placed';
+import { gapNeighbours, NO_MARKS, PLACED_TOLERANCE_PRIVATE, placedSettingsFromEnv, simulatePlacedCells } from './placed';
 
 const DIR = resolve(REPO_ROOT, 'test-corpus/private');
 const files = existsSync(DIR)
@@ -47,7 +50,7 @@ const misses: string[] = [];
 const pairs: CalibrationPair[] = [];
 const PLACED = process.env.PLACED;
 const placedSettings = PLACED ? placedSettingsFromEnv(PLACED) : [];
-const PLACED_COLUMNS = ['pieces', 'top1', 'top3', 'rotationOk', 'confidentShare', 'confidentPrecision', 'confidentTurnPrecision', 'marked', 'markedTop1', 'conflicts'];
+const PLACED_COLUMNS = ['pieces', 'top1', 'top3', 'rotationOk', 'confidentShare', 'confidentPrecision', 'confidentTurnPrecision', 'confidentWrong', 'marked', 'markedTop1', 'conflicts', 'gaps', 'gapTop1', 'gapTop1None', 'gapTop3', 'gapTop3None'];
 /** Per placed setting: counts summed over the files' sure pieces. */
 const placedTally = new Map<string, Record<string, number>>();
 /** Placed settings: pieces placed confidently in a wrong cell. */
@@ -100,6 +103,8 @@ describe('private placement evaluation', () => {
       const index = buildReferenceIndex(decodeFeedbackImage(bundle.reference), bundle.puzzle.grid, bundle.puzzle.cut);
       const scanCells: CellRef[] = [...(truth.pieces ?? []).map((p) => ({ row: p.row, col: p.col })), ...(truth.blocks ?? []).flatMap((b) => b.cells)];
       const seed = [...name].reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) >>> 0, 7);
+      /** Per truth piece: right cell first / among the best three, without marks. */
+      const unmarked = new Map<number, { top1: boolean; top3: boolean }>();
       for (const setting of placedSettings) {
         await yieldToEventLoop();
         const marks = simulatePlacedCells(bundle.puzzle.grid, scanCells, setting, seed);
@@ -108,9 +113,19 @@ describe('private placement evaluation', () => {
         const matchById = new Map(result.matches.map((m) => [m.regionId, m]));
         const t = placedTally.get(setting.name) ?? {};
         const add = (k: string, v: number) => (t[k] = (t[k] ?? 0) + v);
+        const markSet = new Set(marks.cells.map(cellKey));
         (truth.pieces ?? []).forEach((p, i) => {
           const j = score.items[i];
           if (j.unsure) return;
+          if (setting === NO_MARKS) unmarked.set(i, { top1: j.top1, top3: j.top3 });
+          if (gapNeighbours(bundle.puzzle.grid, markSet, p) > 0) {
+            const ref = unmarked.get(i) ?? { top1: false, top3: false };
+            add('gaps', 1);
+            add('gapTop1', +j.top1);
+            add('gapTop3', +j.top3);
+            add('gapTop1None', +ref.top1);
+            add('gapTop3None', +ref.top3);
+          }
           add('pieces', 1);
           add('top1', +j.top1);
           add('top3', +j.top3);
@@ -118,6 +133,7 @@ describe('private placement evaluation', () => {
           add('confident', +j.confident);
           add('confidentOk', +(j.confident && j.top1));
           add('confidentTurnOk', +(j.confident && j.top1 && j.rotationOk));
+          add('confidentWrong', +(j.confident && !j.top1));
           if (j.confident && !j.top1) placedMisses.push(`${setting.name}: ${describeMiss(name, j)}${marks.onScan.has(cellKey(p)) ? ' (own cell marked)' : ''}`);
           if (marks.onScan.has(cellKey(p))) {
             add('marked', 1);
@@ -137,7 +153,9 @@ describe('private placement evaluation', () => {
       const problems: string[] = [];
       for (const [name, rec] of Object.entries(res)) {
         if (name === 'none') continue;
-        for (const k of ['top1', 'top3', 'confidentPrecision']) if (rec[k] < none[k] - tol - 1e-9) problems.push(`${name}.${k}: ${rec[k].toFixed(3)} < none ${none[k].toFixed(3)} - ${tol}`);
+        for (const k of ['top1', 'top3']) if (rec[k] < none[k] - tol - 1e-9) problems.push(`${name}.${k}: ${rec[k].toFixed(3)} < none ${none[k].toFixed(3)} - ${tol}`);
+        // Not one more piece placed surely in a wrong cell (a right one made unsure is no harm here).
+        if (rec.confidentWrong > none.confidentWrong) problems.push(`${name}.confidentWrong: ${rec.confidentWrong} > none ${none.confidentWrong}`);
       }
       if (problems.length > 0) throw new Error(problems.join('\n'));
     });
@@ -160,8 +178,9 @@ function placedResults(): Record<string, MetricRecord> {
     const r = (a: string, b: string) => ((t[b] ?? 0) > 0 ? (t[a] ?? 0) / t[b] : NaN);
     out[name] = {
       pieces: t.pieces ?? 0, top1: r('top1', 'pieces'), top3: r('top3', 'pieces'), rotationOk: r('rotationOk', 'top1'), confidentShare: r('confident', 'pieces'),
-      confidentPrecision: r('confidentOk', 'confident'), confidentTurnPrecision: r('confidentTurnOk', 'confident'),
+      confidentPrecision: r('confidentOk', 'confident'), confidentTurnPrecision: r('confidentTurnOk', 'confident'), confidentWrong: t.confidentWrong ?? 0,
       marked: t.marked ?? 0, markedTop1: r('markedTop1', 'marked'), conflicts: t.conflicts ?? 0,
+      gaps: t.gaps ?? 0, gapTop1: r('gapTop1', 'gaps'), gapTop1None: r('gapTop1None', 'gaps'), gapTop3: r('gapTop3', 'gaps'), gapTop3None: r('gapTop3None', 'gaps'),
     };
   }
   return out;

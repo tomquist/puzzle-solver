@@ -6,7 +6,7 @@
  */
 import type { RegionMatch } from '../../model/types';
 import { runSteps, type Steps } from '../steps';
-import { capForBorder, capForSize, matchRegionDetailed, matchRegionDetailedSteps, type MatchDetail } from './matchRegion';
+import { capForBorder, capForSize, matchRegionDetailed, matchRegionDetailedSteps, placedConflictOfMatch, type MatchDetail } from './matchRegion';
 import { buildTemplate, DEFAULT_SCORE, type ColorCorrection, type ScoreParams } from './template';
 import type { MatchInput, MatchOptions, ReferenceIndex } from './types';
 
@@ -100,9 +100,9 @@ export function estimateColorCorrection(index: ReferenceIndex, details: MatchDet
 }
 
 /**
- * Match all regions of one scan: a first pass, then a colour correction estimated from the
- * confident matches, then a second pass (with a stronger colour cue) for the regions that were not
- * confidently matched. Prefer this over calling {@link matchRegionDetailed} per region.
+ * Match all regions of one scan: a first pass (without the placed marks), then a colour correction
+ * estimated from the confident matches, then a second pass (with a stronger colour cue, and the
+ * marks) for the regions that were not confidently matched. Prefer this over calling {@link matchRegionDetailed} per region.
  */
 export function matchRegions(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions = {}): RegionMatch[] {
   return matchRegionsDetailed(index, inputs, opts).map((d) => d.match);
@@ -115,16 +115,28 @@ export function matchRegionsDetailed(index: ReferenceIndex, inputs: MatchInput[]
 
 /** {@link matchRegionsDetailed} in steps (pipeline/steps.ts): one region's match each. */
 export function* matchRegionsDetailedSteps(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions = {}): Steps<MatchDetail[]> {
+  // The first pass ignores the placed marks: the colour correction comes from the photo alone, so
+  // wrong marks cannot change it (with marks, other pieces are confident in the first pass, and a
+  // different correction lost true places in the second); pieces the photo alone places surely keep
+  // that place, flagged when it is a marked cell. The others are matched with the marks (and the
+  // correction, when there is one).
+  const marked = (opts.placedCells?.length ?? 0) > 0;
+  const firstOpts = marked ? { ...opts, placedCells: undefined } : opts;
   const first: MatchDetail[] = [];
-  for (const inp of inputs) first.push(yield* matchRegionDetailedSteps(index, inp, opts));
+  for (const inp of inputs) first.push(yield* matchRegionDetailedSteps(index, inp, firstOpts));
   const correction = estimateColorCorrection(index, first);
   let out = first;
-  if (correction) {
+  if (correction || marked) {
     out = [];
     for (let i = 0; i < inputs.length; i++) {
       const d = first[i];
-      if (d.match.status === 'confident' && d.match.candidates[0].confidence >= 0.9) out.push(d);
-      else out.push(yield* matchRegionDetailedSteps(index, inputs[i], opts, { correction, score: CORRECTED_SCORE }));
+      if (d.match.status === 'confident' && d.match.candidates[0].confidence >= 0.9) {
+        if (marked) {
+          const conflict = placedConflictOfMatch(d.match, opts.placedCells!);
+          if (conflict) d.match.placedConflict = conflict;
+        }
+        out.push(d);
+      } else out.push(yield* matchRegionDetailedSteps(index, inputs[i], opts, correction ? { correction, score: CORRECTED_SCORE } : {}));
     }
   }
   // Outlines that include cast shadow / table: judged against the whole scan (hard shadows affect
