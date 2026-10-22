@@ -62,11 +62,19 @@ export const CONSISTENCY: boolean | undefined = process.env.CONSISTENCY === unde
  * (unset: the pipeline's defaults): PLACED_PENALTY=<score> (placed-cell penalty), PLACED_GAIN=<confidence>
  * (most the marks may lift a confidence over the photo's own), UNIQUE_CELLS=1 / 0
  * (one cell per piece within a scan), CLAIM_SLACK=<score> (how far down a piece may move to a free
- * candidate).
+ * candidate), GAP_PRIOR=<score per placed neighbour>, GAP_CONTINUITY=<score weight>, GAP_ALL_SIDES=1 / 0,
+ * GAP_BORDER=1 / 0, GAP_SLACK=<score> (gap evidence next to placed cells, match/gaps.ts).
  */
 export const PLACEMENT_TUNING: PlacementTuning = {
   ...(process.env.PLACED_PENALTY === undefined ? {} : { placedPenalty: Number(process.env.PLACED_PENALTY) }),
   ...(process.env.PLACED_GAIN === undefined ? {} : { placedGain: Number(process.env.PLACED_GAIN) }),
   ...(process.env.UNIQUE_CELLS === undefined ? {} : { uniqueCells: process.env.UNIQUE_CELLS !== '0' }),
   ...(process.env.CLAIM_SLACK === undefined ? {} : { claimSlack: Number(process.env.CLAIM_SLACK) }),
+  gaps: {
+    ...(process.env.GAP_PRIOR === undefined ? {} : { prior: Number(process.env.GAP_PRIOR) }),
+    ...(process.env.GAP_CONTINUITY === undefined ? {} : { continuity: Number(process.env.GAP_CONTINUITY) }),
+    ...(process.env.GAP_ALL_SIDES === undefined ? {} : { continuityAllSides: process.env.GAP_ALL_SIDES !== '0' }),
+    ...(process.env.GAP_BORDER === undefined ? {} : { border: process.env.GAP_BORDER !== '0' }),
+    ...(process.env.GAP_SLACK === undefined ? {} : { slack: Number(process.env.GAP_SLACK) }),
+  },
 };

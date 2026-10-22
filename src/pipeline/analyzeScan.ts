@@ -29,6 +29,7 @@ import {
   type ReferenceIndex,
   type ShapeMetric,
 } from './match';
+import { preferFittingGaps, type GapOptions } from './match/gaps';
 import { measureGridEvidence, measureGridEvidenceSteps, probeGridEvidence, probeGridSteps, probeWanted, type CellSizeSample, type GridProbe, type MeasuredEvidence } from './match/cellSize';
 import { resolveRegionIssues, segmentPieces, type SegmentOptions } from './pieces';
 import type { Steps } from './steps';
@@ -68,6 +69,8 @@ export interface PlacementTuning {
   uniqueCells?: boolean;
   /** Score slack of `uniqueCells` (default `CLAIM_SLACK`). */
   claimSlack?: number;
+  /** Gap evidence next to placed cells (match/gaps.ts `preferFittingGaps`; defaults there). */
+  gaps?: GapOptions;
 }
 
 /**
@@ -182,6 +185,12 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
   const matchOptions: MatchOptions = { placedCells: opts.placedCells, placedPenalty: tuning.placedPenalty, placedGain: tuning.placedGain };
   const details = inputs.length > 0 ? matchRegionsDetailed(index, inputs, matchOptions) : [];
   timings.match = now() - t;
+  if (opts.placedCells && opts.placedCells.length > 0) {
+    // Ambiguous pieces: a gap next to placed cells whose surroundings continue the piece (gaps.ts).
+    const tg = now();
+    preferFittingGaps(index, regions, inputs, details, opts.placedCells, { gain: tuning.placedGain, ...tuning.gaps });
+    timings.gaps = now() - tg;
+  }
 
   const byId = new Map<number, RegionMatch>(details.map((d) => [d.match.regionId, d.match]));
   const matches: RegionMatch[] = regions.map(
