@@ -428,7 +428,8 @@ describe('loose pieces turned against each other', () => {
   /** Whether photo pixel (x, y) lies in drawn piece `d` centred at `c`, turned `deg`. */
   const inAt = (d: Drawn, c: Point, deg: number, x: number, y: number) => {
     const t = (deg * Math.PI) / 180, dx = (x - c.x) / body, dy = (y - c.y) / body;
-    return inPiece(dx * Math.cos(t) + dy * Math.sin(t) + 0.5, -dx * Math.sin(t) + dy * Math.cos(t) + 0.5, d);
+    // (Knobs reach 0.81 body sizes from the centre at most.)
+    return dx * dx + dy * dy <= 0.85 && inPiece(dx * Math.cos(t) + dy * Math.sin(t) + 0.5, -dx * Math.sin(t) + dy * Math.cos(t) + 0.5, d);
   };
   /**
    * Centre of the lower piece (turned `deg2`) slid along the down axis of the upper one (centred at
@@ -464,38 +465,38 @@ describe('loose pieces turned against each other', () => {
     return { up: [...up], down: [...down] };
   };
 
-  it('measures the turn between two pieces end to end, and edges that keep to their own direction', () => {
-    const W2 = 700, H2 = 700, c = { x: 350, y: 220 };
-    const measure = (base: number, turn: number) => {
-      const c2 = contact(c, base, base + turn, 0.1, 800);
-      const a = createMask(W2, H2), b = createMask(W2, H2), all = createMask(W2, H2);
-      for (let y = 0; y < H2; y++) {
-        for (let x = 0; x < W2; x++) {
-          const i = y * W2 + x, inB = inAt(lower, c2, base + turn, x, y), inA = !inB && inAt(upper, c, base, x, y);
-          a.data[i] = inA ? 1 : 0;
-          b.data[i] = inB ? 1 : 0;
-          all.data[i] = inA || inB ? 1 : 0;
+  for (const base of [0, 35]) {
+    it(`measures the turn between two pieces end to end, and edges that keep to their own direction (upper at ${base}°)`, () => {
+      const W2 = 500, H2 = 560, c = { x: 250, y: 170 };
+      const measure = (turn: number) => {
+        const c2 = contact(c, base, base + turn, 0.1, 800);
+        const a = createMask(W2, H2), b = createMask(W2, H2), all = createMask(W2, H2);
+        for (let y = 0; y < H2; y++) {
+          for (let x = 0; x < W2; x++) {
+            const i = y * W2 + x, inB = inAt(lower, c2, base + turn, x, y), inA = !inB && inAt(upper, c, base, x, y);
+            a.data[i] = inA ? 1 : 0;
+            b.data[i] = inB ? 1 : 0;
+            all.data[i] = inA || inB ? 1 : 0;
+          }
         }
-      }
-      const part = (m: Mask) => ({ contour: traceOuterContour(m), area: m.data.reduce((s, v) => s + v, 0) });
-      return outerTurn(part(a), part(b), { mask: all, bbox: { x: 0, y: 0, width: W2, height: H2 } }, 0.15 * body)!;
-    };
-    for (const base of [0, 35]) {
+        const part = (m: Mask) => ({ contour: traceOuterContour(m), area: m.data.reduce((s, v) => s + v, 0) });
+        return outerTurn(part(a), part(b), { mask: all, bbox: { x: 0, y: 0, width: W2, height: H2 } }, 0.15 * body)!;
+      };
       for (const turn of [8, 15, 30]) {
-        const m = measure(base, turn);
+        const m = measure(turn);
         // (Measured in whole degrees on a pixel outline: within 2°; ≥ 7° at a turn of 8° for every
         // base angle in 5° steps.)
-        expect(Math.abs(m.deg - turn), `base ${base} turn ${turn}`).toBeLessThanOrEqual(2);
-        expect(m.deg, `base ${base} turn ${turn}`).toBeGreaterThanOrEqual(7);
-        expect(m.cross, `base ${base} turn ${turn}`).toBeLessThan(0.33);
+        expect(Math.abs(m.deg - turn), `turn ${turn}`).toBeLessThanOrEqual(2);
+        expect(m.deg, `turn ${turn}`).toBeGreaterThanOrEqual(7);
+        expect(m.cross, `turn ${turn}`).toBeLessThan(0.33);
       }
       // 5° apart: the two directions are not told apart.
-      const m = measure(base, 5);
-      expect(m.deg < 7 || m.cross > 0.33, `base ${base} turn 5`).toBe(true);
+      const m = measure(5);
+      expect(m.deg < 7 || m.cross > 0.33, 'turn 5').toBe(true);
       // One angle (an assembled pair cut along its seam): no turn.
-      expect(measure(base, 0).deg, `base ${base} turn 0`).toBeLessThanOrEqual(1);
-    }
-  });
+      expect(measure(0).deg, 'turn 0').toBeLessThanOrEqual(1);
+    });
+  }
 
   for (const [base, turn, side] of [[0, 8, 0.1], [30, 8, -0.2], [0, 15, 0.3], [30, 15, 0.1], [0, 30, -0.2]]) {
     it(`keeps two loose pieces turned ${turn}° against each other apart (upper at ${base}°)`, () => {
@@ -510,14 +511,14 @@ describe('loose pieces turned against each other', () => {
     });
   }
 
-  it('cuts neither of two pieces turned 5° against each other', () => {
-    // Below the turn told apart: together or apart, each piece lies whole in one region.
-    for (const base of [0, 30]) {
+  for (const base of [0, 30]) {
+    it(`cuts neither of two pieces turned 5° against each other (upper at ${base}°)`, () => {
+      // Below the turn told apart: together or apart, each piece lies whole in one region.
       const { up, down } = endToEnd(base, 5, 0.1);
-      expect(up, `upper piece at ${base}°`).toHaveLength(1);
-      expect(down, `lower piece at ${base}°`).toHaveLength(1);
-    }
-  });
+      expect(up, 'upper piece in one region').toHaveLength(1);
+      expect(down, 'lower piece in one region').toHaveLength(1);
+    });
+  }
 
   it('keeps assembled pairs, strips and blocks turned as a whole in one region', () => {
     // Groups of pieces of one colour on one grid (dark seams between them), each turned as a whole.
