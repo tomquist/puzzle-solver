@@ -95,6 +95,11 @@ export interface SegmentOptions {
    * (default true).
    */
   shadeGaps?: boolean;
+  /**
+   * On light neutral (grey, white) tables, also find pale pieces by the texture of their brightness
+   * (lumaTexture.ts; default true).
+   */
+  luminanceTexture?: boolean;
   /** Run the photo-quality assessment (default true). */
   assessQuality?: boolean;
   /** When given, milliseconds per stage are added to it (e.g. `background`, `threshold`, `shapes`). */

@@ -44,6 +44,31 @@ function scene(painting: Painting, bg: string, seed: number, extra: RenderOption
   return { photo, truth, cut };
 }
 
+/** A pale grey picture: brightness blotches (three scales) of ±`amp` around `base`, nearly no chroma. */
+function paleGreyPicture(w: number, h: number, base: number, amp: number, seed: number): RGBAImage {
+  const rng = new Rng(seed);
+  const img = createRGBA(w, h);
+  const field = new Float32Array(w * h);
+  for (const [cell, a] of [[16, 0.5], [6, 0.3], [3, 0.2]] as const) {
+    const gw = Math.ceil(w / cell) + 2;
+    const g = Float32Array.from({ length: gw * (Math.ceil(h / cell) + 2) }, () => rng.uniform(-1, 1));
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const fx = x / cell, fy = y / cell, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0, k = y0 * gw + x0;
+        field[y * w + x] += a * (g[k] * (1 - tx) * (1 - ty) + g[k + 1] * tx * (1 - ty) + g[k + gw] * (1 - tx) * ty + g[k + gw + 1] * tx * ty);
+      }
+    }
+  }
+  for (let i = 0; i < w * h; i++) {
+    const v = base + 2 * amp * field[i];
+    img.data[i * 4] = v + 2;
+    img.data[i * 4 + 1] = v;
+    img.data[i * 4 + 2] = v - 1;
+    img.data[i * 4 + 3] = 255;
+  }
+  return img;
+}
+
 /** Eight single pieces on a dark table (for touching-piece tests). */
 function touchingScene(ref: RGBAImage, seed: number) {
   const cut = generateJigsaw(8, 10, ref.width, ref.height, seed + 20);
@@ -367,6 +392,32 @@ describe('segmentPieces on hard tables', () => {
     expect(lc!.severity).toBe('warning');
     expect(lc!.regionIds!.length).toBeGreaterThan(0);
     for (const id of lc!.regionIds!) expect(seg.regions[id - 1].region.issues.some((i) => i.code === 'low_contrast')).toBe(true);
+  });
+
+  it('finds pale grey pieces on a light grey table by the texture of their brightness', () => {
+    // Print a shade lighter or darker than the table, without chroma: the colour score takes it
+    // for the table (in shade); pieces at the default spacing and some lying 2–5 px apart.
+    for (const [seed, pairs] of [[1, undefined], [2, { count: 4, gap: [2, 5] as [number, number] }]] as const) {
+      const ref = paleGreyPicture(800, 600, 200, 30, seed);
+      const cut = generateJigsaw(8, 10, ref.width, ref.height, seed * 7);
+      const items = Array.from({ length: 12 }, (_, i) => (i * 7 + seed) % 80);
+      const { photo, truth } = renderPiecesPhoto(ref, cut, items, { seed, background: [212, 211, 208], noiseSigma: 2, scale: 1.2, pairs });
+      const seg = segmentPieces(photo);
+      if (DEBUG_IMAGES) savePng(`.debug/pieces/hard-pale-grey-${seed}.png`, drawOverlay(photo, seg, truth));
+      const { recall, ev } = summary(seg, truth, cut);
+      const off = summary(segmentPieces(photo, { luminanceTexture: false }), truth, cut);
+      console.log(`pale grey s${seed}: recall ${recall.toFixed(2)} (without luminance texture ${off.recall.toFixed(2)}), false ${ev.falseRegions}`);
+      expect(recall).toBeGreaterThanOrEqual(0.9);
+      expect(off.recall).toBeLessThanOrEqual(0.3);
+      // No region holds two pieces (the ones lying close are not bridged).
+      for (const r of seg.regions) {
+        const inside = truth.filter((t) => {
+          const x = Math.round(t.center.x) - r.region.bbox.x, y = Math.round(t.center.y) - r.region.bbox.y;
+          return x >= 0 && y >= 0 && x < r.mask.width && y < r.mask.height && r.mask.data[y * r.mask.width + x] === 1;
+        });
+        expect(inside.length).toBeLessThanOrEqual(1);
+      }
+    }
   });
 
   it('does not take strongly textured cloth for pieces', () => {

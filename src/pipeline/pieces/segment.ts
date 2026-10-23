@@ -4,7 +4,8 @@
  * Pipeline: background model (CIE Lab, border band, quadratic lighting surface, iterative
  * refinement, further table colours of a patterned cloth; on strongly grained wood the table colour
  * along the grain, grain.ts, around the pieces of a first pass) → per-pixel foreground score → Otsu
- * threshold on the log score with hysteresis, plus a texture cue → close / fill holes / drop specks
+ * threshold on the log score with hysteresis, plus a texture cue (on light neutral tables also of the
+ * luminance, kept from bridging pieces lying close: lumaTexture.ts) → close / fill holes / drop specks
  * (no opening: the thin dark cardboard rim often is the only evidence of a piece whose print matches
  * the table, and filling the closed rim recovers it) → connected components → outline tracing and
  * shape analysis → peeling of glare halos and soft shadows (a weak region without a crisp edge
@@ -34,6 +35,7 @@ import { otsuThreshold, threshold } from '../../cv/threshold';
 import type { DetectedRegion, PieceShape, QualityIssue, RegionKind } from '../../model/types';
 import { backgroundAt, fitBackground, fitLocalTable, foregroundScore, tableChromaDistance, tableChromasAt, tableShade, type BackgroundFit } from './background';
 import { assessPhoto, assessRegions } from './quality';
+import { lumaTexture, lumaTextureApplies, lumaTextureForeground, type LumaTexture } from './lumaTexture';
 import { estimatePatchPitch } from './patchPitch';
 import { fitGrainTable, grainCoherence, GRAIN_MIN_COHERENCE, type GrainTable } from './grain';
 import { refineByGraphCut } from './refine';
@@ -2576,6 +2578,10 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
   lap('background');
   const diag = opts.diagnostics;
 
+  // Luminance texture (light neutral tables): the photo's part computed once, on first use.
+  const lumaOn = opts.luminanceTexture ?? true;
+  let lumaCache: LumaTexture | null | undefined;
+  const luma = () => (lumaCache === undefined ? (lumaCache = lumaTexture(scored)) : lumaCache);
   /** Score → threshold → texture → morphology → candidates → reference size → strands removed. */
   const pass = (model: BackgroundFit, grain?: GrainTable) => {
     const score = foregroundScore(scored, model, grain);
@@ -2597,6 +2603,10 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
     // print whose colour equals the table (on light tables it would also catch the shadows).
     // (Not on a patterned table: its pattern is all brightness structure.)
     if (model.color[0] < DARK_TABLE_L && model.palette.length === 0) addTexture(textureForeground(rgbaToGray(scored), fg));
+    // On a light, neutral, plain table pale grey print differs from the table in brightness only
+    // (the shadow-tolerant score takes it for shade): luminance texture too, kept from bridging
+    // pieces lying close (lumaTexture.ts).
+    else if (lumaOn && lumaTextureApplies(model)) addTexture(lumaTextureForeground(luma(), fg, model));
     lap('texture');
     // Pieces lying 1–3 px apart are still separate here (closing bridges them): kept for splitting.
     const preClose = cloneMask(fg);

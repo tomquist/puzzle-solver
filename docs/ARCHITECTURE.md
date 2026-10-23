@@ -295,6 +295,13 @@ refined by fitting lines to edge points. Rectified size honours the physical asp
 optionally a low-order polynomial for lighting gradients); foreground = colour distance (+
 gradient) thresholded with Otsu; morphology + hole filling; connected components; regions far
 larger than the median single piece are patches (or touching pieces), tiny ones are fragments.
+On a light, neutral (grey, white), plain table pale grey print differs from the table in brightness only,
+which the shadow-tolerant colour distance takes for shade: there the texture energy of the
+luminance is a second cue (`pieces/lumaTexture.ts`, `SegmentOptions.luminanceTexture`, on by
+default; once per photo at half resolution), kept from bridging pieces lying close by carving out
+pixels that look like the table in shade or light and are flat at a fine scale, and by never
+letting texture join two piece-sized objects colour found apart (its pixels are shared out
+geodesically among them and cut where two shares meet).
 Optionally (`SegmentOptions.grain`, off by default, `GRAIN=1` in the benchmark and feedback tools)
 on a strongly grained table (`pieces/grain.ts`; texture coherently oriented in most tiles of about
 a piece) the table colour is measured along the grain line through each pixel – the robust mean of
