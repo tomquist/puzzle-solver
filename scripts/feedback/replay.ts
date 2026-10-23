@@ -5,7 +5,9 @@
  * - 'merged': is the region now split into several regions?
  * - 'bad_outline': how does the current outline compare (IoU, shape confidence)? With the review's
  *   points of the pieces in the marked area: is every piece whole in one region (piecesWhole)?
- * - 'wrong_place': is the user's correct cell now the top-1 placement?
+ * - 'wrong_place': is the user's correct cell now the top-1 placement? Without one, with the spots
+ *   the user rejected ("Not here"): is it still placed there? (notes.ts)
+ * - 'wrong_fit': are the two items still suggested as joined? (notes.ts)
  * - confirmed placements: still top-1?
  * - box photo: corner error of the current detectBox against the user's quad.
  * Shared by `npm run feedback:inspect` and bench/feedback.eval.ts.
@@ -22,6 +24,7 @@ import { basename } from 'node:path';
 import { CONSISTENCY, PLACEMENT_TUNING, SEGMENT_OPTIONS } from '../../src/testing/nodeImageIO';
 import { decodeFeedbackImage, readFeedbackFile } from './io';
 import { readReview, type FeedbackReview, type MarkReview, type ReviewObject } from './review';
+import { judgeRejectedSpots, judgeWrongFit, rejectedText } from './notes';
 import { cellJaccard, cellKey, centroidOf, containsPoint, correspondent, distanceToRect, formatCells, overlaps, rasterizeRegions, regionAtTap, type RasterRegion } from './regions';
 
 /** Outcome of one user mark under the current pipeline. */
@@ -329,7 +332,7 @@ export function replayFeedback(bundle: FeedbackBundle, name: string, opts: Repla
     const index = k + 1;
     // A reviewed kind correction (the user picked the wrong kind for a real problem).
     const fix = opts.review?.marks[String(index)]?.kind;
-    const mark: FeedbackMark = fix && given.kind !== 'missed' && fix !== given.kind ? { kind: fix, regionId: given.regionId } : given;
+    const mark: FeedbackMark = fix && given.kind !== 'missed' && given.kind !== 'wrong_fit' && fix !== given.kind ? { kind: fix, regionId: given.regionId } : given;
     if (mark.kind === 'missed') {
       const at = { x: mark.x * s, y: mark.y * s };
       // Taps land a few px off: a region within TAP_TOLERANCE body sizes counts as tapped.
@@ -361,6 +364,10 @@ export function replayFeedback(bundle: FeedbackBundle, name: string, opts: Repla
       }
       const why = missedReason(at, diagnostics, curR, hit);
       out.marks.push({ index, mark, at, original, now: hit ? `only fragment #${hit.id}` : 'not detected', fixed: false, verdict: 'STILL MISSED', why, currentIds: hit ? [hit.id] : [] });
+      return;
+    }
+    if (mark.kind === 'wrong_fit') {
+      out.marks.push(judgeWrongFit(index, mark, { original, current, matched: out.matched, grid: bundle.puzzle.grid, origById, curR }));
       return;
     }
     const orig = origById.get(mark.regionId);
@@ -428,13 +435,15 @@ export function replayFeedback(bundle: FeedbackBundle, name: string, opts: Repla
       if (mark.correct) {
         fixed = curCells.some((c) => cellKey(c) === cellKey(mark.correct!));
         verdict = fixed ? 'FIXED' : 'STILL WRONG';
+      } else if (mark.rejected?.length) {
+        ({ fixed, verdict } = judgeRejectedSpots(mark.rejected, curCells));
       } else {
         const same = cellJaccard(curCells, origCells) >= 0.5;
         verdict = same ? 'SAME PLACE' : 'MOVED';
       }
     }
     out.marks.push({
-      index, mark, at, original: `${origText} placed ${formatCells(origCells)}${mark.correct ? `, correct r${mark.correct.row}c${mark.correct.col}` : ''}`,
+      index, mark, at, original: `${origText} placed ${formatCells(origCells)}${mark.correct ? `, correct r${mark.correct.row}c${mark.correct.col}` : ''}${mark.rejected?.length ? `, not ${rejectedText(mark.rejected)}` : ''}`,
       now: nowText, fixed, verdict, currentIds: curIds,
     });
   });
@@ -508,7 +517,8 @@ export type FeedbackMetrics = Record<string, number>;
 /**
  * Per-file metrics (rates 0..1; keys without any applicable mark are left out so they are neither
  * gated nor averaged): missedFound, falseRemoved, mergedSplit, outlineFixed (bad_outline marks with
- * the review's piece points), wrongFixed, placementsTop1, boxError.
+ * the review's piece points), wrongFixed, fitFixed ('wrong_fit' marks no longer suggested),
+ * placementsTop1, boxError.
  * With a review only marks reviewed 'ok' count; mergedExact is the share of merged marks with a
  * reviewed part count that now come out as exactly that many regions. With an answer key:
  * objectRecall (objects found), objectClean (found alone in their region) and objectPrecision
@@ -529,6 +539,7 @@ export function feedbackMetrics(r: FeedbackReplay): FeedbackMetrics {
   const exact = r.marks.filter((j) => j.mark.kind === 'merged' && counts(j) && j.review?.parts);
   if (exact.length > 0) m.mergedExact = exact.filter((j) => j.currentIds.length === j.review!.parts).length / exact.length;
   rate('wrongFixed', 'wrong_place');
+  rate('fitFixed', 'wrong_fit');
   if (r.objects && r.objects.current.objects > 0) {
     const o = r.objects.current;
     m.objectRecall = o.found / o.objects;

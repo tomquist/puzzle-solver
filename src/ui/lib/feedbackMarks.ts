@@ -7,10 +7,32 @@ import type { CellRef, DetectedRegion, GridSpec, ScanResult } from '../../model/
 import type { FeedbackMark, FeedbackMarkKind } from '../../feedback/format';
 import { buildScanItems } from './items';
 
-export type RegionMarkKind = Exclude<FeedbackMarkKind, 'missed'>;
+/** Kinds placed by tapping one region of the photo. */
+export type RegionMarkKind = Exclude<FeedbackMarkKind, 'missed' | 'wrong_fit'>;
 
-export interface MarkKindInfo {
-  kind: FeedbackMarkKind;
+/** A mark of one region (every kind but a missed point and a pair that doesn't fit). */
+export type RegionMark = Extract<FeedbackMark, { kind: RegionMarkKind }>;
+
+/** The kinds the feedback screen places by tapping the photo (its modes). */
+export type MarkMode = 'missed' | RegionMarkKind;
+
+/**
+ * A mark on the feedback screen: a FeedbackMark, and the ids of the scan's notes it came from
+ * (FeedbackNote; removing the mark removes them). Written to the file without `noteIds`.
+ */
+export type DraftMark = FeedbackMark & { noteIds?: string[] };
+
+/** The marks as they go into the file (without the screen's note ids). */
+export function toFileMarks(marks: DraftMark[]): FeedbackMark[] {
+  return marks.map((m) => {
+    const { noteIds, ...mark } = m;
+    void noteIds;
+    return mark as FeedbackMark;
+  });
+}
+
+export interface MarkKindInfo<K extends FeedbackMarkKind = FeedbackMarkKind> {
+  kind: K;
   /** Mode selector label: the problem in plain words. */
   label: string;
   /** What the problem looks like on the photo (shown while the mode is active). */
@@ -19,7 +41,7 @@ export interface MarkKindInfo {
   how: string;
 }
 
-export const MARK_KINDS: MarkKindInfo[] = [
+export const MARK_KINDS: MarkKindInfo<MarkMode>[] = [
   { kind: 'missed', label: 'Piece not found', what: 'A piece without a coloured outline.', how: 'Tap the middle of the piece.' },
   { kind: 'not_a_piece', label: 'Not a piece', what: 'An outline with no piece inside – table, shadow, glare or a gap.', how: 'Tap inside the outline.' },
   { kind: 'merged', label: 'Pieces stuck together', what: 'One outline around two or more loose pieces.', how: 'Tap inside the outline.' },
@@ -27,12 +49,25 @@ export const MARK_KINDS: MarkKindInfo[] = [
   { kind: 'wrong_place', label: 'Wrong place', what: 'The piece is shown in the wrong spot of the puzzle.', how: 'Tap the piece; you can then show the right spot.' },
 ];
 
+/**
+ * Kinds noted on the scan result or while placing (FeedbackNote), not placed on the feedback photo:
+ * they come in already marked.
+ */
+export const NOTED_KINDS: MarkKindInfo[] = [
+  {
+    kind: 'wrong_fit',
+    label: 'Doesn’t fit',
+    what: 'Two pieces the app said join don’t fit together.',
+    how: 'Select a piece on the scan result, then tap Doesn’t fit next to the other piece.',
+  },
+];
+
 export function markInfo(kind: FeedbackMarkKind): MarkKindInfo {
-  return MARK_KINDS.find((k) => k.kind === kind)!;
+  return [...MARK_KINDS, ...NOTED_KINDS].find((k) => k.kind === kind)!;
 }
 
-export function isRegionMark(m: FeedbackMark): m is Exclude<FeedbackMark, { kind: 'missed' }> {
-  return m.kind !== 'missed';
+export function isRegionMark(m: FeedbackMark): m is RegionMark {
+  return m.kind !== 'missed' && m.kind !== 'wrong_fit';
 }
 
 /** Index of the mark on `regionId`, or -1. */
@@ -41,38 +76,41 @@ export function markIndexForRegion(marks: FeedbackMark[], regionId: number): num
 }
 
 /** Tap on a region in a region mode: add the mark, remove it (same kind) or change its kind. */
-export function toggleRegionMark(marks: FeedbackMark[], kind: RegionMarkKind, regionId: number): FeedbackMark[] {
+export function toggleRegionMark<M extends FeedbackMark>(marks: M[], kind: RegionMarkKind, regionId: number): (M | FeedbackMark)[] {
   const i = markIndexForRegion(marks, regionId);
   if (i < 0) return [...marks, { kind, regionId }];
   if (marks[i].kind === kind) return removeMark(marks, i);
-  const next = [...marks];
+  const next: (M | FeedbackMark)[] = [...marks];
   next[i] = { kind, regionId };
   return next;
 }
 
 /** Mark a region with `kind` (adds it, or changes the kind of its existing mark; never removes). */
-export function setRegionMark(marks: FeedbackMark[], kind: RegionMarkKind, regionId: number): FeedbackMark[] {
+export function setRegionMark<M extends FeedbackMark>(marks: M[], kind: RegionMarkKind, regionId: number): (M | FeedbackMark)[] {
   const i = markIndexForRegion(marks, regionId);
   if (i < 0) return [...marks, { kind, regionId }];
-  const next = [...marks];
+  const next: (M | FeedbackMark)[] = [...marks];
   next[i] = { kind, regionId };
   return next;
 }
 
-export function addMissed(marks: FeedbackMark[], x: number, y: number): FeedbackMark[] {
+export function addMissed<M extends FeedbackMark>(marks: M[], x: number, y: number): (M | FeedbackMark)[] {
   return [...marks, { kind: 'missed', x: Math.round(x), y: Math.round(y) }];
 }
 
-export function removeMark(marks: FeedbackMark[], index: number): FeedbackMark[] {
+export function removeMark<M>(marks: M[], index: number): M[] {
   return marks.filter((_, i) => i !== index);
 }
 
-/** Set (or clear) the right cell of a "wrong place" mark. */
-export function setCorrectCell(marks: FeedbackMark[], index: number, cell: CellRef | undefined): FeedbackMark[] {
+/** Set (or clear) the right cell of a "wrong place" mark (its rejected spots and notes stay). */
+export function setCorrectCell<M extends FeedbackMark>(marks: M[], index: number, cell: CellRef | undefined): M[] {
   const m = marks[index];
   if (!m || m.kind !== 'wrong_place') return marks;
   const next = [...marks];
-  next[index] = cell ? { kind: 'wrong_place', regionId: m.regionId, correct: { row: cell.row, col: cell.col } } : { kind: 'wrong_place', regionId: m.regionId };
+  const changed: Record<string, unknown> = { ...m };
+  if (cell) changed.correct = { row: cell.row, col: cell.col };
+  else delete changed.correct;
+  next[index] = changed as M;
   return next;
 }
 

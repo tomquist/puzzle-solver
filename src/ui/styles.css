@@ -4445,3 +4445,146 @@ body:has(.selection-bar) .snackbar {
   color: var(--warn);
   font-weight: 600;
 }
+
+/* ------------------------------------------------------------------ notes for feedback */
+
+/* "Doesn't fit": next to "Show the fit" (one joined pair of buttons per connection), in the details'
+   connection list and while placing. Quiet (secondary), but a full 44 px target. */
+.fit-pair {
+  flex: none;
+  display: inline-flex;
+}
+.nofit-pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 14px 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.nofit-pill:hover {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.nofit-pill svg {
+  width: 16px;
+  height: 16px;
+  color: inherit;
+}
+.fit-pair .fit-pill + .nofit-pill {
+  margin-left: -1px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding-left: 10px;
+}
+.fit-pair .fit-pill:has(+ .nofit-pill) {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  padding-right: 12px;
+}
+.fit-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.fit-item .fit-row {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  border-bottom: none;
+}
+.fit-item .nofit-pill {
+  font-size: 0.875rem;
+}
+.nofit-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+.place-next-to .nofit-pill {
+  font-size: 0.875rem;
+}
+
+/* "2 notes for feedback · Send" on the scan result. */
+.notes-link {
+  display: flex;
+  justify-content: center;
+  margin: -4px 0 0;
+}
+.notes-link a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 12px 0 14px;
+  border: 1px solid color-mix(in srgb, var(--mk-fit) 40%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--mk-fit) 9%, var(--surface));
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+.notes-link a > svg:first-child {
+  color: var(--mk-fit);
+}
+.notes-link a > svg:last-child {
+  color: var(--text-3);
+}
+.notes-link-send {
+  color: var(--accent);
+}
+
+:root {
+  --mk-fit: #a16207;
+}
+.mk-wrong_fit {
+  --mk: var(--mk-fit);
+}
+.fb-mark-row .fb-picto {
+  margin-left: -4px;
+}
+.fb-noted-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 0.75rem;
+  font-weight: 600;
+  vertical-align: 1px;
+}
+.fb-noted-hint {
+  margin: 4px 0 0;
+}
+/* A pair that doesn't fit on the feedback photo: a dashed line between the pieces. */
+.fb-fit .fb-fit-under {
+  stroke: rgba(0, 0, 0, 0.55);
+  stroke-width: calc(var(--u, 1px) * 6);
+  stroke-linecap: round;
+}
+.fb-fit .fb-fit-line {
+  stroke: var(--mk);
+  stroke-width: calc(var(--u, 1px) * 3.5);
+  stroke-dasharray: calc(var(--u, 1px) * 8) calc(var(--u, 1px) * 5);
+  stroke-linecap: round;
+}
+.fb-fit .fb-fit-end {
+  fill: var(--mk);
+  stroke: #fff;
+  stroke-width: calc(var(--u, 1px) * 1.5);
+  vector-effect: non-scaling-stroke;
+}

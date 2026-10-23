@@ -7,14 +7,16 @@
  * print, what it joins, and where it goes: the box picture
  * around the target with a few cells of context (pinch to zoom) and an overview of the whole
  * picture. Placed ✓ records progress and moves on; Skip / Not here / swipe / arrow keys navigate.
+ * "Not here" and "Doesn't fit" (on a piece it joins) are noted for feedback (lib/scanNotes.ts).
  * The screen stays on.
  */
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { newId } from '../../../storage';
 import { cellKey, type ScanRecord } from '../../../model/types';
 import { describeCell } from '../../../pipeline/grid';
 import { haptic, isCoarsePointer } from '../../../platform/device';
-import { EmptyState, ErrorState, Spinner } from '../../components/Feedback';
-import { IconBack, IconCheck, IconChevron, IconScan } from '../../components/Icons';
+import { EmptyState, ErrorState, Snackbar, Spinner, type SnackbarMessage } from '../../components/Feedback';
+import { IconBack, IconCheck, IconChevron, IconClose, IconScan } from '../../components/Icons';
 import { UncertainNote } from '../../components/CertaintyNotes';
 import { PickupView, TargetZoomView } from '../../components/ItemVisuals';
 import { TurnGuide } from '../../components/TurnGuide';
@@ -25,12 +27,14 @@ import { useRepo } from '../../context/RepositoryContext';
 import { useAsync } from '../../hooks/useAsync';
 import { useBitmap, useStoredBlob } from '../../hooks/useObjectUrl';
 import { usePrefs, useWakeLock } from '../../hooks/usePrefs';
+import { useScanNotes } from '../../hooks/useScanNotes';
 import { cardReason, certaintyLine, uncertaintyText } from '../../lib/certainty';
 import { plural } from '../../lib/format';
 import { cellsText, connectionsOf, describeConnections, itemKindText, nextFreeCandidate, placingOrder, type ItemPlacement, type ScanItem } from '../../lib/items';
 import { placeCells } from '../../lib/progress';
 import { turnInstruction } from '../../lib/rotation';
 import { href } from '../../lib/routes';
+import { addNote, removeNotes, setSpotChoice, spotChoiceOf, wrongFitNote, wrongPlaceNote } from '../../lib/scanNotes';
 import { useScanModel } from './useScanModel';
 
 export function PlacingScreen({ scanId }: { scanId: string }) {
@@ -60,7 +64,7 @@ export function PlacingScreen({ scanId }: { scanId: string }) {
       </>
     );
   }
-  return <PlacingView scan={scan.data} />;
+  return <PlacingView key={scan.data.id} scan={scan.data} />;
 }
 
 /** "Turn it a quarter to the right · row 5, column 12" */
@@ -77,8 +81,10 @@ function PlacingView({ scan }: { scan: ScanRecord }) {
   const result = scan.result;
   const { blob: photoBlob } = useStoredBlob(scan.photoBlobId);
   const photo = useBitmap(photoBlob);
-  const [rejected, setRejected] = useState<Record<string, number>>({});
-  const { visible, links, byKey, placementOf, isPlacedItem } = useScanModel(result, puzzle.grid, prefs.view, rejected, progress, scan.id);
+  const scanNotes = useScanNotes(scan);
+  const [snack, setSnack] = useState<SnackbarMessage>();
+  const closeSnack = useCallback(() => setSnack(undefined), []);
+  const { visible, links, byKey, placementOf, isPlacedItem } = useScanModel(result, puzzle.grid, prefs.view, scanNotes.choices, progress, scan.id, scanNotes.notes);
 
   // The sequence is fixed when placing starts (placing an item must not reshuffle the rest).
   const [sequence, setSequence] = useState<string[]>(() => placingOrder(visible, links, puzzle.grid, isPlacedItem, placementOf).map((i) => i.key));
@@ -114,17 +120,53 @@ function PlacingView({ scan }: { scan: ScanRecord }) {
     setSkipped((l) => (l.includes(item.key) || placedHere.includes(item.key) ? l : [...l, item.key]));
     next();
   };
+  // "Not here": noted for feedback, then the next free spot (or, when none is left, the next item).
   const notHere = () => {
-    if (!item) return;
+    if (!item || !p || acting.current) return;
     // Cells other items of this scan point at are not offered as alternatives.
     const claimed = new Set<string>();
     for (const other of visible) {
       if (other.key === item.key) continue;
       for (const c of placementOf(other)?.cells ?? []) claimed.add(cellKey(c));
     }
-    const k = nextFreeCandidate(item, Math.max(0, item.candidates.indexOf(p!)), progress, scan.id, claimed);
-    if (k >= 0) setRejected((r) => ({ ...r, [item.key]: k }));
-    else skip();
+    const from = Math.max(0, item.candidates.indexOf(p));
+    const k = nextFreeCandidate(item, from, progress, scan.id, claimed);
+    haptic();
+    const note = wrongPlaceNote(newId(), item, p, puzzle.grid);
+    const before = scanNotes.choices?.[item.key];
+    const at = index;
+    scanNotes.change((s) => {
+      const noted = note ? addNote(s, note) : s;
+      return k >= 0 ? setSpotChoice(noted, item.key, spotChoiceOf(item, k)) : noted;
+    });
+    if (k < 0) skip();
+    setSnack({
+      id: Date.now(),
+      text: `#${item.label} doesn’t go there – noted for feedback`,
+      actionLabel: 'Undo',
+      onAction: () => {
+        scanNotes.change((s) => setSpotChoice(note ? removeNotes(s, [note.id]) : s, item.key, before));
+        if (k < 0) {
+          setSkipped((l) => l.filter((key) => key !== item.key));
+          go(at);
+        }
+      },
+    });
+  };
+  // "Doesn't fit" with an item it joins: noted for feedback, no longer suggested.
+  const noFit = (otherKey: string) => {
+    const other = byKey.get(otherKey);
+    if (!item || !other) return;
+    haptic();
+    const link = links.find((l) => (l.a === item.key && l.b === otherKey) || (l.a === otherKey && l.b === item.key));
+    const note = wrongFitNote(newId(), item, other, link);
+    scanNotes.change((s) => addNote(s, note));
+    setSnack({
+      id: Date.now(),
+      text: `#${item.label} and #${other.label} don’t fit – noted for feedback`,
+      actionLabel: 'Undo',
+      onAction: () => scanNotes.change((s) => removeNotes(s, [note.id])),
+    });
   };
   const reviewSkipped = () => {
     setSequence(skipped);
@@ -160,7 +202,8 @@ function PlacingView({ scan }: { scan: ScanRecord }) {
     }
   };
 
-  const joins = item ? describeConnections(connectionsOf(item.key, links), (k) => byKey.get(k)?.label) : '';
+  const joined = item ? connectionsOf(item.key, links).filter((c) => byKey.has(c.key)) : [];
+  const joins = item ? describeConnections(joined, (k) => byKey.get(k)?.label) : '';
   const turn = p?.rotationDeg !== undefined ? turnInstruction(p.rotationDeg) : undefined;
   const placedNow = item ? isPlacedItem(item) : false;
   const why = item && !placedNow && cardReason(item) ? uncertaintyText(item) : undefined;
@@ -270,9 +313,18 @@ function PlacingView({ scan }: { scan: ScanRecord }) {
             </div>
             {why && <UncertainNote reason={why} compact />}
             {joins && (
-              <p className="muted small place-next-to" data-testid="place-joins">
-                {joins}
-              </p>
+              <div className="place-next-to">
+                <p className="muted small" data-testid="place-joins">
+                  {joins}
+                </p>
+                <div className="nofit-row" role="group" aria-label="Pieces that don’t fit">
+                  {joined.map((c) => (
+                    <button key={c.key} className="nofit-pill" onClick={() => noFit(c.key)} data-testid={`place-no-fit-${c.key}`}>
+                      <IconClose size={16} />#{byKey.get(c.key)!.label} doesn’t fit
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
             <TargetZoomView key={`${item.key}:${p.x},${p.y}`} placement={p} grid={puzzle.grid} reference={reference} label={`Box picture around where #${item.label} goes`} />
             <div className="step-nav">
@@ -295,7 +347,7 @@ function PlacingView({ scan }: { scan: ScanRecord }) {
             <button className="btn btn-lg" onClick={skip} data-testid="skip">
               Skip
             </button>
-            {item.status === 'ambiguous' && item.candidates.length > 1 && (
+            {!placedNow && (
               <button className="btn btn-lg" onClick={notHere} data-testid="not-here">
                 Not here
               </button>
@@ -307,6 +359,7 @@ function PlacingView({ scan }: { scan: ScanRecord }) {
           </div>
         </div>
       )}
+      <Snackbar message={snack} onClose={closeSnack} />
     </>
   );
 }

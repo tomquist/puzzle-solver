@@ -1,9 +1,13 @@
-/** Items of a scan as shown with the current view options, rejections and progress. */
+/**
+ * Items of a scan as shown with the current view options, the spots chosen for them ("Not here"),
+ * the connections noted as not fitting, and progress.
+ */
 import { useCallback, useMemo } from 'react';
-import { cellKey, type GridSpec, type ProgressRecord, type ScanResult } from '../../../model/types';
+import { cellKey, type FeedbackNote, type GridSpec, type ProgressRecord, type ScanResult, type SpotChoice } from '../../../model/types';
 import { buildScanItems, type ItemPlacement, type ScanItem } from '../../lib/items';
 import type { ViewOptions } from '../../lib/prefs';
 import { isPlaced } from '../../lib/progress';
+import { resolveSpotChoices, withoutRejectedFits } from '../../lib/scanNotes';
 
 export function visibleByView(items: ScanItem[], view: ViewOptions): ScanItem[] {
   return items.filter((i) => (view.unsure || i.status === 'confident') && (!view.edgesOnly || i.edge));
@@ -61,16 +65,25 @@ export function useScanModel(
   result: ScanResult,
   grid: GridSpec,
   view: ViewOptions,
-  rejected: Record<string, number>,
+  /** The spots chosen for items (ScanRecord.spotChoices). */
+  choices: Record<string, SpotChoice> | undefined,
   progress: ProgressRecord,
   scanId: string,
+  /** The scan's notes: connections noted as not fitting are left out. */
+  notes?: FeedbackNote[],
 ) {
   const all = useMemo(() => buildScanItems(result, grid), [result, grid]);
   const visible = useMemo(() => visibleByView(all.items, view), [all, view]);
+  /** Index of the candidate shown, for items with a chosen spot. */
+  const rejected = useMemo(() => resolveSpotChoices(choices, all.items), [choices, all]);
   const links = useMemo(() => {
     const keys = new Set(visible.map((i) => i.key));
-    return all.links.filter((l) => keys.has(l.a) && keys.has(l.b));
-  }, [all, visible]);
+    return withoutRejectedFits(
+      all.links.filter((l) => keys.has(l.a) && keys.has(l.b)),
+      all.items,
+      notes,
+    );
+  }, [all, visible, notes]);
   const byKey = useMemo(() => new Map(all.items.map((i) => [i.key, i])), [all]);
   const placementOf = useCallback(
     (item: ScanItem): ItemPlacement | undefined => {
@@ -87,5 +100,5 @@ export function useScanModel(
     },
     [placementOf, progress],
   );
-  return { all, visible, links, byKey, placementOf, isPlacedItem };
+  return { all, visible, links, byKey, placementOf, isPlacedItem, rejected };
 }

@@ -7,6 +7,10 @@
  * its connections and the pieces it joins, and a compact bar at the bottom says where it goes and
  * what it joins, with the full details one tap away – the photo stays visible. Press and hold the
  * photo to see it without any annotations.
+ *
+ * "Doesn't fit" next to a connection and "Not this one" in the details are noted for feedback
+ * (stored with the scan, lib/scanNotes.ts): the connection is no longer suggested, the next spot is
+ * shown, and the feedback screen starts with them marked.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cellKey, type CellRef, type QualityIssue, type ScanRecord } from '../../../model/types';
@@ -16,7 +20,7 @@ import { PlacedConflictNote } from '../../components/CertaintyNotes';
 import { Banner, EmptyState, ErrorState, Snackbar, Spinner, type SnackbarMessage } from '../../components/Feedback';
 import { FitAnimation } from '../../components/FitAnimation';
 import { FullscreenView, leaveFullscreenView } from '../../components/FullscreenView';
-import { IconCheck, IconChevron, IconClose, IconEye, IconEyeOff, IconFullscreen, IconPuzzle, IconScan } from '../../components/Icons';
+import { IconCheck, IconChevron, IconClose, IconEye, IconEyeOff, IconFullscreen, IconNote, IconPuzzle, IconScan } from '../../components/Icons';
 import { ItemDetail } from '../../components/ItemDetail';
 import { CertaintyMeter } from '../../components/ItemVisuals';
 import { GridJobStrip, GridSuggestionCard } from '../../components/GridSuggestion';
@@ -35,6 +39,8 @@ import { useHoldToPeek } from '../../hooks/useHoldToPeek';
 import { usePrefersReducedMotion } from '../../hooks/usePieceCutout';
 import { useBitmap, useObjectUrl, useStoredBlob } from '../../hooks/useObjectUrl';
 import { usePrefs, useWakeLock } from '../../hooks/usePrefs';
+import { useScanNotes } from '../../hooks/useScanNotes';
+import { newId } from '../../../storage';
 import { cellItemOf, scaleAspect, type CellScale } from '../../lib/cellSpots';
 import { cardReason, certaintyBadge, certaintyLine, cellWords, conflictKeptKey, itemCertainty, placedConflictCell } from '../../lib/certainty';
 import { fitDescription, fitPose, glidePath, type FitItem } from '../../lib/fit';
@@ -60,6 +66,7 @@ import { turnBadge, turnInstruction } from '../../lib/rotation';
 import { linkRoute } from '../../lib/route';
 import { href } from '../../lib/routes';
 import { lastTab } from '../../lib/lastTab';
+import { addNote, removeNotes, setSpotChoice, spotChoiceOf, unsentNotes, wrongFitNote, wrongPlaceNote, wrongPlaceNotesAt } from '../../lib/scanNotes';
 import { Legend } from './Legend';
 import { hiddenByView, hiddenMessage, showAllView, useScanModel } from './useScanModel';
 
@@ -100,7 +107,7 @@ export function ScanResultScreen({ scanId }: { scanId: string }) {
       </>
     );
   }
-  return <ScanResultView scan={scan.data} />;
+  return <ScanResultView key={scan.data.id} scan={scan.data} />;
 }
 
 const scrollBehavior = (): ScrollBehavior => (typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth');
@@ -123,13 +130,14 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
   const [fullscreen, setFullscreen] = useState<'photo' | 'picture'>();
   const [openKey, setOpenKey] = useState<string>();
   const [selectedKey, setSelectedKey] = useState<string>();
-  const [rejected, setRejected] = useState<Record<string, number>>({});
   const [issue, setIssue] = useState<QualityIssue>();
   const [snack, setSnack] = useState<SnackbarMessage>();
   const closeSnack = useCallback(() => setSnack(undefined), []);
+  const scanNotes = useScanNotes(scan);
+  const noteCount = unsentNotes(scanNotes.notes).length;
 
-  const model = useScanModel(result, puzzle.grid, prefs.view, rejected, progress, scan.id);
-  const { all, visible, links, byKey, placementOf, isPlacedItem } = model;
+  const model = useScanModel(result, puzzle.grid, prefs.view, scanNotes.choices, progress, scan.id, scanNotes.notes);
+  const { all, visible, links, byKey, placementOf, isPlacedItem, rejected } = model;
   const counts = itemCounts(all.items);
   const hidden = hiddenByView(all.items, prefs.view);
   const visibleUnsure = visible.filter((i) => i.status === 'ambiguous').length;
@@ -277,6 +285,42 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
     return cell ? { cell, onUnmark: () => void unmarkConflict(cell), onKeep: () => keepConflict(item) } : undefined;
   };
 
+  // "Not this one": noted for feedback, and the next spot is shown (Undo puts both back).
+  const rejectSpot = (item: ScanItem) => {
+    const index = rejected[item.key] ?? 0;
+    const shown = item.candidates[index];
+    if (!shown) return;
+    haptic();
+    const note = wrongPlaceNote(newId(), item, shown, puzzle.grid);
+    const before = scanNotes.choices?.[item.key];
+    scanNotes.change((s) => setSpotChoice(note ? addNote(s, note) : s, item.key, spotChoiceOf(item, index + 1)));
+    setSnack({
+      id: Date.now(),
+      text: `#${item.label} doesn’t go there – noted for feedback`,
+      actionLabel: 'Undo',
+      onAction: () => scanNotes.change((s) => setSpotChoice(note ? removeNotes(s, [note.id]) : s, item.key, before)),
+    });
+  };
+  // Choosing a spot again takes back a "Not this one" noted for it.
+  const chooseSpot = (item: ScanItem, index: number) =>
+    scanNotes.change((s) => setSpotChoice(removeNotes(s, wrongPlaceNotesAt(s.feedbackNotes, item.label, item.candidates[index]?.cells[0])), item.key, spotChoiceOf(item, index)));
+  // "Doesn't fit" on a connection: noted for feedback, no longer suggested (Undo takes it back).
+  const rejectFit = (item: ScanItem, otherKey: string) => {
+    const other = byKey.get(otherKey);
+    if (!other) return;
+    haptic();
+    const link = links.find((l) => (l.a === item.key && l.b === otherKey) || (l.a === otherKey && l.b === item.key));
+    const note = wrongFitNote(newId(), item, other, link);
+    setFit((f) => (f && (f.b === otherKey || f.a === otherKey) ? undefined : f));
+    scanNotes.change((s) => addNote(s, note));
+    setSnack({
+      id: Date.now(),
+      text: `#${item.label} and #${other.label} don’t fit – noted for feedback`,
+      actionLabel: 'Undo',
+      onAction: () => scanNotes.change((s) => removeNotes(s, [note.id])),
+    });
+  };
+
   const confidentToPlace = toPlace.filter((i) => i.status === 'confident' && (rejected[i.key] ?? 0) === 0);
   const placeAllConfident = async () => {
     haptic();
@@ -374,6 +418,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
         fitKey={fitShow?.b}
         fitText={fitShow?.text}
         onFit={playFit}
+        onNoFit={(key) => rejectFit(selected, key)}
         onSelectKey={(key) => select(key, { reveal: true })}
         conflict={conflictProps(selected)}
         onDetails={() => {
@@ -484,6 +529,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
             )}
           </div>
         )}
+        {noteCount > 0 && <NotesLink puzzleId={puzzle.id} scanId={scan.id} count={noteCount} />}
 
         {hintVisible && (
           <Banner
@@ -584,8 +630,9 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
           reference={reference}
           placed={isPlacedItem(openItem)}
           connections={connectionsOf(openItem.key, links).flatMap((c) => (labelOf(c.key) !== undefined ? [{ ...c, item: byKey.get(c.key)! }] : []))}
-          onReject={() => setRejected((r) => ({ ...r, [openItem.key]: (r[openItem.key] ?? 0) + 1 }))}
-          onChoose={(i) => setRejected((r) => ({ ...r, [openItem.key]: i }))}
+          onReject={() => rejectSpot(openItem)}
+          onChoose={(i) => chooseSpot(openItem, i)}
+          onNoFit={(key) => rejectFit(openItem, key)}
           onPlace={(p) => void place(openItem, p)}
           onUnplace={(p) => void updateProgress((current) => unplaceCells(current, p.cells))}
           onOpen={(key) => {
@@ -691,6 +738,7 @@ function SelectionBar({
   fitKey,
   fitText,
   onFit,
+  onNoFit,
   onSelectKey,
   conflict,
   onDetails,
@@ -709,6 +757,8 @@ function SelectionBar({
   fitKey?: string;
   fitText?: string;
   onFit: (key: string) => void;
+  /** "Doesn't fit": the item does not fit with this joined item. */
+  onNoFit: (key: string) => void;
   onSelectKey: (key: string) => void;
   /** A spot marked as placed that the item seems to belong in. */
   conflict?: { cell: CellRef; onUnmark: () => void; onKeep: () => void };
@@ -716,7 +766,7 @@ function SelectionBar({
   onClear: () => void;
 }) {
   const where = placement ? cellsText(placement) : 'No place left';
-  const fitKeys = connections.flatMap((t) => ('key' in t && canFit(t.key) ? [{ key: t.key, label: t.label }] : []));
+  const joined = connections.flatMap((t) => ('key' in t ? [{ key: t.key, label: t.label, fit: canFit(t.key) }] : []));
   const turn = placement?.rotationDeg !== undefined ? turnInstruction(placement.rotationDeg).text : undefined;
   const why = placed ? undefined : cardReason(item);
   return (
@@ -794,27 +844,50 @@ function SelectionBar({
           <PlacedConflictNote cell={conflict.cell} compact onUnmark={conflict.onUnmark} onKeep={conflict.onKeep} />
         </div>
       )}
-      {/* "Show the fit": one big button per connection, in a row that scrolls sideways when they
-          don't fit (the card stays one row taller at most). */}
-      {fitKeys.length > 0 && (
-        <div className="fit-row" role="group" aria-label="Show how they fit" data-testid="fit-row">
-          {fitKeys.map((c) => (
-            <button
-              key={c.key}
-              className={`fit-pill${fitKey === c.key ? ' on' : ''}`}
-              onClick={() => onFit(c.key)}
-              aria-pressed={fitKey === c.key}
-              data-testid={`fit-play-${c.key}`}
-            >
-              <svg viewBox="0 0 10 10" aria-hidden="true">
-                <path d="M1.5 0.8 9 5 1.5 9.2Z" />
-              </svg>
-              Show fit with #{c.label}
-            </button>
+      {/* Per connection: "Show the fit" (when both turns are known) and "Doesn't fit" – big
+          buttons in a row that scrolls sideways when they don't fit (the card stays one row taller
+          at most). */}
+      {joined.length > 0 && (
+        <div className="fit-row" role="group" aria-label="Connections" data-testid="fit-row">
+          {joined.map((c) => (
+            <span key={c.key} className="fit-pair">
+              {c.fit && (
+                <button
+                  className={`fit-pill${fitKey === c.key ? ' on' : ''}`}
+                  onClick={() => onFit(c.key)}
+                  aria-pressed={fitKey === c.key}
+                  data-testid={`fit-play-${c.key}`}
+                >
+                  <svg viewBox="0 0 10 10" aria-hidden="true">
+                    <path d="M1.5 0.8 9 5 1.5 9.2Z" />
+                  </svg>
+                  Show fit with #{c.label}
+                </button>
+              )}
+              <button className="nofit-pill" onClick={() => onNoFit(c.key)} aria-label={`#${c.label} doesn’t fit`} data-testid={`no-fit-${c.key}`}>
+                <IconClose size={16} />
+                {c.fit ? 'Doesn’t fit' : `#${c.label} doesn’t fit`}
+              </button>
+            </span>
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+/** What was noted for feedback on this scan, one tap from the feedback screen. */
+function NotesLink({ puzzleId, scanId, count }: { puzzleId: string; scanId: string; count: number }) {
+  return (
+    <p className="notes-link">
+      <a href={href.feedback(puzzleId, scanId)} data-testid="notes-link">
+        <IconNote size={18} />
+        <span>
+          {count === 1 ? '1 note' : `${count} notes`} for feedback · <span className="notes-link-send">Send</span>
+        </span>
+        <IconChevron size={16} />
+      </a>
+    </p>
   );
 }
 

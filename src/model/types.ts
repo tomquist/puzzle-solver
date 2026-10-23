@@ -176,6 +176,38 @@ export interface ScanRecord {
   appVersion?: string;
   /** How the photo was captured; missing for scans saved before it was recorded. */
   capture?: CaptureInfo;
+  /**
+   * Problems the user noted on the result or while placing ("Doesn't fit", "Not here"), offered as
+   * marks in the next feedback file; missing when there are none (and in scans from before notes).
+   */
+  feedbackNotes?: FeedbackNote[];
+  /**
+   * The spot shown for an item instead of its best one ("Not here", or another spot chosen), by
+   * item key; missing when every item shows its best spot.
+   */
+  spotChoices?: Record<string, SpotChoice>;
+}
+
+/**
+ * A problem the user noted, kept with the scan until it goes out in a feedback file (`sentAt`:
+ * when; sent notes are kept so that a wrong connection stays hidden).
+ * - 'wrong_fit': two items the app said join do not fit together. `a` and `b` are the items' labels
+ *   (region ids; an assembled group's smallest one), with the sides that were said to touch.
+ * - 'wrong_place': the item (label `regionId`) does not go in the spot shown: its cell (an assembled
+ *   group's top-left cell) and turn, on the grid it was shown with.
+ */
+export type FeedbackNote =
+  | { id: Id; kind: 'wrong_fit'; a: number; b: number; sideA?: PuzzleSide; sideB?: PuzzleSide; sentAt?: number }
+  | { id: Id; kind: 'wrong_place'; regionId: number; cell: CellRef; rotationDeg?: number; grid: GridSpec; sentAt?: number };
+
+/**
+ * The candidate shown for an item: its index, and its first cell when it was chosen (to find the
+ * same spot again should the candidates change, e.g. after a grid change). An index past the last
+ * candidate means every spot was rejected.
+ */
+export interface SpotChoice {
+  index: number;
+  cell?: CellRef;
 }
 
 // ---------------------------------------------------------------------------------------------
