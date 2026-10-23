@@ -4471,9 +4471,11 @@ body:has(.selection-bar) .snackbar {
   white-space: nowrap;
   cursor: pointer;
 }
-.nofit-pill:hover {
-  border-color: var(--bad);
-  color: var(--bad);
+@media (hover: hover) {
+  .nofit-pill:hover {
+    border-color: var(--bad);
+    color: var(--bad);
+  }
 }
 .nofit-pill svg {
   width: 16px;

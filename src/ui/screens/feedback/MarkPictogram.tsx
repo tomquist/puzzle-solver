@@ -60,9 +60,9 @@ function Content({ kind }: { kind: PictogramKind }) {
       // Two pieces whose tabs face each other – they can't join – and a cross between them.
       return (
         <>
-          <Piece x={2} y={13} size={11} />
-          <Piece x={19} y={13} size={11} sides={['blank', 'blank', 'tab', 'tab']} />
-          <path className="arrow" d="M13.2 3.5L18.8 9.1M18.8 3.5L13.2 9.1" />
+          <Piece x={1} y={14} size={12.5} />
+          <Piece x={18.5} y={14} size={12.5} sides={['blank', 'blank', 'tab', 'tab']} />
+          <path className="arrow" d="M12.5 2.5L19.5 9.5M19.5 2.5L12.5 9.5" />
         </>
       );
     case 'assembled':

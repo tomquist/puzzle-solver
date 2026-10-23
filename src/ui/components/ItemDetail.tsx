@@ -179,12 +179,14 @@ export function ItemDetail(props: ItemDetailProps) {
           <h3>{heading}</h3>
           <TargetContext key={`${item.key}-${candidateIndex}`} placement={current} grid={grid} reference={reference} size={360} label={`Box picture around where ${itemTitle(item)} goes`} />
           <div className="cand-info">
-            <div className="cand-where">{placementWhere(item, current, grid)}</div>
+            <div className="cand-where" data-testid="detail-spot">
+              {placementWhere(item, current, grid)}
+            </div>
             <CertaintyMeter certainty={spotCertainty(item, candidateIndex)} />
           </div>
         </section>
       ) : (
-        <div className="pd-none">
+        <div className="pd-none" data-testid="detail-no-spot">
           <strong>No more suggestions.</strong>
           <p className="muted">
             {item.candidates.length > 1
