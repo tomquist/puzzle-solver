@@ -897,6 +897,19 @@ const SEAM_APART = 0.8;
 const SEAM_APART_PART = 0.75;
 const SEAM_APART_WHOLE = 0.2;
 const SEAM_APART_TURN = 4;
+/**
+ * Two whole pieces of an edge split (within SEAM_APART_WHOLE of one piece each) with a crease
+ * along the cut between them stay apart when their outer edges are turned against each other by
+ * LOOSE_TURN_DEG degrees or more (modulo 90) and at most LOOSE_TURN_CROSS as much straight outer
+ * edge runs along the other part's direction as along the part's own (within LOOSE_TURN_WINDOW
+ * degrees): loose pieces lying end to end. An assembled pair cut through one of its pieces has
+ * parts whose dominant directions may differ by as much (13° measured on a photo), but along edges
+ * of one shared grid: their straight edges run along both directions alike (cross share 0.48 there,
+ * ≤ 0.23 for loose pieces).
+ */
+const LOOSE_TURN_DEG = 7;
+const LOOSE_TURN_WINDOW = 3;
+const LOOSE_TURN_CROSS = 0.33;
 
 /** Per pair of parts (key min·PAIR_KEY + max): judged cut pixels, and those along a seam. */
 export type CutSupport = Map<number, { n: number; seam: number }>;
@@ -1408,8 +1421,9 @@ export function watershed(mask: Mask, grad: Uint8Array, labels: Int32Array, comp
  * failing that, from k-means of the interior (k = area / piece area). A watershed on the colour
  * gradient puts the cuts on the gaps or on the outlines of the upper pieces. Neighbouring parts stay
  * apart only with evidence for the cut between them (a dark crease along it, separate blobs before
- * closing, or convincing piece outlines on both sides) and when they are not neighbours on one
- * assembled grid (same angle, one body apart); everything else is joined again. Parts below a
+ * closing, convincing piece outlines on both sides, or two whole pieces turned against each other)
+ * and when they are not neighbours on one assembled grid (same angle, one body apart); everything
+ * else is joined again. Parts below a
  * third of a piece go to the neighbour they share most outline with. Null when one region remains.
  * `measured`: the piece area `ra` was measured on single pieces (see the compact floods below).
  */
@@ -1613,13 +1627,19 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
     const seamed = !!seam && seam.n >= Math.max(3, Math.round(SEAM_TOLERANCE * body)) && seam.seam >= SEAM_APART * seam.n &&
       c.area <= EDGE_RECUT_MAX_PIECES * ra && whole(area[a] / ra) && whole(area[b] / ra) && turnedApart();
     const apart = sepBlob && (viaGap || (viaValley && (mixed || c.secondPeak > TOUCHING_SECOND_PEAK || seamed)));
-    const evidence = (crease >= CREASE_MIN && mixed) || apart || (Math.max(ca, cb) >= 0.7 && (Math.min(ca, cb) >= UNCERTAIN_CONFIDENCE || c.secondPeak > TOUCHING_SECOND_PEAK));
+    // Two whole pieces end to end, a crease along the cut, whose outer edges run in two directions
+    // apart: loose pieces turned against each other (outerTurn). An assembled pair cut through a
+    // piece shows parts at angles apart too, but along edges of one grid shared by both.
+    const turn = crease >= CREASE_MIN && Math.abs(area[a] / ra - 1) <= SEAM_APART_WHOLE && Math.abs(area[b] / ra - 1) <= SEAM_APART_WHOLE ? outerTurn(pa, pb, c, OUTER_MIN_SUPPORT * body) : null;
+    const turned = !!turn && turn.deg >= LOOSE_TURN_DEG && turn.cross <= LOOSE_TURN_CROSS;
+    const evidence = turned || (crease >= CREASE_MIN && mixed) || apart || (Math.max(ca, cb) >= 0.7 && (Math.min(ca, cb) >= UNCERTAIN_CONFIDENCE || c.secondPeak > TOUCHING_SECOND_PEAK));
     // A part with a faint outline wrapped around its neighbour is that piece's glare halo or shadow.
     const wrap = v.length / Math.max(1, Math.min(polygonPerimeter(pa.contour), polygonPerimeter(pb.contour)));
     const halo = wrap >= HALO_WRAP && Math.min(edgeScore[a], edgeScore[b]) < high;
     // Two neighbours both well below a piece that make one together: one piece given two markers.
     const halves = !(viaGap && sepBlob) && area[a] < HALF_PART * ra && area[b] < HALF_PART * ra && area[a] + area[b] <= 1.35 * ra;
-    if (!evidence || halves || halo || onOneGrid(pa, pb, c, body)) root[find(a)] = find(b);
+    // (Pieces turned apart are on no common grid, however close their angles look to onOneGrid.)
+    if (!evidence || halves || halo || (!turned && onOneGrid(pa, pb, c, body))) root[find(a)] = find(b);
   }
   const groups = new Map<number, number[]>();
   for (const l of live) {
@@ -1719,6 +1739,54 @@ function onOneGrid(a: Candidate, b: Candidate, cluster: Candidate, body: number)
  * few pixels of a side has no telling direction). Exported for tests.
  */
 export function outerAngle(part: { contour: Point[]; area: number }, cluster: { mask: Mask; bbox: Rect }, minSupport = 0): number | null {
+  const hist = outerEdges(part, cluster);
+  return hist && peakDirection(hist, minSupport);
+}
+
+/** Peak direction of an outer-edge histogram (outerEdges); null below `minSupport` px of straight edge within 4° of it. */
+function peakDirection(hist: Float64Array, minSupport: number): number | null {
+  let best = 0, bestV = -1;
+  for (let i = 0; i < 90; i++) {
+    let v = 0;
+    for (let j = -3; j <= 3; j++) v += hist[(i + j + 90) % 90] * Math.exp(-(j * j) / 4.5);
+    if (v > bestV) { bestV = v; best = i; }
+  }
+  return around(hist, best + 0.5, 4) < minSupport ? null : best + 0.5;
+}
+
+/**
+ * Turn between two parts of a cluster along the cluster's outer edge: the difference (degrees
+ * modulo 90) of their outer-edge directions (outerAngle, each with `minSupport` px of straight
+ * edge), and the straight outer edge running along the other part's direction as a share of that
+ * running along the part's own (both within LOOSE_TURN_WINDOW degrees, summed over the two parts):
+ * low when each part's edges keep to their own direction, as those of loose pieces turned against
+ * each other do. Null when either part has no outer direction. Exported for tests.
+ */
+export function outerTurn(a: { contour: Point[]; area: number }, b: { contour: Point[]; area: number }, cluster: { mask: Mask; bbox: Rect }, minSupport = 0): { deg: number; cross: number } | null {
+  const ea = outerEdges(a, cluster), eb = outerEdges(b, cluster);
+  const ta = ea && peakDirection(ea, minSupport), tb = eb && peakDirection(eb, minSupport);
+  if (!ea || !eb || ta === null || tb === null) return null;
+  const own = around(ea, ta, LOOSE_TURN_WINDOW) + around(eb, tb, LOOSE_TURN_WINDOW);
+  const cross = around(ea, tb, LOOSE_TURN_WINDOW) + around(eb, ta, LOOSE_TURN_WINDOW);
+  return { deg: quarterDiff(ta, tb), cross: own > 0 ? cross / own : Infinity };
+}
+
+/**
+ * Straight edge (px) of an outer-edge histogram (outerEdges) whose direction lies within
+ * `tol` degrees (modulo 90) of `deg`.
+ */
+function around(hist: Float64Array, deg: number, tol: number): number {
+  let s = 0;
+  for (let i = 0; i < 90; i++) if (quarterDiff(i + 0.5, deg) <= tol) s += hist[i];
+  return s;
+}
+
+/**
+ * Histogram (1° bins modulo 90, px of straight edge) of the directions of a part's outline where it
+ * lies on the outer edge of its cluster, each sample weighted by how straight the outline runs
+ * there; null when too little of the outline lies on the outer edge (see outerAngle).
+ */
+function outerEdges(part: { contour: Point[]; area: number }, cluster: { mask: Mask; bbox: Rect }): Float64Array | null {
   const { mask: cm, bbox: cb } = cluster;
   const outside = (x: number, y: number) => {
     const lx = Math.round(x) - cb.x, ly = Math.round(y) - cb.y;
@@ -1730,6 +1798,7 @@ export function outerAngle(part: { contour: Point[]; area: number }, cluster: { 
   const N = Math.max(32, Math.min(2048, Math.round(perim / 1.5)));
   const pts = smoothContour(resampleContour(part.contour, N), 1.5);
   const h = Math.max(2, Math.round(3 / (perim / N)));
+  const step = perim / N;
   const hist = new Float64Array(90);
   let used = 0;
   for (let i = 0; i < N; i++) {
@@ -1742,20 +1811,10 @@ export function outerAngle(part: { contour: Point[]; area: number }, cluster: { 
     const w = Math.exp(-(((dd * 180) / Math.PI / 12) ** 2));
     let deg = ((Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI) % 90;
     if (deg < 0) deg += 90;
-    hist[Math.min(89, Math.floor(deg))] += w;
+    hist[Math.min(89, Math.floor(deg))] += w * step;
     used++;
   }
-  if (used * (perim / N) < 0.5 * Math.sqrt(part.area)) return null;
-  let best = 0, bestV = -1;
-  for (let i = 0; i < 90; i++) {
-    let v = 0;
-    for (let j = -3; j <= 3; j++) v += hist[(i + j + 90) % 90] * Math.exp(-(j * j) / 4.5);
-    if (v > bestV) { bestV = v; best = i; }
-  }
-  let support = 0;
-  for (let j = -4; j <= 4; j++) support += hist[(best + j + 90) % 90];
-  if ((support * perim) / N < minSupport) return null;
-  return best + 0.5;
+  return used * step < 0.5 * Math.sqrt(part.area) ? null : hist;
 }
 
 /** Centroid of a candidate's mask in photo coordinates. */
