@@ -14,6 +14,7 @@
     "test:e2e": "playwright test",
     "bench": "vitest run --config vitest.bench.config.ts",
     "bench:calibration": "vite-node scripts/calibration-report.ts",
+    "bench:placed-gate": "vite-node scripts/bench-placed-gate.ts",
     "feedback:inspect": "vite-node scripts/feedback-inspect.ts --",
     "feedback:strip": "vite-node scripts/feedback-strip.ts --",
     "feedback:to-puzzle": "vite-node scripts/feedback-to-puzzle.ts --",
