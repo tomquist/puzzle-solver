@@ -178,8 +178,12 @@ export function segmentScan(photo: RGBAImage, opts: Pick<AnalyzeScanOptions, 'ma
   const t = now();
   const seg = segmentPieces(image, { ...opts.segment, timings });
   timings.segment = now() - t;
+  return { image, seg, inputs: matchInputsOf(seg), timings, ms: now() - tStart };
+}
 
-  const inputs: MatchInput[] = seg.regions
+/** Match inputs of a segmentation's regions that are not 'unknown' (sharing their crops and masks). */
+function matchInputsOf(seg: Segmentation): MatchInput[] {
+  return seg.regions
     .filter((s) => s.region.kind !== 'unknown')
     .map((s) => ({
       regionId: s.region.id,
@@ -197,19 +201,20 @@ export function segmentScan(photo: RGBAImage, opts: Pick<AnalyzeScanOptions, 'ma
         solidity: s.region.contour.length >= 3 ? s.region.area / Math.max(1, polygonArea(convexHull(s.region.contour))) : undefined,
       },
     }));
-  return { image, seg, inputs, timings, ms: now() - tStart };
 }
 
 /**
- * A copy of `scan` for one more {@link analyzeSegmented} (which changes the region descriptions and
- * the quality report): those are copied; the image, crops, masks and match inputs are shared (read only).
+ * A copy of `scan` (one not analysed itself) for one more {@link analyzeSegmented}, which changes
+ * the region descriptions and the quality report: those are copied; the image and crops are shared
+ * (read only), and so are the masks and match inputs unless `ownInputs`. Matching keeps work per
+ * match input and mask (photo sources, a patch's seam pitch); it does not depend on the marks but
+ * may depend on the grid: analyses with other grids take `ownInputs`, as if the photo were
+ * segmented anew.
  */
-export function forkSegmented(scan: SegmentedScan): SegmentedScan {
-  return {
-    ...scan,
-    seg: { ...scan.seg, regions: scan.seg.regions.map((s) => ({ ...s, region: structuredClone(s.region) })), quality: structuredClone(scan.seg.quality) },
-    timings: { ...scan.timings },
-  };
+export function forkSegmented(scan: SegmentedScan, opts: { ownInputs?: boolean } = {}): SegmentedScan {
+  const regions = scan.seg.regions.map((s) => ({ ...s, region: structuredClone(s.region), ...(opts.ownInputs ? { mask: { ...s.mask, data: s.mask.data.slice() } } : {}) }));
+  const seg: Segmentation = { ...scan.seg, regions, quality: structuredClone(scan.seg.quality) };
+  return { ...scan, seg, inputs: opts.ownInputs ? matchInputsOf(seg) : scan.inputs, timings: { ...scan.timings } };
 }
 
 function matchOptionsOf(opts: Pick<AnalyzeScanOptions, 'placedCells' | 'tuning'>): MatchOptions {

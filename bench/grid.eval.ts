@@ -18,7 +18,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import type { RGBAImage } from '../src/cv/image';
 import { resizeRGBA } from '../src/cv/resize';
 import type { GridEvidence, GridSpec } from '../src/model/types';
-import { analyzeScan } from '../src/pipeline/analyzeScan';
+import { analyzeSegmented, forkSegmented, segmentScan, type SegmentedScan } from '../src/pipeline/analyzeScan';
 import { estimateGrid } from '../src/pipeline/grid';
 import { provisionalGrid } from '../src/pipeline/gridBelief';
 import { buildReferenceIndex, type ReferenceIndex } from '../src/pipeline/match';
@@ -99,6 +99,8 @@ describe('grid benchmark', () => {
       const photos = s.scans.map((items, k) => renderPiecesPhoto(src, cut, pickItems(cut, items, s.seed * 10 + k), { seed: s.seed * 10 + k + 50, ...s.render }).photo);
       const indices = new Map<string, ReferenceIndex>();
       const cache = new Map<string, GridEvidence>();
+      // Segmentation does not depend on the grid: once per photo, each analysis from a copy.
+      const segmented = new Map<string, SegmentedScan>();
       const analyse = async (id: string, g: GridSpec, probe: GridProbe | undefined): Promise<GridEvidence> => {
         const key = `${id}|${g.rows}x${g.cols}|${probe ?? ''}`;
         let ev = cache.get(key);
@@ -108,7 +110,10 @@ describe('grid benchmark', () => {
           let index = indices.get(gk);
           if (!index) indices.set(gk, (index = buildReferenceIndex(reference, g, 'grid')));
           const photo = photos[Number(id)];
-          ev = analyzeScan(index, photo, { maxSide: Math.max(photo.width, photo.height), gridProbe: probe }).result.gridEvidence!;
+          const opts = { maxSide: Math.max(photo.width, photo.height), gridProbe: probe };
+          let seg = segmented.get(id);
+          if (!seg) segmented.set(id, (seg = segmentScan(photo, opts)));
+          ev = analyzeSegmented(index, forkSegmented(seg, { ownInputs: true }), opts).result.gridEvidence!;
           cache.set(key, ev);
         }
         return ev;
