@@ -160,6 +160,16 @@ test('result screen: hidden no-matches, groups, connections, view options, wake 
   await page.getByRole('checkbox', { name: /Unsure pieces/ }).check();
   await page.keyboard.press('Escape');
   await expect(page.locator('[data-testid^="item-"]')).toHaveCount(drawn);
+  // "Edge pieces only" hides the interior pieces, and the list says how many are hidden.
+  await page.getByTestId('view-options').click();
+  await page.getByRole('checkbox', { name: /Edge pieces only/ }).check();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.list-head')).toContainText(/\d+ hidden in View/);
+  await page.getByTestId('view-options').click();
+  await page.getByRole('checkbox', { name: /Edge pieces only/ }).uncheck();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.list-head')).not.toContainText('hidden in View');
+  await expect(page.locator('[data-testid^="item-"]')).toHaveCount(drawn);
 
   // Leaving the result releases the wake lock.
   await page.getByRole('link', { name: 'Scan more' }).click();

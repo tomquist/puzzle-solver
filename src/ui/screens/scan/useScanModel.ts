@@ -9,6 +9,39 @@ export function visibleByView(items: ScanItem[], view: ViewOptions): ScanItem[] 
   return items.filter((i) => (view.unsure || i.status === 'confident') && (!view.edgesOnly || i.edge));
 }
 
+/** Items the view options hide: by "Unsure pieces" off, by "Edge pieces only" on, and in all. */
+export interface HiddenByView {
+  unsure: number;
+  interior: number;
+  total: number;
+}
+
+export function hiddenByView(items: ScanItem[], view: ViewOptions): HiddenByView {
+  const h: HiddenByView = { unsure: 0, interior: 0, total: 0 };
+  for (const i of items) {
+    const unsure = !view.unsure && i.status !== 'confident';
+    const interior = view.edgesOnly && !i.edge;
+    if (unsure) h.unsure++;
+    if (interior) h.interior++;
+    if (unsure || interior) h.total++;
+  }
+  return h;
+}
+
+/** The view options with nothing hidden (the display toggles as they are). */
+export const showAllView = (view: ViewOptions): ViewOptions => ({ ...view, unsure: true, edgesOnly: false });
+
+/**
+ * What to say when the view options hide every item: name only the options that hide something
+ * (a remembered "Edge pieces only" from building the frame hides a scan without edge pieces).
+ */
+export function hiddenMessage(items: ScanItem[], view: ViewOptions): { title: string; text: string } {
+  const h = hiddenByView(items, view);
+  const causes = [h.interior > 0 && '“Edge pieces only” is on', h.unsure > 0 && '“Unsure pieces” is off'].filter(Boolean);
+  const title = view.edgesOnly && !items.some((i) => i.edge) ? 'No edge pieces in this scan' : 'Nothing to show with these view options';
+  return { title, text: `${causes.join(' and ')} in View, which hides ${h.total === 1 ? 'the only item' : `all ${h.total} items`}.` };
+}
+
 /**
  * Index of the candidate this scan recorded as placed for `item` (it may not be the best one when
  * the user said "Not here"), or -1.

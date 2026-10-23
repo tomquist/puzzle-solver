@@ -61,7 +61,7 @@ import { linkRoute } from '../../lib/route';
 import { href } from '../../lib/routes';
 import { lastTab } from '../../lib/lastTab';
 import { Legend } from './Legend';
-import { useScanModel } from './useScanModel';
+import { hiddenByView, hiddenMessage, showAllView, useScanModel } from './useScanModel';
 
 type ViewMode = 'photo' | 'picture' | 'both';
 const PLACING_HINT = 'placing-hint';
@@ -131,6 +131,10 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
   const model = useScanModel(result, puzzle.grid, prefs.view, rejected, progress, scan.id);
   const { all, visible, links, byKey, placementOf, isPlacedItem } = model;
   const counts = itemCounts(all.items);
+  const hidden = hiddenByView(all.items, prefs.view);
+  const visibleUnsure = visible.filter((i) => i.status === 'ambiguous').length;
+  const allHidden = hiddenMessage(all.items, prefs.view);
+  const showAll = () => updatePrefs((p) => ({ ...p, view: showAllView(p.view) }));
   const toPlace = useMemo(() => placingOrder(visible, links, puzzle.grid, isPlacedItem, placementOf), [visible, links, puzzle.grid, isPlacedItem, placementOf]);
 
   const overlayItems = useMemo<OverlayItem[]>(() => visible.map((item) => ({ item, placement: placementOf(item), placed: isPlacedItem(item) })), [visible, placementOf, isPlacedItem]);
@@ -434,8 +438,9 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
         </div>
 
         {visible.length === 0 ? (
-          <EmptyState title="Nothing to show with these view options">
-            <p className="muted">Turn “Unsure pieces” on or “Edge pieces only” off in View.</p>
+          // "Show all pieces" is in the action bar below.
+          <EmptyState title={allHidden.title}>
+            <p className="muted">{allHidden.text}</p>
           </EmptyState>
         ) : (
           <div className={`result-views view-${view}`}>
@@ -489,11 +494,13 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
           </Banner>
         )}
 
+        {visible.length > 0 && (
         <section>
           <div className="list-head">
             <h2 className="h3">
               {plural(visible.length, 'item')}
-              {counts.unsure > 0 && prefs.view.unsure ? <span className="muted"> · {counts.unsure} unsure</span> : null}
+              {visibleUnsure > 0 ? <span className="muted"> · {visibleUnsure} unsure</span> : null}
+              {hidden.total > 0 ? <span className="muted"> · {hidden.total} hidden in View</span> : null}
             </h2>
             {confidentToPlace.length > 1 && (
               <button className="btn btn-sm btn-quiet" onClick={() => void placeAllConfident()} data-testid="place-all">
@@ -537,6 +544,7 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
           </ul>
           <Legend />
         </section>
+        )}
         <FeedbackLink puzzleId={puzzle.id} scanId={scan.id} />
       </main>
 
@@ -549,7 +557,11 @@ function ScanResultView({ scan }: { scan: ScanRecord }) {
               <IconScan size={18} />
               Scan more
             </a>
-            {toPlace.length > 0 ? (
+            {visible.length === 0 ? (
+              <button className="btn btn-primary btn-lg grow" onClick={showAll} data-testid="show-all">
+                Show all pieces
+              </button>
+            ) : toPlace.length > 0 ? (
               <button className="btn btn-primary btn-lg grow" onClick={() => navigate(href.place(puzzle.id, scan.id))} data-testid="start-placing">
                 Start placing · {toPlace.length}
               </button>
