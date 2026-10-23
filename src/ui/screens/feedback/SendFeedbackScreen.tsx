@@ -726,12 +726,6 @@ function HowToMark({ onClose }: { onClose: () => void }) {
           <span>One piece, but the outline is off → {name('bad_outline')}.</span>
         </li>
         <li>
-          <MarkPictogram kind="wrong_fit" />
-          <span>
-            Pieces that don’t fit, or a wrong spot: say so on the scan result as you place – select a piece, then {name('wrong_fit')} or <strong>Not this one</strong>. It shows up here.
-          </span>
-        </li>
-        <li>
           <MarkPictogram kind="assembled" />
           <span>
             <strong>Blue</strong> = pieces you’ve already joined: one outline around them is right. Mark it only if they are really loose or the outline is off.
@@ -743,6 +737,9 @@ function HowToMark({ onClose }: { onClose: () => void }) {
         <li>Zoom with two fingers or the + / − buttons.</li>
         <li>Tap inside the outline – for {name('missed')}, on the middle of the piece.</li>
         <li>Tap a mark again to remove it.</li>
+        <li>
+          Pieces that don’t fit, or a wrong spot: say so on the scan result as you place – select a piece, then {name('wrong_fit')} or <strong>Not this one</strong>. It shows up here.
+        </li>
       </ul>
       <button type="button" className="btn btn-sm fb-howto-close" onClick={onClose} data-testid="fb-howto-close">
         Got it

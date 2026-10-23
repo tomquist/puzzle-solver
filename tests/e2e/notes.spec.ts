@@ -54,6 +54,34 @@ async function downloadFeedback(page: Page): Promise<FeedbackBundle> {
 
 const snackbar = (page: Page) => page.locator('.snackbar');
 
+/**
+ * The unsent notes and chosen spots stored with the scans (IndexedDB): a reload right after a tap
+ * must not cut the write short in the test.
+ */
+async function stored(page: Page): Promise<{ notes: number; spots: number }> {
+  return page.evaluate(
+    () =>
+      new Promise<{ notes: number; spots: number }>((resolve, reject) => {
+        const open = indexedDB.open('puzzle-solver');
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const db = open.result;
+          const req = db.transaction('scans').objectStore('scans').getAll();
+          req.onsuccess = () => {
+            const scans = req.result as { feedbackNotes?: { sentAt?: number }[]; spotChoices?: object }[];
+            db.close();
+            resolve({
+              notes: scans.reduce((n, s) => n + (s.feedbackNotes ?? []).filter((x) => x.sentAt === undefined).length, 0),
+              spots: scans.reduce((n, s) => n + Object.keys(s.spotChoices ?? {}).length, 0),
+            });
+          };
+          req.onerror = () => reject(req.error);
+        };
+      }),
+  );
+}
+const storedNotes = async (page: Page) => (await stored(page)).notes;
+
 test('doesn’t fit: noted on a connection, undone, kept across a reload, pre-filled in feedback, sent', async ({ page }, info) => {
   await createPuzzleWithLinks(page);
   const line = page.getByTestId('link').first();
@@ -88,9 +116,10 @@ test('doesn’t fit: noted on a connection, undone, kept across a reload, pre-fi
   await expect(page.getByTestId('notes-link')).toHaveCount(0);
 
   // Again, then reload: still noted, still hidden.
-  await page.getByTestId(`label-${a}`).dispatchEvent('click');
+  if (!(await bar.isVisible())) await page.getByTestId(`piece-item-${a}`).click();
   await bar.getByTestId(`no-fit-${b}`).click();
   await expect(linkBetween(page, a, b)).toHaveCount(0);
+  await expect.poll(() => storedNotes(page)).toBe(1);
   await page.reload();
   await expect(page.getByTestId('scan-result')).toBeVisible();
   await expect(page.locator('[data-testid^="item-"]').first()).toBeVisible();
@@ -124,6 +153,7 @@ test('doesn’t fit: noted on a connection, undone, kept across a reload, pre-fi
   expect(bundle.version).toBe(2);
   expect(bundle.marks).toContainEqual(expect.objectContaining({ kind: 'wrong_fit', a: labelA, b: labelB }));
   expect(JSON.stringify(bundle.marks)).not.toContain('noteIds');
+  await expect.poll(() => storedNotes(page)).toBe(0);
 
   // Sent: no longer offered, the connection stays hidden.
   await page.locator('.topbar').getByRole('link', { name: 'Back' }).click();
@@ -162,6 +192,7 @@ test('not here: noted in the details and while placing, kept across a reload, re
   // Again; closed and reloaded, the spot shown and the note are kept.
   await page.getByTestId('not-this-one').click();
   await expect.poll(() => shownSpot(page)).toBe(after);
+  await expect.poll(() => stored(page)).toEqual({ notes: 1, spots: 1 });
   await page.keyboard.press('Escape');
   await page.reload();
   await expect(page.getByTestId('scan-result')).toBeVisible();
@@ -179,6 +210,7 @@ test('not here: noted in the details and while placing, kept across a reload, re
   await expect(row).toContainText(/· not row \d+, column \d+/);
   await page.getByTestId('fb-remove-0').click();
   await expect(page.getByTestId('fb-mark-0')).toHaveCount(0);
+  await expect.poll(() => storedNotes(page)).toBe(0);
   await page.locator('.topbar').getByRole('link', { name: 'Back' }).click();
   await expect(page.getByTestId('scan-result')).toBeVisible();
   await expect(page.locator('[data-testid^="item-"]').first()).toBeVisible();
@@ -196,6 +228,7 @@ test('not here: noted in the details and while placing, kept across a reload, re
   await expect.poll(() => page.getByTestId('instruction').textContent()).toBe(instruction);
   await page.getByTestId('not-here').click();
   await expect.poll(() => page.getByTestId('instruction').textContent()).not.toBe(instruction);
+  await expect.poll(() => storedNotes(page)).toBe(1);
   await page.goBack();
   await expect(page.getByTestId('scan-result')).toBeVisible();
   await expect(page.getByTestId('notes-link')).toHaveText(/1 note for feedback/);
@@ -206,6 +239,7 @@ test('not here: noted in the details and while placing, kept across a reload, re
   const bundle = await downloadFeedback(page);
   const mark = bundle.marks.find((m) => m.kind === 'wrong_place');
   expect(mark && mark.kind === 'wrong_place' && mark.rejected).toHaveLength(1);
+  await expect.poll(() => storedNotes(page)).toBe(0);
   await page.locator('.topbar').getByRole('link', { name: 'Back' }).click();
   await expect(page.getByTestId('scan-result')).toBeVisible();
   await expect(page.getByTestId('notes-link')).toHaveCount(0);
