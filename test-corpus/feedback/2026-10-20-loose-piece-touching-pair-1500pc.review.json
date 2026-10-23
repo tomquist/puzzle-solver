@@ -1,0 +1,31 @@
+{
+  "reviewed": "2026-10-23",
+  "marks": {
+    "1": {
+      "verdict": "ok",
+      "note": "#11 is the loose yellowish piece (glare in its middle) together with the top of the upper orange piece: three pieces lie here, the loose one touching with its lower right the top knob of an assembled pair of orange pieces stacked vertically, joined by one horizontal dark seam with a tab going down in the middle",
+      "pieces": [
+        [{ "x": 180, "y": 1320 }, { "x": 255, "y": 1305 }, { "x": 180, "y": 1380 }, { "x": 240, "y": 1370 }, { "x": 225, "y": 1420 }, { "x": 125, "y": 1337 }],
+        [{ "x": 305, "y": 1380 }, { "x": 280, "y": 1430 }, { "x": 340, "y": 1430 }, { "x": 285, "y": 1495 }, { "x": 310, "y": 1480 }, { "x": 345, "y": 1510 }, { "x": 297, "y": 1555 }],
+        [{ "x": 260, "y": 1580 }, { "x": 350, "y": 1550 }, { "x": 220, "y": 1600 }, { "x": 265, "y": 1630 }, { "x": 330, "y": 1620 }, { "x": 390, "y": 1580 }]
+      ],
+      "assembled": [[1, 2]]
+    },
+    "2": {
+      "verdict": "ok",
+      "note": "#12 is the rest of the upper orange piece, the whole lower one and a ragged blob of table to their left (the table there is shaded); same three pieces as M1",
+      "pieces": [
+        [{ "x": 180, "y": 1320 }, { "x": 255, "y": 1305 }, { "x": 180, "y": 1380 }, { "x": 240, "y": 1370 }, { "x": 225, "y": 1420 }, { "x": 125, "y": 1337 }],
+        [{ "x": 305, "y": 1380 }, { "x": 280, "y": 1430 }, { "x": 340, "y": 1430 }, { "x": 285, "y": 1495 }, { "x": 310, "y": 1480 }, { "x": 345, "y": 1510 }, { "x": 297, "y": 1555 }],
+        [{ "x": 260, "y": 1580 }, { "x": 350, "y": 1550 }, { "x": 220, "y": 1600 }, { "x": 265, "y": 1630 }, { "x": 330, "y": 1620 }, { "x": 390, "y": 1580 }]
+      ],
+      "assembled": [[1, 2]]
+    }
+  },
+  "area": { "x": 0, "y": 1240, "width": 470, "height": 480 },
+  "objects": [
+    { "x": 200, "y": 1350, "note": "loose yellowish piece" },
+    { "x": 310, "y": 1450, "unsure": true, "note": "assembled pair, upper piece: one patch over both pieces or one region per piece are both right (judged by M1/M2), so neither pair point counts; a region over neither of them is false" },
+    { "x": 300, "y": 1610, "unsure": true, "note": "assembled pair, lower piece (see above)" }
+  ]
+}

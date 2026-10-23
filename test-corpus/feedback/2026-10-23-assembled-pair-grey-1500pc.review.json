@@ -1,0 +1,30 @@
+{
+  "reviewed": "2026-10-23",
+  "marks": {
+    "1": {
+      "verdict": "ok",
+      "note": "#4 is the top right of the upper piece of an assembled pair (knob at its top right), cut off at the piece's waist where the print is one even colour; the pair is joined along one dark curved seam from the upper-left notch around the upper piece's tab to the lower right",
+      "assembled": [[0, 1]],
+      "pieces": [
+        [{ "x": 700, "y": 1834 }, { "x": 628, "y": 1852 }, { "x": 668, "y": 1880 }, { "x": 620, "y": 1948 }, { "x": 644, "y": 1972 }, { "x": 572, "y": 1996 }],
+        [{ "x": 456, "y": 1980 }, { "x": 532, "y": 1976 }, { "x": 500, "y": 2024 }, { "x": 552, "y": 2080 }, { "x": 628, "y": 2080 }]
+      ]
+    },
+    "2": {
+      "verdict": "ok",
+      "note": "#5 is the rest of the upper piece and the whole lower piece (knob at its bottom left) of the same pair: same truth as M1",
+      "assembled": [[0, 1]],
+      "pieces": [
+        [{ "x": 700, "y": 1834 }, { "x": 628, "y": 1852 }, { "x": 668, "y": 1880 }, { "x": 620, "y": 1948 }, { "x": 644, "y": 1972 }, { "x": 572, "y": 1996 }],
+        [{ "x": 456, "y": 1980 }, { "x": 532, "y": 1976 }, { "x": 500, "y": 2024 }, { "x": 552, "y": 2080 }, { "x": 628, "y": 2080 }]
+      ]
+    }
+  },
+  "area": { "x": 0, "y": 0, "width": 770, "height": 2400 },
+  "objects": [
+    { "x": 520, "y": 590, "note": "loose piece" },
+    { "x": 362, "y": 965, "note": "loose piece with dark print" },
+    { "x": 644, "y": 1890, "unsure": true, "note": "assembled pair, upper piece: one patch over both pieces or one region per piece are both right (judged by M1/M2), so neither pair point counts; a region over neither of them is false" },
+    { "x": 510, "y": 2030, "unsure": true, "note": "assembled pair, lower piece (see above)" }
+  ]
+}

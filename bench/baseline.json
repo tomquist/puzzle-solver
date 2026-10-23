@@ -948,6 +948,18 @@
         "objectClean": 1,
         "objectPrecision": 1
       },
+      "2026-10-20-loose-piece-touching-pair-1500pc.json": {
+        "outlineFixed": 1.0,
+        "objectRecall": 1.0,
+        "objectClean": 1.0,
+        "objectPrecision": 1.0
+      },
+      "2026-10-23-assembled-pair-grey-1500pc.json": {
+        "outlineFixed": 1.0,
+        "objectRecall": 1.0,
+        "objectClean": 1.0,
+        "objectPrecision": 1.0
+      },
       "flickr-chrisrycroft-birds-oak-partial.json": {
         "objectRecall": 0.5,
         "objectClean": 0.5,

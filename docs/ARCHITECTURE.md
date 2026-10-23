@@ -296,7 +296,16 @@ grain-like table pixels within about half a piece before or after it, as a resid
 and local table model – and the photo is segmented again against it with the grain-free spread:
 stripes of grain no longer grow onto the pieces as ragged spikes or join them, while print near
 the wood's colour stands out (off by default: see segment.ts GRAIN_DEFAULT). Assembled patches keep the table they enclose open in their masks
-(the cells of missing pieces).
+(the cells of missing pieces). Touching pieces are split at narrow necks, but a cut stands only
+where a seam runs along it (`cutSupport`: table showing between the pieces, or a thin dark crease,
+judged with the cut settled on the strongest edge between the parts' cores): a piece with blanks on
+opposite sides has a waist narrower than the side it shares with its partner in an assembled pair,
+and a cut there would run through the piece's even print. Without a supported neck the cluster is
+split along the edges between its pieces or kept whole (an assembled group is one patch); cores
+apart in colour count as separate pieces there when a seam runs all along the cut between them.
+In a cluster of a few touching pieces (by the piece size measured from single pieces), weak
+foreground that hangs off it by a short stretch of its outline (shaded table tying the pieces
+together) is dropped before the split.
 
 **Piece shape** – smoothed contour; corner candidates from curvature/convex-hull; best 4-corner
 combination by rectangularity and area; sides classified flat/tab/blank from the deviation profile;
