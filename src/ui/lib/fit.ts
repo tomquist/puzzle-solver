@@ -12,7 +12,7 @@
  */
 import type { Point } from '../../cv/geometry';
 import type { CellRef, PuzzleSide } from '../../model/types';
-import { cellAxes, cellPoint, rimPoint, type CellItem } from './cellSpots';
+import { cellAxes, cellPoint, cellStep, rimPoint, type CellItem } from './cellSpots';
 import { sideVector } from './overlay';
 import { signedDeg, turnedWords } from './rotation';
 import { bezierPoint, type Route } from './route';
@@ -83,7 +83,7 @@ export function fitPose(a: FitItem, b: FitItem, aspect: number): FitPose | undef
   // The touching cells, on the items' real rims where they join.
   const anchorPoint = side ? rimPoint(anchor, anchorCell, side, aspect) : cellPoint(anchor, anchorCell, aspect);
   const pivot = side ? rimPoint(m, moverCell, OPPOSITE[side], aspect) : cellPoint(m, moverCell, aspect);
-  const { w, h } = cellAxes(anchor.cellPx, aspect);
+  const { w, h } = cellStep(anchor, anchorCell, aspect);
   const right = sideVector('right', anchor.rotationDeg);
   const down = sideVector('bottom', anchor.rotationDeg);
   const docked = { x: anchorPoint.x + right.x * dc * w + down.x * dr * h, y: anchorPoint.y + right.y * dc * w + down.y * dr * h };
