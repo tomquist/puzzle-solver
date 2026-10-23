@@ -1776,23 +1776,20 @@ export function renderBoxPhoto(reference: RGBAImage, opts: BoxPhotoOptions = {})
   const grain = smoothNoise(W, H, 40, rng);
   const fine = smoothNoise(W, H, 6, rng);
   const woodAngle = rng.uniform(-0.2, 0.2);
+  const wc = Math.cos(woodAngle), ws = Math.sin(woodAngle);
+  const b: RGB = bgOpt === 'wood' ? [150, 105, 70] : bgOpt === 'plain' ? [200, 200, 195] : bgOpt;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const i = y * W + x;
-      let c: RGB;
+      let v: number;
       if (bgOpt === 'wood') {
-        const t = y * Math.cos(woodAngle) + x * Math.sin(woodAngle);
+        const t = y * wc + x * ws;
         const s = 0.5 + 0.5 * Math.sin(t / 7 + 6 * grain[i]);
-        const v = 0.85 + 0.15 * s + 0.04 * fine[i];
-        c = [150 * v, 105 * v, 70 * v];
-      } else {
-        const b = bgOpt === 'plain' ? [200, 200, 195] : bgOpt;
-        const v = 1 + 0.03 * grain[i] + 0.02 * fine[i];
-        c = [b[0] * v, b[1] * v, b[2] * v];
-      }
-      scene.data[i * 3] = c[0];
-      scene.data[i * 3 + 1] = c[1];
-      scene.data[i * 3 + 2] = c[2];
+        v = 0.85 + 0.15 * s + 0.04 * fine[i];
+      } else v = 1 + 0.03 * grain[i] + 0.02 * fine[i];
+      scene.data[i * 3] = b[0] * v;
+      scene.data[i * 3 + 1] = b[1] * v;
+      scene.data[i * 3 + 2] = b[2] * v;
     }
   }
   // Soft shadow of the lid.
