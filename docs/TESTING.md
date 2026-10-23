@@ -82,7 +82,12 @@ analysing every variant from the photo.
 
 ### In CI
 
-The `bench` job of `.github/workflows/deploy.yml` is a matrix of parallel jobs in the Playwright
+The benchmark is its own workflow, `.github/workflows/bench.yml` ("Accuracy benchmark"): the CI
+workflow (`deploy.yml`) calls it on every push to main and pull request, and it can be started on
+its own for any branch – Actions → Accuracy benchmark → Run workflow, or the API
+(`POST /repos/{owner}/{repo}/actions/workflows/bench.yml/dispatches` with `{"ref": "<branch>"}`) –
+to benchmark work in progress in ~4 minutes without building, browser tests or deploying. Its
+`bench` job is a matrix of parallel jobs in the Playwright
 container, each running some bench files (balanced by run time, see below): `placed-1`,
 `placed-2`, `placed-3` (one placed shard each), `scan`, `grid-sides`, and `feedback-box` (feedback,
 box, and the private, corpus and Puzzle-Map suites, which skip without their local data). Each job
@@ -97,7 +102,7 @@ scenes with the no-marks average, its tolerance (0.01) is sized for the average 
 (one piece of one scene moves it by about 0.002), and over a third of the scenes the same piece
 moves a shard's average three times as much – per-shard gates would be stricter for top-1 / top-3
 (if every shard passes, their mean passes) and not comparable for confident precision. Deploy
-needs every benchmark job and the gate.
+needs the whole benchmark workflow, the gate included.
 
 Run times of the jobs' bench files (4-core machine, each job's files in parallel as on a runner;
 setup – image, `npm ci` – comes on top):
@@ -109,6 +114,9 @@ setup – image, `npm ci` – comes on top):
 | `grid-sides` | `grid.eval.ts`, `sides.eval.ts` | ~3.1 min |
 | `feedback-box` | `feedback.eval.ts`, `box.eval.ts` (+ skipped private / corpus / Puzzle-Map) | ~2.4 min |
 | `bench-placed-gate` | – (records only) | seconds |
+
+On GitHub (first run, 2026-10-23) the jobs took 1.9–3.5 min including setup and the gate ended
+3.9 min after the start.
 
 Rebalance the matrix when a file's time changes a lot (vitest prints each file's time). Locally
 the Puzzle-Map shards (with the data) take ~2–4 min each.
