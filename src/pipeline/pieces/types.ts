@@ -89,6 +89,12 @@ export interface SegmentOptions {
    * (default false: see segment.ts GRAIN_DEFAULT).
    */
   grain?: boolean;
+  /**
+   * Give the pixels around neck cuts out again with the table in shade (narrow gaps between pieces
+   * lying close) carved out, so a knob pressed against a neighbour stays with its own piece
+   * (default true).
+   */
+  shadeGaps?: boolean;
   /** Run the photo-quality assessment (default true). */
   assessQuality?: boolean;
   /** When given, milliseconds per stage are added to it (e.g. `background`, `threshold`, `shapes`). */

@@ -13,7 +13,9 @@
  * wider ones, with the table they enclose opened) or along the edges between them (dark creases
  * count as cuts only between pieces at their own angles or cores apart along a seam; without gaps or
  * cores, k-means markers whose floods may run compact), two halves of one piece the stages left
- * joined again → reassembly of fragments → outlines snapped to brightness edges in blocky JPEGs → (option) graph-cut
+ * joined again, the pixels around the cuts given out again with the table in shade (narrow gaps
+ * between pieces lying close) carved out, so knob tips pressed against a neighbour go back to their
+ * own piece → reassembly of fragments → outlines snapped to brightness edges in blocky JPEGs → (option) graph-cut
  * refinement of outlines in doubt, trimming halos the colour models clearly take for table
  * (refine.ts) → classification (piece / patch / fragment / clutter at the photo border) →
  * reading-order ids → quality.
@@ -30,7 +32,7 @@ import { boxBlurGray } from '../../cv/filter';
 import { polygonPerimeter, resampleContour, simplifyPolygon, smoothContour } from '../../cv/polygon';
 import { otsuThreshold, threshold } from '../../cv/threshold';
 import type { DetectedRegion, PieceShape, QualityIssue, RegionKind } from '../../model/types';
-import { backgroundAt, fitBackground, fitLocalTable, foregroundScore, tableChromaDistance, tableChromasAt, type BackgroundFit } from './background';
+import { backgroundAt, fitBackground, fitLocalTable, foregroundScore, tableChromaDistance, tableChromasAt, tableShade, type BackgroundFit } from './background';
 import { assessPhoto, assessRegions } from './quality';
 import { estimatePatchPitch } from './patchPitch';
 import { fitGrainTable, grainCoherence, GRAIN_MIN_COHERENCE, type GrainTable } from './grain';
@@ -1100,6 +1102,218 @@ function seamCuts(c: Part, parts: Part[], preClose: Mask, img: RGBAImage, body: 
   if (groups.size < 2) return null;
   const out = [...groups.values()].map((ids) => labelsPart(c, labels, ids)).filter((q): q is Part => q !== null);
   return out.length >= 2 ? out : null;
+}
+
+/** Lightness ratio (L* + 16, to the table's) above which a pixel can be the table in shade (tableShade). */
+const SHADE_RHO_MIN = 0.6;
+/** Lightness ratio below which a pixel can be the table in shade (above: the table itself or a rim). */
+const SHADE_RHO_MAX = 0.9;
+/** Chroma tolerance (a*, b* each) of the table in shade against the table's scaled chroma. */
+const SHADE_TOL = 4;
+/** Reach (body sizes) around a neck cut within which the shaded table is carved out (reownCuts). */
+const SHADE_NEAR = 0.35;
+/** Smallest connected change (body sizes squared) reownCuts makes: a knob tip, not a sliver along a cut. */
+const REOWN_MIN_AREA = 0.005;
+/**
+ * Smallest piece body (px) whose cuts are given out again (reownParts): below it a gap between
+ * pieces lying close is a pixel or two, its colour the rims' and the JPEG's half-resolution chroma
+ * rather than the table's, and a knob tip only a few pixels.
+ */
+const REOWN_MIN_BODY = 40;
+
+/**
+ * The pixels of part `c` (bbox-local) in the shade map (photo-sized, see tableShade) whose
+ * 8-connected components come within 2 px of the part's outside: the table in shade reaching in
+ * between two pieces from outside (a narrow gap). Table-coloured print inside a piece is enclosed
+ * and left out. Null without any.
+ */
+export function shadeGaps(c: Part, shade: Mask): Mask | null {
+  const { width: w, height: h } = c.mask;
+  const { x: bx, y: by } = c.bbox;
+  const W = shade.width, md = c.mask.data;
+  const s = createMask(w, h);
+  let any = false;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (md[i] && shade.data[(y + by) * W + x + bx]) { s.data[i] = 1; any = true; }
+    }
+  }
+  if (!any) return null;
+  const { labels, count } = labelComponents(s, 8);
+  const open = new Uint8Array(count + 1);
+  // (A component is open when one of its pixels lies within 2 px of the outside of the part.)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const l = labels[y * w + x];
+      if (l === 0 || open[l]) continue;
+      if (x < 2 || y < 2 || x >= w - 2 || y >= h - 2) { open[l] = 1; continue; }
+      for (let dy = -2; dy <= 2 && !open[l]; dy++) for (let dx = -2; dx <= 2; dx++) if (!md[(y + dy) * w + x + dx]) { open[l] = 1; break; }
+    }
+  }
+  any = false;
+  for (let i = 0; i < s.data.length; i++) {
+    s.data[i] = open[labels[i]];
+    if (s.data[i]) any = true;
+  }
+  return any ? s : null;
+}
+
+/**
+ * A part label map (1…n over cluster `c`, bbox-local) given out again around its cuts: the
+ * shaded table open to the outside (shadeGaps) within SHADE_NEAR body sizes of a cut is carved out
+ * of the cluster, and within reach of it (SHADE_NEAR body sizes plus the opening radius `r`) every
+ * pixel outside the cores of the carved cluster (opened with a disc of radius `r`, as splitAtNecks)
+ * is flooded again from the cores and the labels around that reach, first through the carved
+ * cluster, then through the rest. A knob pressed against a neighbour, which the split's flood cut
+ * halfway or gave to the neighbour, is reached from its own piece around the gap. The cuts'
+ * decisions stay (labels only; unlabelled pixels stay out, pixels beyond reach keep their label),
+ * and only connected changes of at least REOWN_MIN_AREA body sizes squared are made (slivers along
+ * a cut keep their label). Null when no shade lies near a cut, a label within reach has no marker,
+ * or nothing that large changes.
+ */
+export function reownCuts(c: Part, labels: Int32Array, n: number, r: number, body: number, shade: Mask): Int32Array | null {
+  const gaps = shadeGaps(c, shade);
+  if (!gaps) return null;
+  const { width: w, height: h } = c.mask;
+  const near = Math.max(2, Math.round(SHADE_NEAR * body));
+  // Only cuts within reach of the gaps matter: the zone is computed around them.
+  const gb = maskBounds(gaps)!;
+  const zx0 = Math.max(0, gb.x - near - 1), zy0 = Math.max(0, gb.y - near - 1);
+  const zw = Math.min(w, gb.x + gb.width + near + 1) - zx0, zh = Math.min(h, gb.y + gb.height + near + 1) - zy0;
+  const cut = createMask(zw, zh);
+  for (let y = 0; y < zh; y++) {
+    for (let x = 0; x < zw; x++) {
+      const i = (y + zy0) * w + x + zx0, l = labels[i];
+      if (l === 0) continue;
+      if ((x + zx0 < w - 1 && labels[i + 1] > 0 && labels[i + 1] !== l) || (y + zy0 < h - 1 && labels[i + w] > 0 && labels[i + w] !== l)) cut.data[y * zw + x] = 1;
+    }
+  }
+  const zone = dilate(cut, near, 'disk').data;
+  const carve = createMask(w, h);
+  let cx0 = w, cy0 = h, cx1 = -1, cy1 = -1;
+  for (let y = 0; y < zh; y++) {
+    for (let x = 0; x < zw; x++) {
+      const X = x + zx0, Y = y + zy0;
+      if (!zone[y * zw + x] || !gaps.data[Y * w + X]) continue;
+      carve.data[Y * w + X] = 1;
+      if (X < cx0) cx0 = X;
+      if (X > cx1) cx1 = X;
+      if (Y < cy0) cy0 = Y;
+      if (Y > cy1) cy1 = Y;
+    }
+  }
+  if (cx1 < 0) return null;
+  // The window: the reach around the carve (pixels given out again) and a band of the opening's
+  // radius beyond it (labels kept, markers for the floods; the window's edge erodes the cores there).
+  const reach = Math.ceil(near + r), band = Math.ceil(r) + 1;
+  const fx0 = Math.max(0, cx0 - reach), fy0 = Math.max(0, cy0 - reach), fx1 = Math.min(w - 1, cx1 + reach), fy1 = Math.min(h - 1, cy1 + reach);
+  const ox = Math.max(0, fx0 - band), oy = Math.max(0, fy0 - band);
+  const ow = Math.min(w - 1, fx1 + band) - ox + 1, oh = Math.min(h - 1, fy1 + band) - oy + 1;
+  const inside = createMask(ow, oh), carved = createMask(ow, oh);
+  for (let y = 0; y < oh; y++) {
+    for (let x = 0; x < ow; x++) {
+      const i = (y + oy) * w + x + ox, j = y * ow + x;
+      if (labels[i] > 0) { inside.data[j] = 1; carved.data[j] = carve.data[i] ? 0 : 1; }
+    }
+  }
+  const p = band, pw = ow + 2 * p, ph = oh + 2 * p;
+  const padded = createMask(pw, ph);
+  for (let y = 0; y < oh; y++) padded.data.set(carved.data.subarray(y * ow, (y + 1) * ow), (y + p) * pw + p);
+  const core = open(padded, r, 'disk').data;
+  const out = new Int32Array(ow * oh);
+  const queue = new Int32Array(ow * oh);
+  let tail = 0;
+  const present = new Uint8Array(n + 1), marked = new Uint8Array(n + 1);
+  for (let y = 0; y < oh; y++) {
+    for (let x = 0; x < ow; x++) {
+      const X = x + ox, Y = y + oy, l = labels[Y * w + X];
+      if (l === 0) continue;
+      present[l] = 1;
+      const free = X >= fx0 && X <= fx1 && Y >= fy0 && Y <= fy1;
+      if (!free || core[(y + p) * pw + x + p]) { out[y * ow + x] = l; marked[l] = 1; queue[tail++] = y * ow + x; }
+    }
+  }
+  for (let l = 1; l <= n; l++) if (present[l] && !marked[l]) return null;
+  for (const allowed of [carved.data, inside.data]) {
+    if (allowed === inside.data) {
+      tail = 0;
+      for (let i = 0; i < out.length; i++) if (out[i] > 0) queue[tail++] = i;
+    }
+    let head = 0;
+    while (head < tail) {
+      const i = queue[head++];
+      const x = i % ow, y = (i - x) / ow;
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= oh) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= ow || (dx === 0 && dy === 0)) continue;
+          const j = yy * ow + xx;
+          if (allowed[j] && out[j] === 0) { out[j] = out[i]; queue[tail++] = j; }
+        }
+      }
+    }
+  }
+  // (Pixels the floods did not reach keep their label.) Only a knob tip's worth of pixels moves:
+  // slivers along a cut keep their label.
+  const diff = createMask(ow, oh);
+  for (let y = 0; y < oh; y++) {
+    for (let x = 0; x < ow; x++) {
+      const j = y * ow + x, l = labels[(y + oy) * w + x + ox];
+      if (out[j] === 0) out[j] = l;
+      diff.data[j] = out[j] !== l ? 1 : 0;
+    }
+  }
+  const dc = labelComponents(diff, 8);
+  const minMoved = REOWN_MIN_AREA * body * body;
+  const keep = new Uint8Array(dc.count + 1);
+  let moved = false;
+  for (const st of dc.stats) if (st.area >= minMoved) { keep[st.label] = 1; moved = true; }
+  if (!moved) return null;
+  const res = labels.slice();
+  for (let y = 0; y < oh; y++) {
+    for (let x = 0; x < ow; x++) {
+      const j = y * ow + x;
+      if (diff.data[j] && keep[dc.labels[j]]) res[(y + oy) * w + x + ox] = out[j];
+    }
+  }
+  return res;
+}
+
+/** Share of a part's pixels after reownCuts that its largest component must hold (else nothing changes). */
+const REOWN_CONNECTED = 0.95;
+
+/**
+ * The parts a cluster `c` was split into (by necks and edges, in all its rounds), with the pixels
+ * around the cuts between them given out again (reownCuts; opening radius NECK_RADII[0] body sizes,
+ * as the first neck split). Done once on the split's outcome, not inside its rounds: a few pixels
+ * more or less would sway the later rounds' decisions, which stay as they were. Only the parts whose
+ * pixels changed are rebuilt; null when nothing changed or a rebuilt part would come apart (its
+ * largest component below REOWN_CONNECTED of its pixels).
+ */
+function reownParts(c: Candidate, parts: Candidate[], ra: number, body: number, shade: Mask, W: number, H: number): Candidate[] | null {
+  const labels = partLabels(c, parts);
+  const re = reownCuts(c, labels, parts.length, Math.max(2, NECK_RADII[0] * body), body, shade);
+  if (!re) return null;
+  const changed = new Uint8Array(parts.length + 1);
+  for (let i = 0; i < re.length; i++) if (re[i] !== labels[i]) changed[re[i]] = changed[labels[i]] = 1;
+  if (!changed.some((v) => v)) return null;
+  const out: Candidate[] = [];
+  for (let k = 0; k < parts.length; k++) {
+    const q = parts[k];
+    if (!changed[k + 1]) { out.push(q); continue; }
+    const lp = labelsPart(c, re, [k + 1]);
+    if (!lp) return null;
+    const lc = labelComponents(lp.mask, 8);
+    const main = lc.stats.reduce((a, b) => (b.area > a.area ? b : a));
+    if (main.area < REOWN_CONNECTED * maskArea(lp.mask)) return null;
+    const b = main.bbox;
+    const pc = makeCandidate(componentMask(lc.labels, lp.bbox.width, main.label, b), { x: lp.bbox.x + b.x, y: lp.bbox.y + b.y, width: b.width, height: b.height }, W, H, main.area, SHAPE_MAX_PIECES * ra);
+    out.push({ ...pc, ...(q.merged !== undefined ? { merged: q.merged } : {}) });
+  }
+  return out;
 }
 
 /** Difference of two orientations modulo 90° (0..45). */
@@ -2482,6 +2696,17 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
     cands = out;
   }
 
+  // The table in shade (narrow gaps between pieces lying close), over the foreground: once per photo,
+  // when a split first needs it.
+  let shadeMap: Mask | undefined;
+  const shade = opts.shadeGaps === false ? null : (): Mask => {
+    if (shadeMap) return shadeMap;
+    const t = performance.now();
+    shadeMap = tableShade(scored, fit, fg, SHADE_RHO_MIN, SHADE_RHO_MAX, SHADE_TOL);
+    // (Part of the split's time; reported on its own with the re-ownership.)
+    if (timings) timings.shade = (timings.shade ?? 0) + performance.now() - t;
+    return shadeMap;
+  };
   // Split touching pieces at narrow necks, wider necks for what is still too large.
   let group = 0;
   if (refArea > 0 && opts.splitTouching !== false) {
@@ -2554,7 +2779,15 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
     for (const c of cands) {
       const split = splitTouching(c, 0);
       // (Halves only by a piece size measured on single pieces: without one, "half a piece" means little.)
-      const parts = split && singles.length > 0 ? rejoinHalves(split, c, refAreaAt(c), W, H) : split;
+      let parts = split && singles.length > 0 ? rejoinHalves(split, c, refAreaAt(c), W, H) : split;
+      // The split's decisions stay; the pixels around its cuts are given out again with the shaded
+      // table carved out (a knob pressed against a neighbour goes back to its own piece).
+      const bodyAt = refBody * Math.sqrt(refAreaAt(c) / refArea);
+      if (parts && parts.length > 1 && shade && bodyAt >= REOWN_MIN_BODY) {
+        const map = shade(), t = performance.now();
+        parts = reownParts(c, parts, refAreaAt(c), bodyAt, map, W, H) ?? parts;
+        if (timings) timings.shade = (timings.shade ?? 0) + performance.now() - t;
+      }
       if (parts && parts.length > 1) {
         group++;
         for (const p of parts) out.push({ ...p, group });

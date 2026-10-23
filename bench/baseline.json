@@ -659,7 +659,7 @@
         "assembledRecall": 1,
         "assembledPrecision": 0.5,
         "neighborPrecision": 1,
-        "neighborRecall": 0.643,
+        "neighborRecall": 0.786,
         "hiddenRate": 0.089
       },
       "wave-dark-grey-two-surfaces": {
@@ -962,11 +962,11 @@
       },
       "2026-10-23-dense-grey-table-1500pc.json": {
         "falseRemoved": 1,
-        "outlineFixed": 0.222
+        "outlineFixed": 0.778
       },
       "2026-10-23-grey-table-low-contrast-1500pc.json": {
         "falseRemoved": 1,
-        "outlineFixed": 0.133
+        "outlineFixed": 0.267
       },
       "flickr-chrisrycroft-birds-oak-partial.json": {
         "objectRecall": 0.5,
