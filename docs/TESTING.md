@@ -99,6 +99,20 @@ moves a shard's average three times as much – per-shard gates would be stricte
 (if every shard passes, their mean passes) and not comparable for confident precision. Deploy
 needs every benchmark job and the gate.
 
+Run times of the jobs' bench files (4-core machine, each job's files in parallel as on a runner;
+setup – image, `npm ci` – comes on top):
+
+| Job | Files | Time |
+|---|---|---:|
+| `placed-1` / `-2` / `-3` | one placed shard each | ~2.7 min each |
+| `scan` | `scan.eval.ts` | ~4.1 min |
+| `grid-sides` | `grid.eval.ts`, `sides.eval.ts` | ~3.1 min |
+| `feedback-box` | `feedback.eval.ts`, `box.eval.ts` (+ skipped private / corpus / Puzzle-Map) | ~2.4 min |
+| `bench-placed-gate` | – (records only) | seconds |
+
+Rebalance the matrix when a file's time changes a lot (vitest prints each file's time). Locally
+the Puzzle-Map shards (with the data) take ~2–4 min each.
+
 ## Quality checks
 
 Clean synthetic photos are degraded in controlled ways – Gaussian and motion blur, under/over
