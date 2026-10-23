@@ -242,9 +242,16 @@ function fitAxis(prof: Float64Array, u0: number, bin: number, pitches: number[])
 function project(s: Samples, angle: number, c: Point, bin: number) {
   const ca = Math.cos(angle), sa = Math.sin(angle);
   let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+  if (projA.length < s.n) {
+    projA = new Float64Array(s.n);
+    projB = new Float64Array(s.n);
+  }
+  const A = projA, B = projB;
   for (let k = 0; k < s.n; k++) {
     const dx = s.x[k] - c.x, dy = s.y[k] - c.y;
     const a = dx * ca + dy * sa, b = -dx * sa + dy * ca;
+    A[k] = a;
+    B[k] = b;
     if (a < a0) a0 = a;
     if (a > a1) a1 = a;
     if (b < b0) b0 = b;
@@ -252,12 +259,13 @@ function project(s: Samples, angle: number, c: Point, bin: number) {
   }
   const pa = new Float64Array(Math.floor((a1 - a0) / bin) + 1), pb = new Float64Array(Math.floor((b1 - b0) / bin) + 1);
   for (let k = 0; k < s.n; k++) {
-    const dx = s.x[k] - c.x, dy = s.y[k] - c.y;
-    pa[Math.floor((dx * ca + dy * sa - a0) / bin)] += s.wa[k];
-    pb[Math.floor((-dx * sa + dy * ca - b0) / bin)] += s.wb[k];
+    pa[Math.floor((A[k] - a0) / bin)] += s.wa[k];
+    pb[Math.floor((B[k] - b0) / bin)] += s.wb[k];
   }
   return { pa, a0, pb, b0 };
 }
+/** Scratch of {@link project}: the samples' axis coordinates (grown as needed). */
+let projA = new Float64Array(0), projB = new Float64Array(0);
 
 const range = (centre: number, rel: number, step: number): number[] => {
   const out: number[] = [];

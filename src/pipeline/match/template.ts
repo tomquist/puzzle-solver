@@ -28,30 +28,29 @@ export interface PhotoSource {
 export function erodeMask(mask: Mask, r: number): Mask {
   const { width: w, height: h } = mask;
   if (r <= 0) return { width: w, height: h, data: new Uint8Array(mask.data) };
+  // A pixel stays when its ±r window along the row (then the column) lies inside the crop and the
+  // mask: the run of set pixels through it reaches r further both ways.
   const tmp = createMask(w, h);
-  for (let y = 0; y < h; y++) {
-    const row = y * w;
-    for (let x = 0; x < w; x++) {
-      let v = 1;
-      for (let k = -r; k <= r && v; k++) {
-        const xx = x + k;
-        if (xx < 0 || xx >= w || !mask.data[row + xx]) v = 0;
-      }
-      tmp.data[row + x] = v;
-    }
-  }
+  for (let y = 0; y < h; y++) erodeLine(mask.data, tmp.data, y * w, 1, w, r);
   const out = createMask(w, h);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      let v = 1;
-      for (let k = -r; k <= r && v; k++) {
-        const yy = y + k;
-        if (yy < 0 || yy >= h || !tmp.data[yy * w + x]) v = 0;
-      }
-      out.data[y * w + x] = v;
-    }
-  }
+  for (let x = 0; x < w; x++) erodeLine(tmp.data, out.data, x, w, h, r);
   return out;
+}
+
+/** 1-D erosion of `len` pixels from `start` in steps of `step`: 1 where all of ±r are set and inside. */
+function erodeLine(src: Uint8Array, dst: Uint8Array, start: number, step: number, len: number, r: number): void {
+  let i = 0;
+  while (i < len) {
+    if (!src[start + i * step]) {
+      i++;
+      continue;
+    }
+    let e = i;
+    while (e + 1 < len && src[start + (e + 1) * step]) e++;
+    // Run [i, e]: pixels at least r from both of its ends (and so from the crop's) stay.
+    for (let k = i + r; k <= e - r; k++) dst[start + k * step] = 1;
+    i = e + 1;
+  }
 }
 
 /**
@@ -158,18 +157,8 @@ function removeSeams(lab: FloatImage, mask: Mask, seams: SeamHint, wl: number): 
   // Running maximum / minimum over ±r pixels along a row or column (within the crop).
   const pass = (src: Float32Array, horizontal: boolean, max: boolean): Float32Array => {
     const out = new Float32Array(src.length);
-    const step = horizontal ? 1 : w;
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const i = y * w + x;
-        const p = horizontal ? x : y, len = horizontal ? w : h;
-        const a = i - (p < r ? p : r) * step, b = i + (p + r < len ? r : len - 1 - p) * step;
-        let v = src[i];
-        if (max) for (let q = a; q <= b; q += step) v = Math.max(v, src[q]);
-        else for (let q = a; q <= b; q += step) v = Math.min(v, src[q]);
-        out[i] = v;
-      }
-    }
+    if (horizontal) for (let y = 0; y < h; y++) runningExtreme(src, out, y * w, 1, w, r, max);
+    else for (let x = 0; x < w; x++) runningExtreme(src, out, x, w, h, r, max);
     return out;
   };
   const dil = pass(pass(L, true, true), false, true);
@@ -224,6 +213,42 @@ function removeSeams(lab: FloatImage, mask: Mask, seams: SeamHint, wl: number): 
     }
   }
 }
+
+/**
+ * Maximum (or minimum) over the ±r pixels in the line of `len` pixels from `start` in steps of
+ * `step` (those inside it), van Herk / Gil-Werman: the line padded to blocks of 2r + 1, maxima
+ * from each block's start and from its end; a window spans the end of one block and the start of
+ * the next. The extreme of the same values as a direct scan, in O(1) per pixel.
+ */
+function runningExtreme(src: Float32Array, dst: Float32Array, start: number, step: number, len: number, r: number, max: boolean): void {
+  const k = 2 * r + 1;
+  const n = Math.ceil((len + 2 * r) / k) * k;
+  if (vhgwF.length < n) {
+    vhgwF = new Float64Array(n);
+    vhgwG = new Float64Array(n);
+    vhgwH = new Float64Array(n);
+  }
+  const f = vhgwF, g = vhgwG, hh = vhgwH;
+  const pad = max ? -Infinity : Infinity;
+  for (let p = 0; p < n; p++) {
+    const i = p - r;
+    f[p] = i >= 0 && i < len ? src[start + i * step] : pad;
+  }
+  for (let b = 0; b < n; b += k) {
+    g[b] = f[b];
+    hh[b + k - 1] = f[b + k - 1];
+    if (max) {
+      for (let p = b + 1; p < b + k; p++) g[p] = Math.max(g[p - 1], f[p]);
+      for (let p = b + k - 2; p >= b; p--) hh[p] = Math.max(hh[p + 1], f[p]);
+    } else {
+      for (let p = b + 1; p < b + k; p++) g[p] = Math.min(g[p - 1], f[p]);
+      for (let p = b + k - 2; p >= b; p--) hh[p] = Math.min(hh[p + 1], f[p]);
+    }
+  }
+  // Pixel i: window [i, i + 2r] of the padded line.
+  for (let i = 0; i < len; i++) dst[start + i * step] = max ? Math.max(hh[i], g[i + 2 * r]) : Math.min(hh[i], g[i + 2 * r]);
+}
+let vhgwF = new Float64Array(0), vhgwG = new Float64Array(0), vhgwH = new Float64Array(0);
 
 /** Similarity hypothesis: reference-local = R(phi) · s · (photo - pivot); phi clockwise radians. */
 export interface Mapping {
