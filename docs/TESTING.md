@@ -155,7 +155,8 @@ caught automatically.
 ### Feedback files
 
 "Send feedback" in the app packages a scan photo with what the app found and the user's
-corrections. Committed in scan-only form (`npm run feedback:strip`, no publisher artwork), they are
+corrections – including what they noted while placing ("Doesn't fit" on a connection, "Not here"
+on a spot; judged as still suggested or not). Committed in scan-only form (`npm run feedback:strip`, no publisher artwork), they are
 replayed by `npm run feedback:inspect` and the benchmark. The user's marks are input, not ground
 truth: every mark is checked by eye first and the verdicts go into `<file>.review.json`
 (test-corpus/feedback/README.md). Where the pieces can be told apart, the review also holds an
