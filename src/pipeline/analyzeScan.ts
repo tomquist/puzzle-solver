@@ -12,6 +12,7 @@ import {
   buildGroups,
   enforceConsistency,
   findFits,
+  firstMatchPass,
   matchRegionsDetailed,
   patchBodySize,
   placeByElimination,
@@ -22,6 +23,7 @@ import {
   uniqueCells,
   type ConsistencyReport,
   type EdgeStrips,
+  type FirstPass,
   type FitOptions,
   type MatchDetail,
   type MatchInput,
@@ -30,7 +32,7 @@ import {
   type ShapeMetric,
 } from './match';
 import { measureGridEvidence, measureGridEvidenceSteps, probeGridEvidence, probeGridSteps, probeWanted, type CellSizeSample, type GridProbe, type MeasuredEvidence } from './match/cellSize';
-import { resolveRegionIssues, segmentPieces, type SegmentOptions } from './pieces';
+import { resolveRegionIssues, segmentPieces, type SegmentOptions, type Segmentation } from './pieces';
 import type { Steps } from './steps';
 
 /** How the fit hints compare piece sides (see `FitOptions`). */
@@ -142,6 +144,29 @@ export interface AnalyzeScanOutput {
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: AnalyzeScanOptions = {}): AnalyzeScanOutput {
+  return analyzeSegmented(index, segmentScan(photo, opts), opts);
+}
+
+/**
+ * A scan photo reduced and segmented, with the match inputs of its regions: everything of
+ * {@link analyzeScan} before the matching, which depends neither on the reference nor on the
+ * placed marks. The benchmarks analyse one photo with several marks or grids from one
+ * segmentation ({@link forkSegmented}).
+ */
+export interface SegmentedScan {
+  /** The (possibly downscaled) image all coordinates refer to. */
+  image: RGBAImage;
+  seg: Segmentation;
+  /** Match inputs of the regions that are not 'unknown' (they share the segmentation's crops and masks). */
+  inputs: MatchInput[];
+  /** Timings of the segmentation stages. */
+  timings: Record<string, number>;
+  /** Time the preparation and segmentation took (ms). */
+  ms: number;
+}
+
+/** The first part of {@link analyzeScan}: reduce the photo and segment it (`opts.maxSide`, `opts.segment`, `opts.onProgress`). */
+export function segmentScan(photo: RGBAImage, opts: Pick<AnalyzeScanOptions, 'maxSide' | 'segment' | 'onProgress'> = {}): SegmentedScan {
   const report = opts.onProgress ?? (() => {});
   const timings: Record<string, number> = {};
   const tStart = now();
@@ -150,37 +175,79 @@ export function analyzeScan(index: ReferenceIndex, photo: RGBAImage, opts: Analy
   const { image } = limitSize(photo, opts.maxSide ?? 2400);
 
   report({ stage: 'segment', progress: 0.08, message: 'Finding pieces' });
-  let t = now();
+  const t = now();
   const seg = segmentPieces(image, { ...opts.segment, timings });
   timings.segment = now() - t;
 
+  const inputs: MatchInput[] = seg.regions
+    .filter((s) => s.region.kind !== 'unknown')
+    .map((s) => ({
+      regionId: s.region.id,
+      kind: s.region.kind,
+      image: s.image,
+      mask: s.mask,
+      origin: { x: s.region.bbox.x, y: s.region.bbox.y },
+      shape: s.region.shape,
+      orientationDeg: s.region.orientationDeg,
+      expectedBodySize: seg.medianBodySize,
+      table: s.table,
+      outline: {
+        borderTable: s.borderTable,
+        issues: s.region.issues.map((i) => i.code),
+        solidity: s.region.contour.length >= 3 ? s.region.area / Math.max(1, polygonArea(convexHull(s.region.contour))) : undefined,
+      },
+    }));
+  return { image, seg, inputs, timings, ms: now() - tStart };
+}
+
+/**
+ * A copy of `scan` for one more {@link analyzeSegmented} (which changes the region descriptions and
+ * the quality report): those are copied; the image, crops, masks and match inputs are shared (read only).
+ */
+export function forkSegmented(scan: SegmentedScan): SegmentedScan {
+  return {
+    ...scan,
+    seg: { ...scan.seg, regions: scan.seg.regions.map((s) => ({ ...s, region: structuredClone(s.region) })), quality: structuredClone(scan.seg.quality) },
+    timings: { ...scan.timings },
+  };
+}
+
+function matchOptionsOf(opts: Pick<AnalyzeScanOptions, 'placedCells' | 'tuning'>): MatchOptions {
+  const tuning = opts.tuning ?? {};
+  return { placedCells: opts.placedCells, placedPenalty: tuning.placedPenalty, placedGain: tuning.placedGain };
+}
+
+/**
+ * The first matching pass of {@link analyzeSegmented} for `scan` against `index` with the tuning
+ * of `opts`: it ignores the placed marks, so analyses of one scan that differ only in the marks
+ * may share it (pass it as `firstPass`).
+ */
+export function scanFirstPass(index: ReferenceIndex, scan: SegmentedScan, opts: Pick<AnalyzeScanOptions, 'tuning'> = {}): FirstPass {
+  return firstMatchPass(index, scan.inputs, matchOptionsOf(opts));
+}
+
+/**
+ * The rest of {@link analyzeScan} after {@link segmentScan}: matching, fit hints, groups and the
+ * cell-size evidence. It changes `scan` (the regions' quality issues): analyse a {@link forkSegmented}
+ * copy to analyse a segmentation again. `firstPass`: {@link scanFirstPass} of `scan` and `index`
+ * with the same tuning, to reuse (it is not changed).
+ */
+export function analyzeSegmented(index: ReferenceIndex, scan: SegmentedScan, opts: AnalyzeScanOptions = {}, firstPass?: FirstPass): AnalyzeScanOutput {
+  const report = opts.onProgress ?? (() => {});
+  const timings: Record<string, number> = { ...scan.timings };
+  const tStart = now() - scan.ms;
+  const { image, seg, inputs } = scan;
+
   const regions = seg.regions.map((s) => s.region);
-  const matchable = seg.regions.filter((s) => s.region.kind !== 'unknown');
   report({
     stage: 'match',
     progress: 0.4,
-    message: matchable.length === 1 ? 'Locating 1 piece' : `Locating ${matchable.length} pieces`,
+    message: inputs.length === 1 ? 'Locating 1 piece' : `Locating ${inputs.length} pieces`,
   });
-  t = now();
-  const inputs: MatchInput[] = matchable.map((s) => ({
-    regionId: s.region.id,
-    kind: s.region.kind,
-    image: s.image,
-    mask: s.mask,
-    origin: { x: s.region.bbox.x, y: s.region.bbox.y },
-    shape: s.region.shape,
-    orientationDeg: s.region.orientationDeg,
-    expectedBodySize: seg.medianBodySize,
-    table: s.table,
-    outline: {
-      borderTable: s.borderTable,
-      issues: s.region.issues.map((i) => i.code),
-      solidity: s.region.contour.length >= 3 ? s.region.area / Math.max(1, polygonArea(convexHull(s.region.contour))) : undefined,
-    },
-  }));
+  let t = now();
   const tuning = opts.tuning ?? {};
-  const matchOptions: MatchOptions = { placedCells: opts.placedCells, placedPenalty: tuning.placedPenalty, placedGain: tuning.placedGain };
-  const details = inputs.length > 0 ? matchRegionsDetailed(index, inputs, matchOptions) : [];
+  const matchOptions = matchOptionsOf(opts);
+  const details = inputs.length > 0 ? matchRegionsDetailed(index, inputs, matchOptions, firstPass) : [];
   timings.match = now() - t;
 
   const byId = new Map<number, RegionMatch>(details.map((d) => [d.match.regionId, d.match]));

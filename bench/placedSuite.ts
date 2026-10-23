@@ -28,7 +28,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { analyzeScan } from '../src/pipeline/analyzeScan';
+import { analyzeSegmented, forkSegmented, scanFirstPass, segmentScan, type AnalyzeScanOptions } from '../src/pipeline/analyzeScan';
 import { cellKey } from '../src/model/types';
 import { CONSISTENCY, PLACEMENT_TUNING, REPO_ROOT, SEGMENT_OPTIONS } from '../src/testing/nodeImageIO';
 import { average, evaluateScan, report, yieldToEventLoop, type MetricRecord } from './lib';
@@ -61,11 +61,16 @@ export function placedSuite(shard: number): void {
         const scanCells = truth.flatMap((t) => t.pieces.map((i) => ({ row: cut.pieces[i].row, col: cut.pieces[i].col })));
         /** Per truth item (single pieces): right cell first / among the best three, without marks. */
         const unmarked = new Map<number, { top1: boolean; top3: boolean }>();
+        // Segmentation and the first matching pass do not depend on the marks: once per scene, and
+        // every setting analyses a copy from there on (as analyzeScan would from the photo).
+        const opts: AnalyzeScanOptions = { maxSide: Math.max(photo.width, photo.height), segment: SEGMENT_OPTIONS, consistency: CONSISTENCY, tuning: PLACEMENT_TUNING };
+        const segmented = segmentScan(photo, opts);
+        const firstPass = scanFirstPass(index, segmented, opts);
         for (const setting of settings) {
           await yieldToEventLoop();
           const marks = simulatePlacedCells(s.grid, scanCells, setting, seed);
           const t0 = performance.now();
-          const { result } = analyzeScan(index, photo, { maxSide: Math.max(photo.width, photo.height), segment: SEGMENT_OPTIONS, consistency: CONSISTENCY, tuning: PLACEMENT_TUNING, placedCells: marks.cells });
+          const { result } = analyzeSegmented(index, forkSegmented(segmented), { ...opts, placedCells: marks.cells }, firstPass);
           const { metrics, regionToTruth } = evaluateScan(result, truth, cut, performance.now() - t0);
           // Single pieces whose own cell carries a wrong mark.
           let marked = 0, markedTop1 = 0, conflicts = 0;

@@ -108,23 +108,51 @@ export function matchRegions(index: ReferenceIndex, inputs: MatchInput[], opts: 
   return matchRegionsDetailed(index, inputs, opts).map((d) => d.match);
 }
 
-/** {@link matchRegions} with the per-region details (winning similarity, confidence features). */
-export function matchRegionsDetailed(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions = {}): MatchDetail[] {
-  return runSteps(matchRegionsDetailedSteps(index, inputs, opts));
+/**
+ * {@link matchRegions} with the per-region details (winning similarity, confidence features).
+ * `first`: the first pass ({@link firstMatchPass}) of the same index, inputs and options without
+ * the placed marks, to reuse (it is not changed).
+ */
+export function matchRegionsDetailed(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions = {}, first?: FirstPass): MatchDetail[] {
+  return runSteps(matchRegionsDetailedSteps(index, inputs, opts, first));
+}
+
+/**
+ * The first pass of {@link matchRegionsDetailed}: every region matched without the placed marks,
+ * and the colour correction estimated from them. It does not depend on the marks, so analyses of
+ * one scan with different marks may share it (the benchmarks).
+ */
+export interface FirstPass {
+  details: MatchDetail[];
+  correction: ColorCorrection | null;
+}
+
+/** {@link FirstPass} of `inputs` (the placed marks of `opts` are ignored). */
+export function firstMatchPass(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions = {}): FirstPass {
+  return runSteps(firstMatchPassSteps(index, inputs, opts));
+}
+
+function* firstMatchPassSteps(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions): Steps<FirstPass> {
+  const firstOpts = (opts.placedCells?.length ?? 0) > 0 ? { ...opts, placedCells: undefined } : opts;
+  const details: MatchDetail[] = [];
+  for (const inp of inputs) details.push(yield* matchRegionDetailedSteps(index, inp, firstOpts));
+  return { details, correction: estimateColorCorrection(index, details) };
+}
+
+/** A reused first pass's details, with their matches copied (the second pass and later steps change them). */
+function copyFirstPass(first: FirstPass): FirstPass {
+  return { details: first.details.map((d) => ({ ...d, match: structuredClone(d.match) })), correction: first.correction };
 }
 
 /** {@link matchRegionsDetailed} in steps (pipeline/steps.ts): one region's match each. */
-export function* matchRegionsDetailedSteps(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions = {}): Steps<MatchDetail[]> {
+export function* matchRegionsDetailedSteps(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions = {}, reuse?: FirstPass): Steps<MatchDetail[]> {
   // The first pass ignores the placed marks: the colour correction comes from the photo alone, so
   // wrong marks cannot change it (with marks, other pieces are confident in the first pass, and a
   // different correction lost true places in the second); pieces the photo alone places surely keep
   // that place, flagged when it is a marked cell. The others are matched with the marks (and the
   // correction, when there is one).
   const marked = (opts.placedCells?.length ?? 0) > 0;
-  const firstOpts = marked ? { ...opts, placedCells: undefined } : opts;
-  const first: MatchDetail[] = [];
-  for (const inp of inputs) first.push(yield* matchRegionDetailedSteps(index, inp, firstOpts));
-  const correction = estimateColorCorrection(index, first);
+  const { details: first, correction } = reuse ? copyFirstPass(reuse) : yield* firstMatchPassSteps(index, inputs, opts);
   let out = first;
   if (correction || marked) {
     out = [];
