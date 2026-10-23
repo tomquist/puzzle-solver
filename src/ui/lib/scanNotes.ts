@@ -93,16 +93,13 @@ export function resolveSpotChoices(choices: Record<string, SpotChoice> | undefin
   for (const [key, choice] of Object.entries(choices)) {
     const item = byKey.get(key);
     if (!item || !Number.isInteger(choice.index) || choice.index < 0) continue;
-    if (choice.index >= item.candidates.length) {
-      out[key] = item.candidates.length;
-      continue;
-    }
     if (!choice.cell) {
-      out[key] = choice.index;
+      out[key] = Math.min(choice.index, item.candidates.length);
       continue;
     }
-    const at = (i: number) => item.candidates[i].cells[0];
-    if (at(choice.index) && sameCell(at(choice.index), choice.cell)) out[key] = choice.index;
+    const at = (i: number) => item.candidates[i]?.cells[0];
+    const here = at(choice.index);
+    if (here && sameCell(here, choice.cell)) out[key] = choice.index;
     else {
       const moved = item.candidates.findIndex((p) => p.cells[0] && sameCell(p.cells[0], choice.cell!));
       if (moved >= 0) out[key] = moved;
