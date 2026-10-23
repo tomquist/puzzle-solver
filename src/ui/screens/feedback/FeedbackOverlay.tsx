@@ -3,13 +3,14 @@
  * (sure green, unsure amber, assembled blue; found-but-hidden grey hatched), so pieces the app did
  * not find are the ones left untouched, and the user's marks as numbered dots on top. In "Piece not
  * found" mode a tap anywhere reports the point (a tap on a point removes it); in the other modes a
- * tap on a region marks it.
+ * tap on a region marks it. A pair that doesn't fit (noted on the result) is a dashed line between
+ * the two pieces with its number in the middle.
  */
 import { useId } from 'react';
 import type { Point } from '../../../cv/geometry';
 import type { FeedbackMark, FeedbackMarkKind } from '../../../feedback/format';
 import type { ScanResult } from '../../../model/types';
-import { isRegionMark, type DetectionTone } from '../../lib/feedbackMarks';
+import { isRegionMark, type DetectionTone, type MarkMode } from '../../lib/feedbackMarks';
 import { polygonPath, regionCenter } from '../../lib/overlay';
 
 export function FeedbackOverlay({
@@ -27,7 +28,7 @@ export function FeedbackOverlay({
   /** How each region is shown in the results ('hidden' = not shown). */
   tones: Map<number, DetectionTone>;
   marks: FeedbackMark[];
-  mode: FeedbackMarkKind;
+  mode: MarkMode;
   /** Region the "this piece was found" note is about. */
   pendingRegionId?: number;
   /** Screen px per photo px. */
@@ -138,6 +139,24 @@ export function FeedbackOverlay({
               <circle className="fb-ring" cx={m.x} cy={m.y} r={r * 1.75} vectorEffect="non-scaling-stroke" />
               <circle className="fb-dot" cx={m.x} cy={m.y} r={r} />
               <text x={m.x} y={m.y} fontSize={r * 1.1} dy="0.36em" textAnchor="middle">
+                {i + 1}
+              </text>
+            </g>
+          );
+        }
+        if (m.kind === 'wrong_fit') {
+          const a = centers.get(m.a);
+          const b = centers.get(m.b);
+          if (!a || !b) return null;
+          const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+          return (
+            <g key={`m${i}`} className="fb-mark fb-fit mk-wrong_fit" aria-hidden="true" data-testid={`fb-fit-${i}`}>
+              <line className="fb-fit-under" x1={a.x} y1={a.y} x2={b.x} y2={b.y} vectorEffect="non-scaling-stroke" />
+              <line className="fb-fit-line" x1={a.x} y1={a.y} x2={b.x} y2={b.y} vectorEffect="non-scaling-stroke" />
+              <circle className="fb-fit-end" cx={a.x} cy={a.y} r={r * 0.45} />
+              <circle className="fb-fit-end" cx={b.x} cy={b.y} r={r * 0.45} />
+              <circle className="fb-dot" cx={mid.x} cy={mid.y} r={r} />
+              <text x={mid.x} y={mid.y} fontSize={r * 1.1} dy="0.36em" textAnchor="middle">
                 {i + 1}
               </text>
             </g>

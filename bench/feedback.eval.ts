@@ -11,7 +11,9 @@
  *   objectRecall    answer-key objects (review.objects) inside a piece / patch region
  *   objectClean     answer-key objects alone in their region (not merged with another)
  *   objectPrecision piece / patch regions holding an answer-key object (the rest are false)
- *   wrongFixed      'wrong_place' marks with a known cell now placed there (top-1)
+ *   wrongFixed      'wrong_place' marks with a known cell now placed there (top-1); with only the
+ *                   spots the user rejected ("Not here"): no longer placed in one of them
+ *   fitFixed        'wrong_fit' marks ("Doesn't fit") whose two items are no longer linked
  *   placementsTop1  confirmed placements still top-1
  *   boxError        largest corner error of detectBox vs. the user's quad (fraction of the diagonal)
  * Report only: the side kinds the current pipeline reads on all single pieces of the photos, with
@@ -37,7 +39,7 @@ import { compareToBaseline, confusionTable, report, saveBaselineSuite, tallySide
 
 const DIR = resolve(REPO_ROOT, 'test-corpus/feedback');
 const files = existsSync(DIR) ? readdirSync(DIR).filter((f) => f.toLowerCase().endsWith('.json') && !isReviewFile(f)).sort() : [];
-const COLUMNS = ['items', 'regions', 'missedFound', 'falseRemoved', 'mergedSplit', 'mergedExact', 'outlineFixed', 'objectRecall', 'objectClean', 'objectPrecision', 'wrongFixed', 'placementsTop1', 'boxError', 'ms'];
+const COLUMNS = ['items', 'regions', 'missedFound', 'falseRemoved', 'mergedSplit', 'mergedExact', 'outlineFixed', 'objectRecall', 'objectClean', 'objectPrecision', 'wrongFixed', 'fitFixed', 'placementsTop1', 'boxError', 'ms'];
 const results: Record<string, MetricRecord> = {};
 const confusion: SideConfusion = {};
 

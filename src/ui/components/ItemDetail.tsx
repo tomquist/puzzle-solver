@@ -1,7 +1,8 @@
 /**
  * Detail sheet for one item (a piece or an assembled grid): where it lies in the photo, how to turn
  * it, which items it joins (in words), where it goes in the box picture (with context and an
- * overview), alternatives, notes, and Placed / Not this one.
+ * overview), alternatives, notes, and Placed / Not this one. "Not this one" and "Doesn't fit" (on a
+ * connection) are noted for feedback by the screen.
  */
 import type { CellRef, DetectedRegion, GridSpec, ScanResult } from '../../model/types';
 import { describeCell } from '../../pipeline/grid';
@@ -30,8 +31,11 @@ export interface ItemDetailProps {
   placed: boolean;
   /** Items this one joins (shown ones only), with the side of this item they join. */
   connections: (Connection & { item: ScanItem })[];
+  /** "Not this one": the item does not go in the spot shown. */
   onReject(): void;
   onChoose(candidateIndex: number): void;
+  /** "Doesn't fit": the item does not fit with this joined item. */
+  onNoFit?(key: string): void;
   onPlace(placement: ItemPlacement): void;
   onUnplace(placement: ItemPlacement): void;
   onOpen(key: string): void;
@@ -80,7 +84,7 @@ export function ItemDetail(props: ItemDetailProps) {
       footer={
         current ? (
           <div className="row gap">
-            {item.candidates.length > 1 && !placed && (
+            {!placed && (
               <button className="btn grow" onClick={props.onReject} data-testid="not-this-one">
                 <IconClose size={18} />
                 Not this one
@@ -152,12 +156,18 @@ export function ItemDetail(props: ItemDetailProps) {
           <p className="pd-joins">{joins}.</p>
           <ul className="fit-list">
             {connections.map((c) => (
-              <li key={c.key}>
+              <li key={c.key} className="fit-item">
                 <button className="fit-row" onClick={() => props.onOpen(c.key)}>
                   <span className={`num-badge st-${itemTone(c.item)}`}>{c.item.label}</span>
                   <span className="fit-row-text">{c.side ? capitalize(SIDE_PHRASE[c.side]) : 'Next to it'}</span>
                   <IconChevron size={18} />
                 </button>
+                {props.onNoFit && (
+                  <button className="nofit-pill" onClick={() => props.onNoFit!(c.key)} aria-label={`#${c.item.label} doesn’t fit`} data-testid={`detail-no-fit-${c.key}`}>
+                    <IconClose size={16} />
+                    Doesn’t fit
+                  </button>
+                )}
               </li>
             ))}
           </ul>
@@ -169,14 +179,20 @@ export function ItemDetail(props: ItemDetailProps) {
           <h3>{heading}</h3>
           <TargetContext key={`${item.key}-${candidateIndex}`} placement={current} grid={grid} reference={reference} size={360} label={`Box picture around where ${itemTitle(item)} goes`} />
           <div className="cand-info">
-            <div className="cand-where">{placementWhere(item, current, grid)}</div>
+            <div className="cand-where" data-testid="detail-spot">
+              {placementWhere(item, current, grid)}
+            </div>
             <CertaintyMeter certainty={spotCertainty(item, candidateIndex)} />
           </div>
         </section>
       ) : (
-        <div className="pd-none">
+        <div className="pd-none" data-testid="detail-no-spot">
           <strong>No more suggestions.</strong>
-          <p className="muted">All places were rejected. Pick one below again, or scan this piece in another photo.</p>
+          <p className="muted">
+            {item.candidates.length > 1
+              ? 'All places were rejected. Pick one below again, or scan this piece in another photo.'
+              : 'The place was rejected. Scan this piece in another photo.'}
+          </p>
         </div>
       )}
 

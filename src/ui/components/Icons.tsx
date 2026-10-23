@@ -157,3 +157,10 @@ export const IconError = (p: IconProps) => (
 export const IconLayers = (p: IconProps) => (
   <Svg {...p}><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" /></Svg>
 );
+/** A note (feedback noted while placing). */
+export const IconNote = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M5 4h14v11l-5 5H5z" />
+    <path d="M14 20v-5h5M9 9h6M9 13h3" />
+  </Svg>
+);

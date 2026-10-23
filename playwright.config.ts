@@ -64,12 +64,12 @@ export default defineConfig({
     {
       name: 'phone',
       use: phoneChromium(390, 844, 2),
-      testMatch: /(smoke|camera|errors|placing|feedback|grid|certainty|glare)\.spec\.ts/,
+      testMatch: /(smoke|camera|errors|placing|feedback|notes|grid|certainty|glare)\.spec\.ts/,
     },
     {
       name: 'desktop',
       use: { browserName: 'chromium', viewport: { width: 1280, height: 860 } },
-      testMatch: /(smoke|camera|errors|pipeline|box-check|placing|feedback|grid)\.spec\.ts/,
+      testMatch: /(smoke|camera|errors|pipeline|box-check|placing|feedback|notes|grid)\.spec\.ts/,
     },
     {
       name: 'iphone-13',
@@ -80,7 +80,7 @@ export default defineConfig({
     {
       name: 'android-small',
       use: phoneChromium(360, 640, 3),
-      testMatch: /(smoke|errors|mobile|mobile-camera|audit)\.spec\.ts/,
+      testMatch: /(smoke|errors|mobile|mobile-camera|audit|notes)\.spec\.ts/,
     },
     {
       name: 'iphone-se',

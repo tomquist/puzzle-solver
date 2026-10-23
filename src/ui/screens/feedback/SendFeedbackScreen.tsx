@@ -2,11 +2,14 @@
  * "Send feedback": packages a scan (or, from Settings, the box photo and puzzle picture) with the
  * user's corrections into one JSON file they can share or download and send to the developer.
  * Nothing leaves the device unless the user sends the file themselves.
+ *
+ * A scan's notes ("Doesn't fit", "Not here" on the result or while placing: lib/scanNotes.ts) come
+ * in as marks already; removing such a mark removes its notes, sending the file marks them sent.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { APP_VERSION } from '../../../appVersion';
 import { buildFeedbackBundle, type ImageBytes } from '../../../feedback/build';
-import { feedbackFileName, serializeFeedback, type FeedbackBundle, type FeedbackMark, type FeedbackMarkKind } from '../../../feedback/format';
+import { feedbackFileName, serializeFeedback, type FeedbackBundle, type FeedbackMark } from '../../../feedback/format';
 import type { CellRef, Id, ScanRecord } from '../../../model/types';
 import { describeCell } from '../../../pipeline/grid';
 import { downloadBlob } from '../../../platform/imageio';
@@ -22,6 +25,7 @@ import { useRepo } from '../../context/RepositoryContext';
 import { useAsync } from '../../hooks/useAsync';
 import { useObjectUrl, useStoredBlob, useStoredBlobUrl } from '../../hooks/useObjectUrl';
 import { usePrefs } from '../../hooks/usePrefs';
+import { storeNotesChange } from '../../hooks/useScanNotes';
 import { formatBytes, formatDate, plural } from '../../lib/format';
 import {
   addMissed,
@@ -39,14 +43,18 @@ import {
   removeMark,
   setCorrectCell,
   setRegionMark,
+  toFileMarks,
   toggleRegionMark,
   typicalPieceArea,
   type DetectionTone,
+  type DraftMark,
   type MarkHint,
+  type MarkMode,
 } from '../../lib/feedbackMarks';
 import { cellAt, regionCenter } from '../../lib/overlay';
 import { setDismissed } from '../../lib/prefs';
 import { href } from '../../lib/routes';
+import { markNotesSent, noteIdsOf, notesToMarks, removeNotes } from '../../lib/scanNotes';
 import { FeedbackOverlay } from './FeedbackOverlay';
 import { MarkPictogram } from './MarkPictogram';
 
@@ -89,6 +97,8 @@ interface ReadyFile {
   blob: Blob;
   /** The file handed to the share sheet, or undefined when this browser cannot share it. */
   shareFile?: File;
+  /** The scan's notes the file holds as marks (marked sent once the file is shared or saved). */
+  noteIds: string[];
 }
 
 type SendStatus = { kind: 'none' } | { kind: 'shared' } | { kind: 'downloaded' } | { kind: 'shareFailed' };
@@ -134,8 +144,26 @@ function FeedbackForm({ scan, back }: { scan?: ScanRecord; back: string }) {
   const box = puzzle.sources.find((s) => s.role === 'overview' && s.quad);
   const boxUrl = useStoredBlobUrl(box?.blobId);
 
-  const [mode, setMode] = useState<FeedbackMarkKind>('missed');
-  const [marks, setMarks] = useState<FeedbackMark[]>([]);
+  const [mode, setMode] = useState<MarkMode>('missed');
+  // The scan's unsent notes, as marks.
+  const [marks, setMarks] = useState<DraftMark[]>(() => (scan ? notesToMarks(scan.feedbackNotes, scan.result, puzzle.grid) : []));
+  const [notedAtStart] = useState(() => marks.filter((m) => m.noteIds?.length).length);
+
+  // A mark that came from notes and is gone (removed, or changed into another kind): its notes go too.
+  const noteIdsShown = useRef(new Set(noteIdsOf(marks)));
+  useEffect(() => {
+    if (!scan) return;
+    const now = new Set(noteIdsOf(marks));
+    const gone = [...noteIdsShown.current].filter((id) => !now.has(id));
+    noteIdsShown.current = now;
+    if (gone.length) storeNotesChange(repo, scan.id, (r) => removeNotes(r, gone)).catch((e: unknown) => console.warn('Could not remove the notes', e));
+  }, [marks, repo, scan]);
+  const notesSent = useCallback(
+    (f: ReadyFile) => {
+      if (scan && f.noteIds.length) storeNotesChange(repo, scan.id, (r) => markNotesSent(r, f.noteIds, Date.now())).catch((e: unknown) => console.warn('Could not mark the notes sent', e));
+    },
+    [repo, scan],
+  );
   const [comment, setComment] = useState('');
   const [includeReference, setIncludeReference] = useState(true);
   const [includeBox, setIncludeBox] = useState(true);
@@ -169,12 +197,12 @@ function FeedbackForm({ scan, back }: { scan?: ScanRecord; back: string }) {
         box: boxImage && box?.quad ? { ...boxImage, quad: box.quad } : undefined,
         scan: scan && scanImage ? { record: scan, photo: scanImage } : undefined,
         progress,
-        marks,
+        marks: toFileMarks(marks),
         comment,
       });
       const name = feedbackFileName(createdAt);
       const blob = new Blob([serializeFeedback(bundle)], { type: 'application/json' });
-      setFile({ key, name, blob, shareFile: shareableFile(blob, name) });
+      setFile({ key, name, blob, shareFile: shareableFile(blob, name), noteIds: scan ? noteIdsOf(marks) : [] });
     } catch (e) {
       setError(errorText(e, 'Could not create the file.'));
     } finally {
@@ -187,6 +215,7 @@ function FeedbackForm({ scan, back }: { scan?: ScanRecord; back: string }) {
       if (!f.shareFile) return;
       await navigator.share({ files: [f.shareFile], title: 'Puzzle feedback' });
       setStatus({ kind: 'shared' });
+      notesSent(f);
     } catch (e) {
       // Closing the share sheet is not an error.
       if (e instanceof DOMException && e.name === 'AbortError') return;
@@ -197,6 +226,7 @@ function FeedbackForm({ scan, back }: { scan?: ScanRecord; back: string }) {
   const download = (f: ReadyFile) => {
     downloadBlob(f.blob, f.name);
     setStatus({ kind: 'downloaded' });
+    notesSent(f);
   };
 
   const commentField = (
@@ -220,7 +250,7 @@ function FeedbackForm({ scan, back }: { scan?: ScanRecord; back: string }) {
       <TopBar title="Send feedback" subtitle={scan ? `Scan of ${formatDate(scan.createdAt)}` : 'Box photo and puzzle picture'} back={back} />
       <main className="page stack fb-page" data-testid="send-feedback">
         {scan ? (
-          <ScanMarking scan={scan} marks={marks} setMarks={setMarks} mode={mode} setMode={setMode} onCorrect={setCorrecting} />
+          <ScanMarking scan={scan} marks={marks} setMarks={setMarks} mode={mode} setMode={setMode} onCorrect={setCorrecting} noted={notedAtStart} />
         ) : (
           <p className="muted small">If the puzzle picture was found badly – wrong corners, parts cut off, blurry – send us the box photo and the picture the app made from it.</p>
         )}
@@ -357,13 +387,16 @@ function ScanMarking({
   mode,
   setMode,
   onCorrect,
+  noted,
 }: {
   scan: ScanRecord;
-  marks: FeedbackMark[];
-  setMarks: (fn: (m: FeedbackMark[]) => FeedbackMark[]) => void;
-  mode: FeedbackMarkKind;
-  setMode: (m: FeedbackMarkKind) => void;
+  marks: DraftMark[];
+  setMarks: (fn: (m: DraftMark[]) => DraftMark[]) => void;
+  mode: MarkMode;
+  setMode: (m: MarkMode) => void;
   onCorrect: (index: number) => void;
+  /** Marks that came in from the scan's notes. */
+  noted: number;
 }) {
   const { puzzle } = usePuzzle();
   const result = scan.result;
@@ -402,7 +435,7 @@ function ScanMarking({
   useEffect(() => {
     if (pending || hint) note.current?.scrollIntoView({ block: 'nearest' });
   }, [pending, hint]);
-  const chooseMode = (m: FeedbackMarkKind) => {
+  const chooseMode = (m: MarkMode) => {
     setPending(undefined);
     setHint(undefined);
     setMode(m);
@@ -434,13 +467,17 @@ function ScanMarking({
   const pendingAlternatives = pending ? alternativesFor(toneOf(pending.regionId), !!pendingRegion && looksLikeSeveral(pendingRegion, pieceArea)) : [];
   const info = markInfo(mode);
 
+  const whereIs = (id: number) => {
+    const reg = regions.get(id);
+    return reg ? areaName(regionCenter(reg).x, regionCenter(reg).y, result.width, result.height) : '';
+  };
   const describe = (m: FeedbackMark): string => {
     if (m.kind === 'missed') return areaName(m.x, m.y, result.width, result.height);
-    const reg = regions.get(m.regionId);
-    const where = reg ? areaName(regionCenter(reg).x, regionCenter(reg).y, result.width, result.height) : '';
+    if (m.kind === 'wrong_fit') return `${whereIs(m.a)} · #${m.a} and #${m.b}`;
     const what = toneOf(m.regionId) === 'hidden' ? 'found but not shown' : `#${m.regionId}`;
+    const rejected = m.kind === 'wrong_place' && m.rejected?.length ? ` · not ${m.rejected.length === 1 ? describeCell(m.rejected[0], puzzle.grid) : `these ${m.rejected.length} spots`}` : '';
     const right = m.kind === 'wrong_place' && m.correct ? ` · goes to ${describeCell(m.correct, puzzle.grid)}` : '';
-    return `${where} · ${what}${right}`;
+    return `${whereIs(m.regionId)} · ${what}${rejected}${right}`;
   };
 
   return (
@@ -624,17 +661,26 @@ function ScanMarking({
 
       <section>
         <h2 className="h3">{marks.length ? plural(marks.length, 'mark') : 'No marks yet'}</h2>
+        {noted > 0 && marks.some((m) => m.noteIds?.length) && (
+          <p className="muted small fb-noted-hint" data-testid="fb-noted-hint">
+            {noted === 1 ? 'One is' : `${noted} are`} from your notes on the scan result – remove any that are wrong.
+          </p>
+        )}
         {marks.length === 0 ? (
           <p className="muted small">Choose what’s wrong above, then tap the photo.</p>
         ) : (
           <ul className="fb-marks" data-testid="fb-marks">
             {marks.map((m, i) => (
-              <li key={i} className={`fb-mark-row mk-${m.kind}`} data-testid={`fb-mark-${i}`} data-kind={m.kind}>
+              <li key={i} className={`fb-mark-row mk-${m.kind}`} data-testid={`fb-mark-${i}`} data-kind={m.kind} data-noted={m.noteIds?.length ? 'true' : 'false'}>
                 <span className="fb-num" aria-hidden="true">
                   {i + 1}
                 </span>
+                <MarkPictogram kind={m.kind} size={28} />
                 <span className="fb-mark-text">
-                  <span>{markInfo(m.kind).label}</span>
+                  <span>
+                    {markInfo(m.kind).label}
+                    {m.noteIds?.length ? <span className="fb-noted-tag">noted earlier</span> : null}
+                  </span>
                   <span className="muted xsmall">{describe(m)}</span>
                   {m.kind === 'wrong_place' && (
                     <button type="button" className="link-btn small" onClick={() => onCorrect(i)} data-testid={`fb-correct-${i}`}>
@@ -662,7 +708,7 @@ function ScanMarking({
 
 /** Which mark to choose when several seem to fit, and how to place marks. */
 function HowToMark({ onClose }: { onClose: () => void }) {
-  const name = (k: FeedbackMarkKind) => <strong>{markInfo(k).label}</strong>;
+  const name = (k: FeedbackMark['kind']) => <strong>{markInfo(k).label}</strong>;
   return (
     <div className="fb-howto" id="fb-howto" data-testid="fb-howto">
       <h3 className="fb-howto-title">Which one? Look inside the outline</h3>
@@ -691,6 +737,9 @@ function HowToMark({ onClose }: { onClose: () => void }) {
         <li>Zoom with two fingers or the + / − buttons.</li>
         <li>Tap inside the outline – for {name('missed')}, on the middle of the piece.</li>
         <li>Tap a mark again to remove it.</li>
+        <li>
+          Pieces that don’t fit, or a wrong spot: say so on the scan result as you place – select a piece, then {name('wrong_fit')} or <strong>Not this one</strong>. It shows up here.
+        </li>
       </ul>
       <button type="button" className="btn btn-sm fb-howto-close" onClick={onClose} data-testid="fb-howto-close">
         Got it

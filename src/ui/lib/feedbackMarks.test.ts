@@ -12,6 +12,10 @@ import {
   markHint,
   markIndexForRegion,
   MARK_KINDS,
+  isRegionMark,
+  markInfo,
+  toFileMarks,
+  type DraftMark,
   regionAt,
   removeMark,
   setCorrectCell,
@@ -193,6 +197,31 @@ describe('detections on the feedback photo', () => {
     marks = setRegionMark(marks, 'bad_outline', 2);
     expect(marks).toEqual([{ kind: 'bad_outline', regionId: 2 }]);
     expect(setRegionMark(marks, 'wrong_place', 2)).toEqual([{ kind: 'wrong_place', regionId: 2 }]);
+  });
+});
+
+describe('noted marks on the feedback screen', () => {
+  it('keeps a pair that doesn’t fit out of the one-mark-per-region rules', () => {
+    const marks: FeedbackMark[] = [{ kind: 'wrong_fit', a: 4, b: 7 }];
+    expect(isRegionMark(marks[0])).toBe(false);
+    expect(markIndexForRegion(marks, 4)).toBe(-1);
+    // A region mark on one of its pieces is added beside it.
+    expect(toggleRegionMark(marks, 'bad_outline', 4)).toEqual([{ kind: 'wrong_fit', a: 4, b: 7 }, { kind: 'bad_outline', regionId: 4 }]);
+    expect(markInfo('wrong_fit').label).toBe('Doesn’t fit');
+    // Not a mode of the photo.
+    expect(MARK_KINDS.map((k) => k.kind as string)).not.toContain('wrong_fit');
+  });
+
+  it('keeps the rejected spots and note ids when the right cell is set or cleared', () => {
+    const marks: DraftMark[] = [{ kind: 'wrong_place', regionId: 3, rejected: [{ row: 1, col: 1 }], noteIds: ['n1'] }];
+    const set = setCorrectCell(marks, 0, { row: 2, col: 5 });
+    expect(set[0]).toEqual({ kind: 'wrong_place', regionId: 3, rejected: [{ row: 1, col: 1 }], noteIds: ['n1'], correct: { row: 2, col: 5 } });
+    expect(setCorrectCell(set, 0, undefined)[0]).toEqual(marks[0]);
+    expect(toFileMarks(set)).toEqual([{ kind: 'wrong_place', regionId: 3, rejected: [{ row: 1, col: 1 }], correct: { row: 2, col: 5 } }]);
+    // Changing its kind drops the note link (the notes then go too).
+    expect(toggleRegionMark(marks, 'merged', 3)).toEqual([{ kind: 'merged', regionId: 3 }]);
+    // Removing keeps the other marks as they are.
+    expect(removeMark<DraftMark>([...marks, { kind: 'missed', x: 1, y: 1 }], 1)).toEqual(marks);
   });
 });
 

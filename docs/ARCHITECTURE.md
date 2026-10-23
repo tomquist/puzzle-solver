@@ -71,6 +71,12 @@ to be analysed. Everything runs locally in the browser – no server, no upload.
    its centre is not its cells' middle), and the touching cell is moved onto the patch's real rim
    (`rimPoint`: rays across the joining side find its edge and its tab or blank), so a piece
    docks against the patch even at its far edge; the connection line ends at the same point.
+   "Doesn't fit" next to each connection (bar, details, placing mode) and "Not this one" / "Not
+   here" on a spot are noted for feedback with the scan (`ScanRecord.feedbackNotes`, the spot shown
+   in `ScanRecord.spotChoices`; `ui/lib/scanNotes.ts`, stored in one `updateScan` step so a grid
+   change's writes are kept): the connection is no longer suggested, the next spot is shown, both
+   with Undo, and "Send feedback" starts with them as marks ('wrong_fit', 'wrong_place' with the
+   rejected spots); a saved or shared file marks them sent.
    The details sheet adds the box
    picture around the target, the piece type (corner/edge/interior), the rotation needed and the
    other candidates. The reference shows numbered markers at the matched locations. Photo and

@@ -32,6 +32,14 @@ an assembled group): fixed when each piece lies whole in one region and only an 
 shares one, as a patch (outlineFixed); with `table` points (table the outline wrongly took in, such
 as a blank closed off by a neighbour's knob) also none of them inside a region.
 
+Version 2 files can also hold what the user noted while placing (src/ui/lib/scanNotes.ts):
+'wrong_fit' marks (two items the app said join don't fit: their labels and sides) and the spots a
+piece was rejected at ("Not here": `rejected` on a 'wrong_place' mark). The replay says whether the
+current pipeline still suggests that connection (FIXED / STILL SUGGESTED, metric fitFixed) and
+whether it still puts the piece in a rejected spot (MOVED AWAY / STILL SUGGESTED, counted in
+wrongFixed when the right cell is not known) – scripts/feedback/notes.ts. Both need the puzzle
+picture (matching).
+
 Feedback files contain the user's photos – only commit files you are allowed to publish. The
 puzzle picture and the box photo show the publisher's (usually copyrighted) artwork: strip them
 before committing with `npm run feedback:strip -- <in.json> test-corpus/feedback/<name>.json`. Such

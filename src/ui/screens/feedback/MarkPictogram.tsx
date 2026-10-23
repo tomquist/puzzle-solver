@@ -56,6 +56,15 @@ function Content({ kind }: { kind: PictogramKind }) {
           <path className="arrow" d="M9.5 12.5C10.5 6.8 13.8 6 16.8 8.3M14.3 5.9L17.2 8.6L14 10.4" />
         </>
       );
+    case 'wrong_fit':
+      // Two pieces whose tabs face each other – they can't join – and a cross between them.
+      return (
+        <>
+          <Piece x={1} y={14} size={12.5} />
+          <Piece x={18.5} y={14} size={12.5} sides={['blank', 'blank', 'tab', 'tab']} />
+          <path className="arrow" d="M12.5 2.5L19.5 9.5M19.5 2.5L12.5 9.5" />
+        </>
+      );
     case 'assembled':
       // Two joined pieces (the left one's tab in the right one's blank): one outline around both is right.
       return (

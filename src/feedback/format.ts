@@ -5,11 +5,15 @@
  * puzzle export. Pure TypeScript (no DOM): used in the browser and in Node.
  */
 import type { Quad } from '../cv/geometry';
-import type { CaptureInfo, CellRef, CutStyle, GridSpec, PhysicalSize, ScanResult } from '../model/types';
+import type { CaptureInfo, CellRef, CutStyle, GridSpec, PhysicalSize, PuzzleSide, ScanResult } from '../model/types';
 import { base64ToBytes, bytesToBase64 } from '../storage/base64';
 
 export const FEEDBACK_FORMAT = 'puzzle-solver-feedback';
-export const FEEDBACK_VERSION = 1;
+/**
+ * 2: 'wrong_fit' marks and the rejected spots of 'wrong_place' marks (noted while placing).
+ * Version 1 files read as they are.
+ */
+export const FEEDBACK_VERSION = 2;
 
 export interface FeedbackImage {
   /** MIME type, e.g. image/jpeg. */
@@ -32,8 +36,23 @@ export type FeedbackMark =
   | { kind: 'merged'; regionId: number }
   /** The outline or corners of this piece are visibly wrong. */
   | { kind: 'bad_outline'; regionId: number }
-  /** The suggested place is wrong; `correct` when the user knows the right cell. */
-  | { kind: 'wrong_place'; regionId: number; correct?: CellRef };
+  /**
+   * The suggested place is wrong; `correct` when the user knows the right cell, `rejected` the
+   * spots the user said it does not go in ("Not here"; missing in version 1 files).
+   */
+  | { kind: 'wrong_place'; regionId: number; correct?: CellRef; rejected?: RejectedSpot[] }
+  /**
+   * Two items the app said join do not fit together ("Doesn't fit"): their labels (region ids; an
+   * assembled group's smallest one) and the sides of each that were said to touch, when known.
+   */
+  | { kind: 'wrong_fit'; a: number; b: number; sideA?: PuzzleSide; sideB?: PuzzleSide };
+
+/** A cell (an assembled group's top-left cell) an item was shown at, with its turn. */
+export interface RejectedSpot {
+  row: number;
+  col: number;
+  rotationDeg?: number;
+}
 
 export type FeedbackMarkKind = FeedbackMark['kind'];
 
@@ -128,5 +147,11 @@ export function parseFeedback(text: string): FeedbackBundle {
   checkImage(b.box?.photo, 'box');
   checkImage(b.scan?.photo, 'scan');
   if (b.scan && (!b.scan.result || !Array.isArray(b.scan.result.regions))) throw new FeedbackFormatError('Invalid scan result.');
+  for (const m of b.marks as unknown[]) {
+    const mark = m as Record<string, unknown> | null;
+    if (!mark || typeof mark !== 'object' || typeof mark.kind !== 'string') throw new FeedbackFormatError('Invalid mark.');
+    if (mark.kind === 'wrong_fit' && (typeof mark.a !== 'number' || typeof mark.b !== 'number')) throw new FeedbackFormatError('Invalid “doesn’t fit” mark.');
+    if (mark.kind === 'wrong_place' && mark.rejected !== undefined && !Array.isArray(mark.rejected)) throw new FeedbackFormatError('Invalid “wrong place” mark.');
+  }
   return b as FeedbackBundle;
 }

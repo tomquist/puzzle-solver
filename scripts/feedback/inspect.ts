@@ -37,15 +37,16 @@ const MARK_COLOR: Record<MarkJudgement['mark']['kind'], Color> = {
   merged: COLORS.merged,
   bad_outline: COLORS.badOutline,
   wrong_place: COLORS.wrongPlace,
+  wrong_fit: [161, 98, 7, 255],
 };
 const MARK_TEXT: Record<MarkJudgement['mark']['kind'], string> = {
-  missed: 'MISSED', not_a_piece: 'NOT A PIECE', merged: 'MERGED', bad_outline: 'BAD OUTLINE', wrong_place: 'WRONG PLACE',
+  missed: 'MISSED', not_a_piece: 'NOT A PIECE', merged: 'MERGED', bad_outline: 'BAD OUTLINE', wrong_place: 'WRONG PLACE', wrong_fit: "DOESN'T FIT",
 };
 const OUTLINE_LEGEND: [string, Color][] = [
   ['OUTLINES:', COLORS.white], ['CONFIDENT', COLORS.confident], ['AMBIGUOUS', COLORS.ambiguous], ['UNMATCHED', COLORS.unmatched], ['FRAGMENT', COLORS.fragment],
 ];
 const MARK_LEGEND: [string, Color][] = [
-  ['MARKS:', COLORS.white], ['MISSED', COLORS.missed], ['NOT A PIECE', COLORS.notPiece], ['MERGED', COLORS.merged], ['BAD OUTLINE', COLORS.badOutline], ['WRONG PLACE', COLORS.wrongPlace],
+  ['MARKS:', COLORS.white], ['MISSED', COLORS.missed], ['NOT A PIECE', COLORS.notPiece], ['MERGED', COLORS.merged], ['BAD OUTLINE', COLORS.badOutline], ['WRONG PLACE', COLORS.wrongPlace], ["DOESN'T FIT", MARK_COLOR.wrong_fit],
 ];
 const MASK_COLOURS = { colour: [255, 255, 255, 255] as Color, texture: [0, 220, 255, 255] as Color, removed: [255, 140, 0, 255] as Color };
 
@@ -96,11 +97,21 @@ function labelAnchor(v: View, j: MarkJudgement, size: number, original: ScanResu
   return { x: j.at.x, y: j.at.y - (markRadius(v, size) + 12) / v.scale };
 }
 
+/** Regions a mark is about (its region, or both of a pair that doesn't fit). */
+const markRegionIds = (m: MarkJudgement['mark']): number[] => (m.kind === 'missed' ? [] : m.kind === 'wrong_fit' ? [m.a, m.b] : [m.regionId]);
+
 /** Draw a mark (shape by kind) and its label; with `verdict` the label shows the current verdict. */
 function drawMark(v: View, j: MarkJudgement, size: number, original: ScanResult | null, s: number, verdict: boolean): void {
   const color = MARK_COLOR[j.mark.kind];
   const r = markRadius(v, size);
-  if (j.mark.kind === 'missed') {
+  if (j.mark.kind === 'wrong_fit') {
+    // A line between the two pieces (their outlines in the app's result).
+    const ends = markRegionIds(j.mark).map((id) => original?.regions.find((x) => x.id === id));
+    if (!verdict) for (const reg of ends) if (reg) v.polygon(scaled(reg.contour, s), color, 3);
+    const [a, b] = ends.map((reg) => (reg ? { x: (reg.bbox.x + reg.bbox.width / 2) * s, y: (reg.bbox.y + reg.bbox.height / 2) * s } : undefined));
+    if (a && b) v.polygon([a, b], color, 3);
+    v.cross(j.at, r * 0.35, color, 3);
+  } else if (j.mark.kind === 'missed') {
     v.circle(j.at, r, color, 3);
     v.cross(j.at, r * 0.35, color, 2, false);
   } else {
@@ -335,7 +346,7 @@ export function writeInspection(r: FeedbackReplay, outDir: string): { summary: s
         return reg ? Math.max(e, reg.bbox.width * sc, reg.bbox.height * sc) : e;
       }, 0);
     for (const j of r.marks) {
-      const ids = 'regionId' in j.mark ? [j.mark.regionId] : [];
+      const ids = markRegionIds(j.mark);
       const extent = Math.max(2.4 * size, 1.4 * extentOf(ids, orig, s), 1.4 * extentOf(j.currentIds, cur, 1), 120);
       const title: [string, Color][] = [[`M${j.index} ${MARK_TEXT[j.mark.kind]}: ${j.verdict}`, verdictColor(j.fixed)], [`APP: ${j.original}`, COLORS.white], [`NOW: ${j.now}`, COLORS.white]];
       if (j.why) title.push([`WHY: ${j.why}`, COLORS.ambiguous]);
@@ -448,7 +459,7 @@ export function formatSummary(r: FeedbackReplay): string {
     lines.push('');
     lines.push(pad('mark', 5) + pad('kind', 13) + pad('target', 12) + pad('verdict', 16) + 'app -> now');
     for (const j of r.marks) {
-      const target = j.mark.kind === 'missed' ? `(${Math.round(j.at.x)},${Math.round(j.at.y)})` : `#${j.mark.regionId}`;
+      const target = j.mark.kind === 'missed' ? `(${Math.round(j.at.x)},${Math.round(j.at.y)})` : j.mark.kind === 'wrong_fit' ? `#${j.mark.a}+#${j.mark.b}` : `#${j.mark.regionId}`;
       lines.push(pad(`M${j.index}`, 5) + pad(j.mark.kind, 13) + pad(target, 12) + pad(j.verdict, 16) + `${j.original} -> ${j.now}`);
       if (j.review) lines.push(' '.repeat(46) + `review: ${j.review.verdict}${j.review.kind ? `, judged as ${j.review.kind}` : ''}${j.review.parts ? `, ${j.review.parts} parts` : ''}${j.review.verdict === 'ok' ? '' : ' (not counted)'}${j.review.note ? ` – ${j.review.note}` : ''}`);
       else if (r.reviewed) lines.push(' '.repeat(46) + 'review: none (not counted)');

@@ -261,7 +261,7 @@ test('scan feedback: marks of every kind, comment, file with photos and marks', 
       // Where it was tapped – on no detected region.
       expect(Math.abs(m.x / scan.result.width - spot.fx)).toBeLessThan(0.02);
       expect(Math.abs(m.y / scan.result.height - spot.fy)).toBeLessThan(0.02);
-    } else {
+    } else if (m.kind !== 'wrong_fit') {
       expect(regionIds.has(m.regionId)).toBe(true);
     }
   }
