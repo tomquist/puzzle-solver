@@ -155,25 +155,27 @@ function removeSeams(lab: FloatImage, mask: Mask, seams: SeamHint, wl: number): 
   const { width: w, height: h } = lab;
   const L = new Float32Array(w * h);
   for (let i = 0; i < L.length; i++) L[i] = lab.data[i * 3] / wl;
-  const pass = (src: Float32Array, horizontal: boolean, take: (a: number, b: number) => number): Float32Array => {
+  // Running maximum / minimum over ±r pixels along a row or column (within the crop).
+  const pass = (src: Float32Array, horizontal: boolean, max: boolean): Float32Array => {
     const out = new Float32Array(src.length);
+    const step = horizontal ? 1 : w;
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        let v = src[y * w + x];
-        for (let k = -r; k <= r; k++) {
-          const xx = horizontal ? x + k : x, yy = horizontal ? y : y + k;
-          if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
-          v = take(v, src[yy * w + xx]);
-        }
-        out[y * w + x] = v;
+        const i = y * w + x;
+        const p = horizontal ? x : y, len = horizontal ? w : h;
+        const a = i - (p < r ? p : r) * step, b = i + (p + r < len ? r : len - 1 - p) * step;
+        let v = src[i];
+        if (max) for (let q = a; q <= b; q += step) v = Math.max(v, src[q]);
+        else for (let q = a; q <= b; q += step) v = Math.min(v, src[q]);
+        out[i] = v;
       }
     }
     return out;
   };
-  const dil = pass(pass(L, true, Math.max), false, Math.max);
-  const closed = pass(pass(dil, true, Math.min), false, Math.min);
-  const ero = pass(pass(L, true, Math.min), false, Math.min);
-  const opened = pass(pass(ero, true, Math.max), false, Math.max);
+  const dil = pass(pass(L, true, true), false, true);
+  const closed = pass(pass(dil, true, false), false, false);
+  const ero = pass(pass(L, true, false), false, false);
+  const opened = pass(pass(ero, true, true), false, true);
   const seam = new Uint8Array(w * h);
   for (let i = 0; i < L.length; i++) seam[i] = (closed[i] - L[i] > SEAM_DEPTH || L[i] - opened[i] > SEAM_DEPTH) && mask.data[i] ? 1 : 0;
   // Seams follow the grid: keep only line pixels near the (periodic) grid lines of the patch, so

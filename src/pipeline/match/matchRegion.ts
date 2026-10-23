@@ -968,18 +968,26 @@ function rankCandidates(index: ReferenceIndex, cache: TemplateCache, li: number,
 /**
  * The region's photo source (template pyramid). It does not depend on the grid, so a region matched
  * again at other cell sizes (the grid probe: up to a dozen times) reuses it – for a large patch it
- * takes seconds. Not kept with a colour correction (one per scan, second pass only).
+ * takes seconds. With a colour correction (one per scan, second pass only) it is kept with the
+ * correction, as long as that lives: analyses of one scan that share its first pass (and so its
+ * correction; colorCorrection.ts `FirstPass`) share these too.
  */
 function photoSourceOf(input: MatchInput, erode: number, weights: readonly number[], correction: ColorCorrection | undefined, seams: { radius: number; angleDeg: number; body: number } | undefined): PhotoSource {
-  if (correction) return makePhotoSource(input.image, input.mask, input.origin, erode, weights, correction, seams);
   const key = `${erode}|${weights.join(',')}|${seams ? `${seams.radius},${seams.angleDeg},${seams.body}` : ''}`;
-  let byKey = photoSources.get(input);
-  if (!byKey) photoSources.set(input, (byKey = new Map()));
+  let sources = photoSources;
+  if (correction) {
+    let byInput = correctedSources.get(correction);
+    if (!byInput) correctedSources.set(correction, (byInput = new WeakMap()));
+    sources = byInput;
+  }
+  let byKey = sources.get(input);
+  if (!byKey) sources.set(input, (byKey = new Map()));
   let src = byKey.get(key);
-  if (!src) byKey.set(key, (src = makePhotoSource(input.image, input.mask, input.origin, erode, weights, undefined, seams)));
+  if (!src) byKey.set(key, (src = makePhotoSource(input.image, input.mask, input.origin, erode, weights, correction, seams)));
   return src;
 }
 const photoSources = new WeakMap<MatchInput, Map<string, PhotoSource>>();
+const correctedSources = new WeakMap<ColorCorrection, WeakMap<MatchInput, Map<string, PhotoSource>>>();
 
 /** A patch's photo lattice carried into the reference through placement `c` (see `RefLattice`). */
 export function refLattice(input: MatchInput, c: Pick<Candidate, 'map' | 'ref'>, lat: PatchLattice): RefLattice {
@@ -1094,6 +1102,24 @@ const SWEEP_PER_STEP = 4;
 
 /** {@link measureScale} in steps (pipeline/steps.ts): a few of its sweep's scores per step. */
 export function* measureScaleSteps(index: ReferenceIndex, detail: MatchDetail, opts: { centre?: number; aspect?: boolean } = {}): Steps<ScaleMeasurement | null> {
+  if (!detail.src || !detail.best) return null;
+  // The same placement measured again (analyses sharing a first pass, colorCorrection.ts
+  // `FirstPass`, share its details' placements): the measurement depends on nothing else.
+  const memoKey = `${opts.centre ?? ''}|${opts.aspect ? 1 : 0}`;
+  let memo = scaleMemo.get(detail.best);
+  if (memo && (memo.index !== index || memo.src !== detail.src || memo.params !== detail.params)) memo = undefined;
+  const known = memo?.results.get(memoKey);
+  if (known !== undefined) return known && { ...known };
+  const m = yield* measureScaleUncached(index, detail, opts);
+  if (!memo) scaleMemo.set(detail.best, (memo = { index, src: detail.src, params: detail.params, results: new Map() }));
+  memo.results.set(memoKey, m && { ...m });
+  return m;
+}
+
+/** {@link measureScaleSteps}' results per placement (`MatchDetail.best`), with what they were measured on. */
+const scaleMemo = new WeakMap<object, { index: ReferenceIndex; src: PhotoSource; params: ScoreParams | undefined; results: Map<string, ScaleMeasurement | null> }>();
+
+function* measureScaleUncached(index: ReferenceIndex, detail: MatchDetail, opts: { centre?: number; aspect?: boolean }): Steps<ScaleMeasurement | null> {
   if (!detail.src || !detail.best) return null;
   const sp = detail.params ?? DEFAULT_SCORE;
   const cache = new TemplateCache(detail.src);
