@@ -129,9 +129,10 @@ export function scoreObjects(objects: ReviewObject[], regions: RasterRegion[], a
 /**
  * Judge regions against the by-eye points of the pieces in a marked area (review `pieces`): every
  * piece whole in one piece / patch region, no region with points of two pieces, except one patch
- * region holding exactly one of the `assembled` groups (indices into `pieces`).
+ * region holding exactly one of the `assembled` groups (indices into `pieces`); and none of the
+ * `table` points (table the outline wrongly took in) inside a piece / patch region.
  */
-export function piecesWhole(pieces: Point[][], assembled: number[][], regions: RasterRegion[]): { ok: boolean; now: string; ids: number[] } {
+export function piecesWhole(pieces: Point[][], assembled: number[][], regions: RasterRegion[], table: Point[] = []): { ok: boolean; now: string; ids: number[] } {
   const visible = regions.filter((r) => r.region.kind !== 'unknown');
   const problems: string[] = [];
   const holder: (RasterRegion | undefined)[] = [];
@@ -151,6 +152,8 @@ export function piecesWhole(pieces: Point[][], assembled: number[][], regions: R
     if (!group) problems.push(`#${r.id} holds pieces ${names}, not one assembled group`);
     else if (r.region.kind !== 'patch') problems.push(`#${r.id} holds the assembled pieces ${names} but is a ${r.region.kind}`);
   }
+  const onTable = table.map((p) => visible.find((r) => containsPoint(r, p))).filter((h): h is RasterRegion => !!h);
+  if (onTable.length > 0) problems.push(`${onTable.length} of ${table.length} table points inside #${[...new Set(onTable.map((r) => r.id))].join(',#')}`);
   const ids = [...byRegion.keys()].map((r) => r.id);
   if (problems.length > 0) return { ok: false, now: problems.join('; '), ids };
   const now = [...byRegion].map(([r, ks]) => `#${r.id} ${r.region.kind}: ${ks.size > 1 ? 'pieces' : 'piece'} ${[...ks].map((k) => k + 1).join(', ')}`).join('; ') + ' (each whole)';
@@ -392,7 +395,7 @@ export function replayFeedback(bundle: FeedbackBundle, name: string, opts: Repla
     const truth = opts.review?.marks[String(index)];
     if (mark.kind === 'bad_outline' && truth?.pieces?.length) {
       // The review says what the area really holds: judged against it.
-      const j = piecesWhole(truth.pieces, truth.assembled ?? [], curR);
+      const j = piecesWhole(truth.pieces, truth.assembled ?? [], curR, truth.table);
       out.marks.push({
         index, mark, at, original: origText, now: j.now, fixed: j.ok, verdict: j.ok ? 'FIXED' : 'STILL WRONG',
         why: j.ok ? undefined : j.ids.map((id) => `#${id}: ${diagText(id)}`).join('; '), currentIds: j.ids,

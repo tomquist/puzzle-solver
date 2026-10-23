@@ -1,0 +1,95 @@
+{
+  "reviewed": "2026-10-23",
+  "marks": {
+    "1": {
+      "verdict": "ok",
+      "note": "#36 is a faint beige stain on the table (speckled, no outline, no rim); no piece there"
+    },
+    "2": {
+      "verdict": "ok",
+      "kind": "bad_outline",
+      "note": "#42 holds two loose green pieces touching end to end: the upper one (pink top knob in #38's bottom blank) and the lower one, turned ~15° against it (assembled pieces share one angle), a dark gap along most of the contact. Judged by the piece points",
+      "pieces": [
+        [{ "x": 1478, "y": 1353 }, { "x": 1465, "y": 1385 }, { "x": 1495, "y": 1390 }, { "x": 1455, "y": 1430 }, { "x": 1480, "y": 1420 }],
+        [{ "x": 1440, "y": 1550 }, { "x": 1400, "y": 1575 }, { "x": 1470, "y": 1525 }, { "x": 1430, "y": 1500 }]
+      ]
+    },
+    "3": {
+      "verdict": "ok",
+      "note": "#38 is one loose piece (knobs left and right, blanks top and bottom, pink corners); its outline takes in the table in its bottom blank, closed off by the pink top knob of the green piece below, and a band of table above. The green piece below listed too",
+      "pieces": [
+        [{ "x": 1398, "y": 1293 }, { "x": 1430, "y": 1275 }, { "x": 1430, "y": 1320 }, { "x": 1480, "y": 1270 }, { "x": 1480, "y": 1322 }, { "x": 1518, "y": 1305 }, { "x": 1455, "y": 1295 }],
+        [{ "x": 1478, "y": 1353 }, { "x": 1465, "y": 1385 }, { "x": 1455, "y": 1430 }]
+      ],
+      "table": [{ "x": 1457, "y": 1333 }]
+    },
+    "4": {
+      "verdict": "ok",
+      "note": "#34 is one loose piece (light tan knob at its upper right); #35 to its right is another loose piece touching it with its left knob, and the cut between them gives the lower right corner of #34's purple body to #35",
+      "pieces": [
+        [{ "x": 512, "y": 1228 }, { "x": 450, "y": 1240 }, { "x": 415, "y": 1250 }, { "x": 440, "y": 1200 }, { "x": 470, "y": 1290 }, { "x": 490, "y": 1260 }, { "x": 489, "y": 1286 }],
+        [{ "x": 560, "y": 1260 }, { "x": 600, "y": 1250 }, { "x": 580, "y": 1310 }, { "x": 540, "y": 1268 }]
+      ]
+    },
+    "5": {
+      "verdict": "ok",
+      "note": "#18 is the top of a loose piece (pink top knob, green body, blanks on both sides at its waist) cut at its waist; the rest of it went to #21 with the dark/pink piece below, which touches it end to end",
+      "pieces": [
+        [{ "x": 180, "y": 836 }, { "x": 155, "y": 880 }, { "x": 215, "y": 862 }, { "x": 190, "y": 915 }, { "x": 162, "y": 937 }, { "x": 230, "y": 915 }],
+        [{ "x": 240, "y": 990 }, { "x": 275, "y": 985 }, { "x": 225, "y": 1050 }, { "x": 275, "y": 1045 }, { "x": 250, "y": 1015 }]
+      ]
+    },
+    "6": {
+      "verdict": "ok",
+      "kind": "bad_outline",
+      "note": "#21 holds the lower half of #18's piece and the whole piece below it (two loose pieces): same truth as M5",
+      "pieces": [
+        [{ "x": 180, "y": 836 }, { "x": 155, "y": 880 }, { "x": 215, "y": 862 }, { "x": 190, "y": 915 }, { "x": 162, "y": 937 }, { "x": 230, "y": 915 }],
+        [{ "x": 240, "y": 990 }, { "x": 275, "y": 985 }, { "x": 225, "y": 1050 }, { "x": 275, "y": 1045 }, { "x": 250, "y": 1015 }]
+      ]
+    },
+    "7": {
+      "verdict": "ok",
+      "note": "#17 is an assembled pair (upper and lower piece, dark green and mauve print); its outline takes in the tip of the right knob of #16's lower piece, which touches it. #16's lower piece listed too",
+      "assembled": [[0, 1]],
+      "pieces": [
+        [{ "x": 500, "y": 770 }, { "x": 560, "y": 752 }, { "x": 545, "y": 785 }],
+        [{ "x": 545, "y": 870 }, { "x": 600, "y": 880 }, { "x": 628, "y": 848 }, { "x": 530, "y": 895 }],
+        [{ "x": 385, "y": 760 }, { "x": 420, "y": 800 }, { "x": 476, "y": 802 }, { "x": 486, "y": 805 }, { "x": 395, "y": 840 }, { "x": 455, "y": 840 }]
+      ]
+    },
+    "8": {
+      "verdict": "ok",
+      "note": "#16 is an assembled pair: an orange piece on top (knobs up, left, right) and a tan / brown / yellow-green piece below, whose top knob reaches into it; the tip of the orange top knob went to #12 and the tip of the lower piece's right knob to #17",
+      "assembled": [[0, 1]],
+      "pieces": [
+        [{ "x": 385, "y": 668 }, { "x": 362, "y": 708 }, { "x": 428, "y": 690 }, { "x": 400, "y": 710 }, { "x": 430, "y": 750 }],
+        [{ "x": 385, "y": 760 }, { "x": 420, "y": 800 }, { "x": 476, "y": 802 }, { "x": 486, "y": 805 }, { "x": 395, "y": 840 }, { "x": 455, "y": 840 }]
+      ]
+    },
+    "9": {
+      "verdict": "ok",
+      "note": "#12 is one loose green piece; its outline takes in the tip of the orange top knob of #16 below it (and the table between)",
+      "pieces": [
+        [{ "x": 362, "y": 558 }, { "x": 400, "y": 600 }, { "x": 436, "y": 570 }, { "x": 334, "y": 628 }, { "x": 388, "y": 644 }, { "x": 420, "y": 625 }],
+        [{ "x": 385, "y": 668 }, { "x": 362, "y": 708 }, { "x": 400, "y": 710 }]
+      ]
+    },
+    "10": {
+      "verdict": "ok",
+      "note": "#9 is one loose yellow / mauve piece touching #12 with its bottom left; its outline takes in the pocket of table between its bottom edge and #12's right knob",
+      "pieces": [
+        [{ "x": 450, "y": 490 }, { "x": 485, "y": 520 }, { "x": 505, "y": 482 }, { "x": 520, "y": 524 }, { "x": 488, "y": 550 }, { "x": 430, "y": 546 }],
+        [{ "x": 362, "y": 558 }, { "x": 400, "y": 600 }, { "x": 436, "y": 570 }, { "x": 388, "y": 644 }]
+      ],
+      "table": [{ "x": 420, "y": 565 }]
+    },
+    "11": {
+      "verdict": "unsure",
+      "note": "#49 is an assembled block of about four dark green pieces (tilted ~15°, lower left piece with a bright glare), area 3.5 pieces as it should be; at full resolution its outline follows the pieces within a few pixels (a thin strip of table at the left, the glare's soft halo at the bottom): no clear error found",
+      "pieces": [
+        [{ "x": 1040, "y": 1650 }, { "x": 1075, "y": 1625 }, { "x": 1080, "y": 1720 }, { "x": 1120, "y": 1760 }, { "x": 1180, "y": 1700 }, { "x": 1215, "y": 1730 }, { "x": 1010, "y": 1800 }]
+      ]
+    }
+  }
+}

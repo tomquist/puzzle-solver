@@ -19,7 +19,10 @@
  * assembled. With it the mark is judged: fixed when every piece lies whole in one piece / patch
  * region (all its points in the same region) and no region holds points of two pieces, except one
  * patch region holding exactly one assembled group (an assembled group stays one region; split
- * exactly along its seams, one region per piece, is right as well).
+ * exactly along its seams, one region per piece, is right as well). `table` (optional): by-eye points
+ * of table (or shadow) next to those pieces that the marked outline took in, such as the table in a
+ * blank closed off by a touching neighbour or in the notch between two pieces: fixed then also needs
+ * each of them outside every piece / patch region.
  *
  * `objects` (optional) is a complete answer key for the photo: one point (photo pixels, well inside)
  * for every loose piece and every assembled group, found by checking the photo by eye, not taken
@@ -41,6 +44,8 @@ export interface MarkReview {
   pieces?: { x: number; y: number }[][];
   /** Groups of `pieces` (0-based indices) that are assembled: one patch region per group is right too. */
   assembled?: number[][];
+  /** bad_outline marks with `pieces`: points of table the outline wrongly took in (must lie in no region). */
+  table?: { x: number; y: number }[];
   note?: string;
 }
 
@@ -75,6 +80,7 @@ export function readReview(feedbackPath: string): FeedbackReview | undefined {
     if (!/^\d+$/.test(key) || !['ok', 'wrong', 'unsure'].includes(m.verdict)) throw new Error(`${path}: bad review entry "${key}"`);
     if (m.kind !== undefined && !['not_a_piece', 'merged', 'bad_outline', 'wrong_place'].includes(m.kind)) throw new Error(`${path}: bad kind in review entry "${key}"`);
     if (m.assembled !== undefined && (!Array.isArray(m.assembled) || m.assembled.some((g) => !Array.isArray(g) || g.some((k) => !Number.isInteger(k) || k < 0 || k >= (m.pieces?.length ?? 0))))) throw new Error(`${path}: bad assembled groups in review entry "${key}"`);
+    if (m.table !== undefined && (!Array.isArray(m.table) || m.table.some((q) => !Number.isFinite(q?.x) || !Number.isFinite(q?.y)))) throw new Error(`${path}: bad table points in review entry "${key}"`);
     if (m.pieces !== undefined && (!Array.isArray(m.pieces) || m.pieces.some((ps) => !Array.isArray(ps) || ps.length === 0 || ps.some((q) => !Number.isFinite(q?.x) || !Number.isFinite(q?.y))))) throw new Error(`${path}: bad pieces in review entry "${key}"`);
   }
   for (const o of review.objects ?? []) if (!Number.isFinite(o.x) || !Number.isFinite(o.y)) throw new Error(`${path}: bad object ${JSON.stringify(o)}`);

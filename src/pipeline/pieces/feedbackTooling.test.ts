@@ -107,6 +107,10 @@ describe('feedback tooling', () => {
     expect(judge(rect(1, 'piece', 0, 150), rect(2, 'piece', 150, 200), rect(3, 'piece', 300, 400))).toBe(false);
     expect(judge(rect(1, 'piece', 0, 200), rect(2, 'piece', 300, 400))).toBe(false);
     expect(judge(rect(1, 'patch', 0, 400))).toBe(false);
+    // Table the outline took in (a point beside the loose piece): wrong while a region covers it.
+    const table = [{ x: 420, y: 50 }];
+    expect(piecesWhole(pieces, pair, rasterizeRegions([rect(1, 'patch', 0, 200), rect(2, 'piece', 300, 400)]), table).ok).toBe(true);
+    expect(piecesWhole(pieces, pair, rasterizeRegions([rect(1, 'patch', 0, 200), rect(2, 'piece', 300, 440)]), table).ok).toBe(false);
   });
 
   it('replays segmentation only when the file has no reference picture', { timeout: 60_000 }, () => {

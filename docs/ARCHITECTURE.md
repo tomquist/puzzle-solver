@@ -303,6 +303,16 @@ opposite sides has a waist narrower than the side it shares with its partner in 
 and a cut there would run through the piece's even print. Without a supported neck the cluster is
 split along the edges between its pieces or kept whole (an assembled group is one patch); cores
 apart in colour count as separate pieces there when a seam runs all along the cut between them.
+On mottled dark print the thin dark creases are everywhere (half the pixels inside the pieces of
+the dense grey-table photos), so a seam supports any cut there: the rule cannot tell a waist from a
+contact on such print, and a waist cut can stand. Two parts left at about half a piece each (a
+waist cut at a neck, then an edge cut of the rest) are joined again when together they make a
+convincing piece. Without gaps or colour cores between the pieces, the edge split floods from
+k-means markers over the colour gradient; where that takes half a piece over to its neighbour
+(both printed as dark), floods that grow costlier with the distance from their marker give parts
+clearly closer to whole pieces, and those are taken.
+A weak region that is smooth all through, without a crisp edge along its outline (a stain or a
+shading of the table), is dropped before the split.
 In a cluster of a few touching pieces (by the piece size measured from single pieces), weak
 foreground that hangs off it by a short stretch of its outline (shaded table tying the pieces
 together) is dropped before the split.
