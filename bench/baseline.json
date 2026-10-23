@@ -960,6 +960,14 @@
         "objectClean": 1.0,
         "objectPrecision": 1.0
       },
+      "2026-10-23-dense-grey-table-1500pc.json": {
+        "falseRemoved": 1,
+        "outlineFixed": 0.222
+      },
+      "2026-10-23-grey-table-low-contrast-1500pc.json": {
+        "falseRemoved": 1,
+        "outlineFixed": 0.133
+      },
       "flickr-chrisrycroft-birds-oak-partial.json": {
         "objectRecall": 0.5,
         "objectClean": 0.5,

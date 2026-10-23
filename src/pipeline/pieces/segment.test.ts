@@ -5,7 +5,7 @@ import { fillPolygon } from '../../cv/raster';
 import { resizeRGBA } from '../../cv/resize';
 import { DEBUG_IMAGES, loadTestAsset, savePng } from '../../testing/nodeImageIO';
 import { generateJigsaw, renderPiecesPhoto, Rng, type RGB, type RenderOptions } from '../../testing/synth';
-import { dropFarWeak, segmentPieces } from './segment';
+import { dropFarWeak, segmentPieces, watershed } from './segment';
 import type { SegmentDiagnostics } from './types';
 import { cropPhoto, drawOverlay, evaluateScene, makeTouching, maskIoU, type SceneEval } from './testkit';
 
@@ -509,6 +509,49 @@ describe('segmentPieces on real-photo conditions', () => {
     expect(doff.grain).toBeUndefined();
   });
 
+  it('drops faint stains on the table that have no edge, keeping the pieces', () => {
+    // Soft beige stains (a few Lab units, fading out over a third of a piece) on free table, as the
+    // stains of the dense grey-table feedback photos: smooth all through, no cut edge along any outline.
+    const { photo, truth, cut } = scene('starry-night', 'light', 2, { background: [198, 200, 202] });
+    const occupied = createMask(photo.width, photo.height);
+    for (const t of truth) fillPolygon(occupied, t.outline, 1);
+    const free = (cx: number, cy: number, r: number) => {
+      for (let y = Math.max(0, cy - r); y < Math.min(photo.height, cy + r); y++) {
+        for (let x = Math.max(0, cx - r); x < Math.min(photo.width, cx + r); x++) if (occupied.data[y * photo.width + x]) return false;
+      }
+      return cx - r > 0 && cy - r > 0 && cx + r < photo.width && cy + r < photo.height;
+    };
+    const rng = new Rng(4);
+    const stains: { x: number; y: number }[] = [];
+    for (let k = 0; k < 2000 && stains.length < 3; k++) {
+      const x = Math.round(rng.random() * photo.width), y = Math.round(rng.random() * photo.height);
+      if (free(x, y, 90) && stains.every((q) => Math.hypot(q.x - x, q.y - y) > 200)) stains.push({ x, y });
+    }
+    expect(stains.length).toBe(3);
+    const stained = { ...photo, data: new Uint8ClampedArray(photo.data) };
+    for (const q of stains) {
+      for (let y = q.y - 100; y < q.y + 100; y++) {
+        for (let x = q.x - 100; x < q.x + 100; x++) {
+          // An irregular blob (two overlapping lobes), fading out smoothly.
+          const d = Math.min(Math.hypot((x - q.x) / 60, (y - q.y) / 45), Math.hypot((x - q.x - 25) / 40, (y - q.y + 20) / 50));
+          const g = d < 1 ? 1 : Math.exp(-((d - 1) ** 2) / 0.18);
+          const o = (y * photo.width + x) * 4;
+          stained.data[o] -= 7 * g;
+          stained.data[o + 1] -= 10 * g;
+          stained.data[o + 2] -= 20 * g;
+        }
+      }
+    }
+    const seg = segmentPieces(stained);
+    debug('stains', stained, seg, truth);
+    const { recall, offeredFalse } = evaluate(seg, truth, cut);
+    const onStain = seg.regions.filter((r) => r.region.kind !== 'unknown' && stains.some((q) => Math.hypot(r.region.bbox.x + r.region.bbox.width / 2 - q.x, r.region.bbox.y + r.region.bbox.height / 2 - q.y) < 80));
+    console.log(`stains: recall ${recall.toFixed(2)}, false ${offeredFalse}, regions on stains ${onStain.length}`);
+    expect(onStain).toEqual([]);
+    expect(recall).toBeGreaterThanOrEqual(0.95);
+    expect(offeredFalse).toBe(0);
+  });
+
   it('takes a large soft shadow reaching in from the border for table', () => {
     const { photo, truth, cut } = scene('starry-night', 'light', 2, { background: [206, 196, 178], shadowZone: { strength: 0.5 } });
     const seg = segmentPieces(photo);
@@ -619,5 +662,45 @@ describe('weak foreground far from strong pixels', () => {
   it('keeps a weak area lying along the strong part of a piece', () => {
     // A weak block below the square sharing its whole lower side (the piece's own pale print).
     expect(run((x, y) => x >= 40 && x < 100 && y >= 130 && y < 165)).toBeNull();
+  });
+});
+
+describe('watershed (edge split floods)', () => {
+  // Two 100 × 100 squares side by side, a marker in each. B's marker sits inside a ring of weak
+  // print edges (level 6); a strong wall (level 200) separates the squares except for a gap at the
+  // top: plain floods from A run through the gap over B's flat outer part before B's flood leaves
+  // its ring; compact floods (cost growing with the distance from the marker) leave B its square.
+  const W = 200, H = 100;
+  const mask = createMask(W, H);
+  mask.data.fill(1);
+  const grad = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (x >= 99 && x <= 100 && y >= 12) grad[y * W + x] = 200;
+      const r = Math.hypot(x - 150, y - 50);
+      if (r >= 12 && r < 15) grad[y * W + x] = 6;
+    }
+  }
+  const markers = () => {
+    const l = new Int32Array(W * H);
+    for (let y = 45; y < 55; y++) for (let x = 45; x < 55; x++) { l[y * W + x] = 1; l[y * W + x + 100] = 2; }
+    return l;
+  };
+  const shareOfB = (l: Int32Array) => {
+    let n = 0;
+    for (let y = 0; y < H; y++) for (let x = 100; x < W; x++) if (l[y * W + x] === 2) n++;
+    return n / (100 * H);
+  };
+
+  it('lets a marker take over its neighbour through a gap in plain floods', () => {
+    const l = markers();
+    watershed(mask, grad, l);
+    expect(shareOfB(l)).toBeLessThan(0.2);
+  });
+
+  it('keeps each marker its own square in compact floods', () => {
+    const l = markers();
+    watershed(mask, grad, l, 20 / 100, [{ x: 0, y: 0 }, { x: 50, y: 50 }, { x: 150, y: 50 }]);
+    expect(shareOfB(l)).toBeGreaterThan(0.9);
   });
 });

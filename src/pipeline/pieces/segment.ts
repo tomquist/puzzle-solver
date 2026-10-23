@@ -7,11 +7,13 @@
  * threshold on the log score with hysteresis, plus a texture cue → close / fill holes / drop specks
  * (no opening: the thin dark cardboard rim often is the only evidence of a piece whose print matches
  * the table, and filling the closed rim recovers it) → connected components → outline tracing and
- * shape analysis → peeling of glare halos and soft shadows → splitting of touching pieces at narrow
+ * shape analysis → peeling of glare halos and soft shadows (a weak region without a crisp edge
+ * anywhere is a stain or shading of the table and dropped) → splitting of touching pieces at narrow
  * necks where a seam runs along the cut (loose pieces lying against a large patch peeled off at
  * wider ones, with the table they enclose opened) or along the edges between them (dark creases
- * count as cuts only between pieces at their own angles or cores apart along a seam) → reassembly
- * of fragments → outlines snapped to brightness edges in blocky JPEGs → (option) graph-cut
+ * count as cuts only between pieces at their own angles or cores apart along a seam; without gaps or
+ * cores, k-means markers whose floods may run compact), two halves of one piece the stages left
+ * joined again → reassembly of fragments → outlines snapped to brightness edges in blocky JPEGs → (option) graph-cut
  * refinement of outlines in doubt, trimming halos the colour models clearly take for table
  * (refine.ts) → classification (piece / patch / fragment / clutter at the photo border) →
  * reading-order ids → quality.
@@ -209,6 +211,65 @@ function isThin(c: Candidate, body: number): boolean {
 }
 
 /**
+ * Parts of a split cluster (each at most HALF_JOIN piece areas, together at most 1.35) that touch
+ * and make one convincing piece together are one piece cut in two: a neck cut through a piece's
+ * waist and an edge cut of what was left can each leave half a piece, at different stages, so the
+ * edge split's own check for halves sees only one of them. Joined while the union's outline is
+ * convincing (REFERENCE_CONFIDENCE) and better than both halves' (`cluster`: the split cluster,
+ * within which the slit along the cut is closed).
+ */
+function rejoinHalves(parts: Candidate[], cluster: Candidate, ra: number, W: number, H: number): Candidate[] {
+  let list = parts;
+  for (let guard = 0; guard < parts.length; guard++) {
+    let joined: { i: number; j: number; u: Candidate } | null = null;
+    for (let i = 0; i < list.length && !joined; i++) {
+      for (let j = i + 1; j < list.length && !joined; j++) {
+        const a = list[i], b = list[j];
+        if (a.area > HALF_JOIN * ra || b.area > HALF_JOIN * ra || a.area + b.area > 1.35 * ra || rectGap(a.bbox, b.bbox) > 1) continue;
+        const x0 = Math.min(a.bbox.x, b.bbox.x), y0 = Math.min(a.bbox.y, b.bbox.y);
+        const x1 = Math.max(a.bbox.x + a.bbox.width, b.bbox.x + b.bbox.width), y1 = Math.max(a.bbox.y + a.bbox.height, b.bbox.y + b.bbox.height);
+        const U = createMask(x1 - x0, y1 - y0);
+        for (const q of [a, b]) {
+          for (let y = 0; y < q.bbox.height; y++) {
+            for (let x = 0; x < q.bbox.width; x++) if (q.mask.data[y * q.bbox.width + x]) U.data[(y + q.bbox.y - y0) * U.width + x + q.bbox.x - x0] = 1;
+          }
+        }
+        if (labelComponents(U, 4).stats.length !== 1) continue;
+        // Without what the cuts leave along it: a slit between the halves is closed (within the
+        // cluster), slivers of the neighbours' cuts (thin whiskers) are opened away.
+        const pad = 3, pw = U.width + 2 * pad, ph = U.height + 2 * pad;
+        const P = createMask(pw, ph);
+        for (let y = 0; y < U.height; y++) P.data.set(U.data.subarray(y * U.width, (y + 1) * U.width), (y + pad) * pw + pad);
+        const closed = fillHoles(close(P, 2));
+        const J = createMask(pw, ph);
+        for (let y = 0; y < ph; y++) {
+          for (let x = 0; x < pw; x++) {
+            const X = x - pad + x0 - cluster.bbox.x, Y = y - pad + y0 - cluster.bbox.y;
+            if (closed.data[y * pw + x] && X >= 0 && Y >= 0 && X < cluster.bbox.width && Y < cluster.bbox.height && cluster.mask.data[Y * cluster.bbox.width + X]) J.data[y * pw + x] = 1;
+          }
+        }
+        // (Opened, then given back what lies within the opening's reach: corners stay sharp.)
+        const near = dilate(open(J, 2), 2);
+        for (let i = 0; i < J.data.length; i++) J.data[i] &= near.data[i];
+        const { labels: jl, stats: js } = labelComponents(J, 8);
+        if (js.length === 0) continue;
+        const main = js.reduce((p, q) => (q.area > p.area ? q : p));
+        const u = makeCandidate(componentMask(jl, pw, main.label, main.bbox), { x: x0 - pad + main.bbox.x, y: y0 - pad + main.bbox.y, width: main.bbox.width, height: main.bbox.height }, W, H, main.area);
+        const conf = u.shape?.confidence ?? 0;
+        if (conf >= REFERENCE_CONFIDENCE && conf > Math.max(a.shape?.confidence ?? 0, b.shape?.confidence ?? 0)) joined = { i, j, u };
+      }
+    }
+    if (!joined) break;
+    const { i, j, u } = joined;
+    list = [...list.filter((_, k) => k !== i && k !== j), u];
+  }
+  return list;
+}
+
+/** Largest part (piece areas) rejoinHalves takes for half a piece. */
+const HALF_JOIN = 0.7;
+
+/**
  * Reassemble pieces that fell apart because parts of their print match the table: a fragment
  * (< half the expected piece area) is merged with its nearest neighbour within `gap` px when the
  * union is still at most one piece in area and extent, and a closing bridges them into one blob.
@@ -274,6 +335,14 @@ function mergeFragments(cands: Candidate[], refAreaAt: (c: Candidate) => number,
   return list;
 }
 
+/**
+ * A region peelSoft floods from outside through smooth pixels for at least SMOOTH_THROUGH of its
+ * area, with less than SMOOTH_CRISP of its rim (2 px on either side of its outline) on a crisp
+ * edge, has no cut edge anywhere: a stain or a shading of the table (dropped when its colour is
+ * weak too), not a piece.
+ */
+const SMOOTH_THROUGH = 0.9;
+const SMOOTH_CRISP = 0.03;
 /** Weak specks below this fraction of a piece are noise, not regions. */
 const NOISE_SPECK = 0.15;
 
@@ -800,6 +869,10 @@ const HALF_PART = 0.65;
 const VALLEY_CORE = 2;
 /** Share of the cluster's median colour score that a piece's core reaches as well. */
 const VALLEY_SHARE = 0.4;
+/** Gradient levels (of 255) added per body size of distance from a k-means marker's centre (compact watershed). */
+const COMPACT_LEVELS = 16;
+/** Piece areas by which the compact cut's parts must be closer to whole pieces to be taken. */
+const COMPACT_GAIN = 0.3;
 /** Most pieces a cluster is split into along edges. */
 const MAX_EDGE_SPLIT = 12;
 /** Distance (body sizes, at least 2 px) from a cut within which a seam supports it (cutSupport). */
@@ -1076,14 +1149,18 @@ function colourGradient(img: RGBAImage, rect: Rect): Uint8Array {
 /**
  * Marker-controlled watershed inside `mask` on the (quantised) gradient: every pixel goes to the
  * marker whose flood reaches it over the lowest edges, so boundaries settle on the strongest edges
- * between markers. `labels` holds marker ids (> 0) and is filled in place.
+ * between markers. `labels` holds marker ids (> 0) and is filled in place. With `compact` (levels
+ * per pixel of distance from the pixel's marker centre, `centres` per label id), the cost of a pixel
+ * also grows with its distance from the marker flooding it (compact watershed): a marker cannot take
+ * over a neighbour's half through a channel of weak edges. Exported for tests.
  */
-function watershed(mask: Mask, grad: Uint8Array, labels: Int32Array): void {
+export function watershed(mask: Mask, grad: Uint8Array, labels: Int32Array, compact = 0, centres: Point[] = []): void {
   const { width: w, height: h } = mask;
   const md = mask.data;
   // Bucket queue: one growable stack per gradient level.
-  const stacks: Int32Array[] = Array.from({ length: 256 }, () => new Int32Array(64));
-  const size = new Int32Array(256);
+  const LEVELS = 256;
+  const stacks: Int32Array[] = Array.from({ length: LEVELS }, () => new Int32Array(64));
+  const size = new Int32Array(LEVELS);
   const push = (level: number, i: number) => {
     let st = stacks[level];
     if (size[level] === st.length) {
@@ -1093,15 +1170,20 @@ function watershed(mask: Mask, grad: Uint8Array, labels: Int32Array): void {
     }
     st[size[level]++] = i;
   };
-  for (let i = 0; i < labels.length; i++) if (labels[i] > 0) push(grad[i], i);
-  for (let level = 0; level < 256; level++) {
+  const cost = (j: number, l: number) => {
+    if (compact <= 0) return grad[j];
+    const c = centres[l], x = j % w, y = (j - x) / w;
+    return Math.min(LEVELS - 1, grad[j] + Math.round(compact * Math.hypot(x - c.x, y - c.y)));
+  };
+  for (let i = 0; i < labels.length; i++) if (labels[i] > 0) push(Math.min(LEVELS - 1, grad[i]), i);
+  for (let level = 0; level < LEVELS; level++) {
     while (size[level] > 0) {
       const i = stacks[level][--size[level]];
       const x = i % w, y = (i - x) / w, l = labels[i];
-      if (x > 0 && md[i - 1] && labels[i - 1] === 0) { labels[i - 1] = l; push(Math.max(level, grad[i - 1]), i - 1); }
-      if (x < w - 1 && md[i + 1] && labels[i + 1] === 0) { labels[i + 1] = l; push(Math.max(level, grad[i + 1]), i + 1); }
-      if (y > 0 && md[i - w] && labels[i - w] === 0) { labels[i - w] = l; push(Math.max(level, grad[i - w]), i - w); }
-      if (y < h - 1 && md[i + w] && labels[i + w] === 0) { labels[i + w] = l; push(Math.max(level, grad[i + w]), i + w); }
+      if (x > 0 && md[i - 1] && labels[i - 1] === 0) { labels[i - 1] = l; push(Math.max(level, cost(i - 1, l)), i - 1); }
+      if (x < w - 1 && md[i + 1] && labels[i + 1] === 0) { labels[i + 1] = l; push(Math.max(level, cost(i + 1, l)), i + 1); }
+      if (y > 0 && md[i - w] && labels[i - w] === 0) { labels[i - w] = l; push(Math.max(level, cost(i - w, l)), i - w); }
+      if (y < h - 1 && md[i + w] && labels[i + w] === 0) { labels[i + w] = l; push(Math.max(level, cost(i + w, l)), i + w); }
     }
   }
 }
@@ -1115,8 +1197,9 @@ function watershed(mask: Mask, grad: Uint8Array, labels: Int32Array): void {
  * closing, or convincing piece outlines on both sides) and when they are not neighbours on one
  * assembled grid (same angle, one body apart); everything else is joined again. Parts below a
  * third of a piece go to the neighbour they share most outline with. Null when one region remains.
+ * `measured`: the piece area `ra` was measured on single pieces (see the compact floods below).
  */
-function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, img: RGBAImage, score: GrayImage, high: number, W: number, H: number): Candidate[] | null {
+function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, img: RGBAImage, score: GrayImage, high: number, W: number, H: number, measured = false): Candidate[] | null {
   const k = Math.round(c.area / ra);
   if (k < 2 || k > MAX_EDGE_SPLIT) return null;
   const { width: w, height: h } = c.mask;
@@ -1171,7 +1254,29 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
     for (let m = 0; m < k; m++) blobOf.push(0);
   }
   const nLabels = blobOf.length - 1;
-  watershed(c.mask, colourGradient(img, c.bbox), labels);
+  const grad = colourGradient(img, c.bbox);
+  if (measured && blobOf.every((b) => b === 0)) {
+    // k-means markers stand for whole pieces. A flood over weak edges can take half a piece over to
+    // its neighbour (its print as dark as the neighbour's): the floods are then also run compact
+    // (the cost grows with the distance from the marker), and the cut whose parts are closer to
+    // whole pieces is taken (clearly closer: the edges are the better evidence otherwise). Only with
+    // the piece size measured on single pieces (`measured`): otherwise "whole pieces" means little.
+    const centres: Point[] = [{ x: 0, y: 0 }];
+    const sx = new Float64Array(nLabels + 1), sy = new Float64Array(nLabels + 1), sn = new Float64Array(nLabels + 1);
+    for (let i = 0; i < labels.length; i++) if (labels[i] > 0) { sx[labels[i]] += i % w; sy[labels[i]] += Math.floor(i / w); sn[labels[i]]++; }
+    for (let l = 1; l <= nLabels; l++) centres.push({ x: sn[l] ? sx[l] / sn[l] : 0, y: sn[l] ? sy[l] / sn[l] : 0 });
+    const compact = labels.slice();
+    watershed(c.mask, grad, labels);
+    watershed(c.mask, grad, compact, COMPACT_LEVELS / body, centres);
+    const misfit = (ls: Int32Array) => {
+      const a = new Float64Array(nLabels + 1);
+      for (let i = 0; i < ls.length; i++) if (ls[i] > 0) a[ls[i]]++;
+      let e = 0;
+      for (let l = 1; l <= nLabels; l++) e += Math.abs(a[l] / ra - Math.max(1, Math.round(a[l] / ra)));
+      return e;
+    };
+    if (misfit(compact) < misfit(labels) - COMPACT_GAIN) labels.set(compact);
+  } else watershed(c.mask, grad, labels);
   const n = nLabels;
   // Shared boundary per pair of labels, with the crease strength along it.
   // (The crease widens with the magnification: wider valleys on large pieces.)
@@ -1453,7 +1558,8 @@ function maskCentroid(c: Candidate): Point {
  * through smooth pixels (local high-pass energy of the luminance at table level) are given back to
  * the table, unless they are mostly in a colour the table cannot take under any lighting (a piece
  * printed in one smooth colour). Kept only when it leaves piece-sized parts with clearly better
- * outlines.
+ * outlines. A region that goes (nearly) all the way has no crisp edge anywhere: an empty list
+ * (the caller drops it when its colour is weak as well: a stain or a shading on the table).
  */
 function peelSoft(c: Candidate, img: RGBAImage, fit: BackgroundFit, ra: number, W: number, H: number): Candidate[] | null {
   const pad = 6;
@@ -1525,6 +1631,17 @@ function peelSoft(c: Candidate, img: RGBAImage, fit: BackgroundFit, ra: number, 
     else rest.data[i] = 1;
   }
   if (removed < 0.08 * c.area) return null;
+  if (removed >= SMOOTH_THROUGH * c.area) {
+    // Nearly all of it smooth: a piece still shows a crisp cut edge along its outline.
+    const inner = erode(m, 2), outer = dilate(m, 2);
+    let rim = 0, crisp = 0;
+    for (let i = 0; i < w * h; i++) {
+      if (!outer.data[i] || inner.data[i]) continue;
+      rim++;
+      if (energy[i] > t) crisp++;
+    }
+    if (crisp < SMOOTH_CRISP * rim) return [];
+  }
   const cleaned = fillHoles(open(rest, 1));
   const { labels, stats } = labelComponents(cleaned, 8);
   const parts = stats
@@ -2357,7 +2474,10 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
       }
       // (Glare is only looked for where a fair share of the region looks like it.)
       const glare = () => (glareShare(c, scored, fit, W) >= GLARE_PEEL_SHARE ? peelGlare(c, scored, fit, ra, W, H) : null);
-      out.push(...(peelSoft(c, scored, fit, ra, W, H) ?? glare() ?? [c]));
+      const peeled = peelSoft(c, scored, fit, ra, W, H);
+      // Smooth all through and weakly coloured: a stain or shading on the table, no piece.
+      if (peeled?.length === 0 && medianScore(score, c) < th.high) continue;
+      out.push(...((peeled?.length ? peeled : null) ?? glare() ?? [c]));
     }
     cands = out;
   }
@@ -2391,7 +2511,7 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
         // pieces give as many parts with a convincing outline, those are taken.
         const convincing = (ps: Candidate[]) => ps.some((p) => (p.shape?.confidence ?? 0) >= REFERENCE_CONFIDENCE);
         if (c.area <= EDGE_RECUT_MAX_PIECES * ra && !convincing(out)) {
-          const edges = splitAtEdges(c, ra, bodyAt, preClose, scored, score, th.high, W, H);
+          const edges = splitAtEdges(c, ra, bodyAt, preClose, scored, score, th.high, W, H, singles.length > 0);
           if (edges && edges.length === out.length && convincing(edges)) return edges;
         }
         return out;
@@ -2400,7 +2520,7 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
       // edges are not cut for so many pieces).
       if (c.area > RESPLIT_MAX_PIECES * ra) return peelLoose(c, from);
       // Pieces touching along a whole side or slightly overlapping: cut along the edges between them.
-      const cut = splitAtEdges(c, ra, bodyAt, preClose, scored, score, th.high, W, H);
+      const cut = splitAtEdges(c, ra, bodyAt, preClose, scored, score, th.high, W, H, singles.length > 0);
       // Parts still clearly larger than a piece (a blob of pieces lying close together, a part whose
       // overlapping pieces the area under-counted) are split in turn.
       return cut?.flatMap((p) => (p.area > 1.4 * ra && shrunk(p, c) ? splitTouching(p, 0) : null) ?? [p]) ?? null;
@@ -2432,8 +2552,10 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
     };
     const out: Candidate[] = [];
     for (const c of cands) {
-      const parts = splitTouching(c, 0);
-      if (parts) {
+      const split = splitTouching(c, 0);
+      // (Halves only by a piece size measured on single pieces: without one, "half a piece" means little.)
+      const parts = split && singles.length > 0 ? rejoinHalves(split, c, refAreaAt(c), W, H) : split;
+      if (parts && parts.length > 1) {
         group++;
         for (const p of parts) out.push({ ...p, group });
       } else out.push(c);

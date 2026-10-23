@@ -1,0 +1,144 @@
+{
+  "reviewed": "2026-10-23",
+  "marks": {
+    "1": {
+      "verdict": "ok",
+      "note": "#51 is the same faint beige stain on the table as #36 in 2026-10-23-dense-grey-table-1500pc (speckled, no outline); no piece there"
+    },
+    "2": {
+      "verdict": "ok",
+      "note": "#57 is the top of a loose green piece (pink top knob, blanks on both sides at its waist) cut at its waist; #61 is the rest of it. The piece above it (#58: knobs left and right) and the green piece below (#63) are separate loose pieces",
+      "pieces": [
+        [{ "x": 1440, "y": 1757 }, { "x": 1410, "y": 1780 }, { "x": 1452, "y": 1786 }, { "x": 1415, "y": 1830 }, { "x": 1400, "y": 1860 }, { "x": 1440, "y": 1841 }],
+        [{ "x": 1330, "y": 1900 }, { "x": 1300, "y": 1925 }, { "x": 1360, "y": 1925 }, { "x": 1340, "y": 1870 }],
+        [{ "x": 1372, "y": 1700 }, { "x": 1410, "y": 1720 }, { "x": 1455, "y": 1680 }, { "x": 1485, "y": 1712 }]
+      ]
+    },
+    "3": {
+      "verdict": "ok",
+      "note": "#61 is the lower half of the green piece cut at its waist (see M2)",
+      "pieces": [
+        [{ "x": 1440, "y": 1757 }, { "x": 1410, "y": 1780 }, { "x": 1452, "y": 1786 }, { "x": 1415, "y": 1830 }, { "x": 1400, "y": 1860 }, { "x": 1440, "y": 1841 }],
+        [{ "x": 1330, "y": 1900 }, { "x": 1300, "y": 1925 }, { "x": 1360, "y": 1925 }, { "x": 1340, "y": 1870 }]
+      ]
+    },
+    "4": {
+      "verdict": "ok",
+      "note": "#18 is the large assembled flower block; its outline leaves out pale grey-green pieces along its right edge (print close to the table colour, scored as table): the piece whose top knob is #9 and the one below it. Listed: points of the block's core and of those two pieces, as one assembled group",
+      "assembled": [[0, 1, 2]],
+      "pieces": [
+        [{ "x": 1100, "y": 600 }, { "x": 1250, "y": 850 }, { "x": 1250, "y": 300 }],
+        [{ "x": 1390, "y": 300 }, { "x": 1440, "y": 300 }, { "x": 1390, "y": 350 }, { "x": 1435, "y": 360 }, { "x": 1415, "y": 272 }, { "x": 1415, "y": 385 }],
+        [{ "x": 1400, "y": 500 }, { "x": 1430, "y": 480 }, { "x": 1380, "y": 520 }, { "x": 1440, "y": 525 }]
+      ]
+    },
+    "5": {
+      "verdict": "ok",
+      "note": "#10 is the left part of a grey-green piece; with the grey-mauve piece above it (whose bottom knob reaches into it) it forms an assembled pair; low contrast to the table. The green piece to their upper right (#5's other half) lies loose against the pair",
+      "assembled": [[0, 1]],
+      "pieces": [
+        [{ "x": 1534, "y": 175 }, { "x": 1520, "y": 215 }, { "x": 1560, "y": 225 }, { "x": 1550, "y": 248 }],
+        [{ "x": 1510, "y": 320 }, { "x": 1590, "y": 290 }, { "x": 1620, "y": 320 }, { "x": 1560, "y": 345 }, { "x": 1580, "y": 330 }],
+        [{ "x": 1600, "y": 140 }, { "x": 1640, "y": 150 }, { "x": 1641, "y": 214 }, { "x": 1630, "y": 180 }]
+      ]
+    },
+    "6": {
+      "verdict": "ok",
+      "note": "#14 is the lower part of a pink / grey piece; #15 (a fragment) and the top of #11 hold the rest of it. It lies against a green piece (#11) whose knob reaches into it, probably assembled (listed as one group: one patch or one region per piece)",
+      "assembled": [[0, 1]],
+      "pieces": [
+        [{ "x": 1720, "y": 290 }, { "x": 1740, "y": 320 }, { "x": 1700, "y": 300 }, { "x": 1765, "y": 315 }, { "x": 1730, "y": 268 }],
+        [{ "x": 1680, "y": 400 }, { "x": 1660, "y": 430 }, { "x": 1700, "y": 380 }, { "x": 1715, "y": 420 }, { "x": 1670, "y": 370 }]
+      ]
+    },
+    "7": {
+      "verdict": "ok",
+      "note": "#11 is the green piece together with the top of the pink / grey piece below it (see M6)",
+      "assembled": [[0, 1]],
+      "pieces": [
+        [{ "x": 1720, "y": 290 }, { "x": 1740, "y": 320 }, { "x": 1700, "y": 300 }, { "x": 1765, "y": 315 }, { "x": 1730, "y": 268 }],
+        [{ "x": 1680, "y": 400 }, { "x": 1660, "y": 430 }, { "x": 1700, "y": 380 }, { "x": 1715, "y": 420 }, { "x": 1670, "y": 370 }]
+      ]
+    },
+    "8": {
+      "verdict": "ok",
+      "note": "#20 is the right part of an assembled pair of pink pieces joined by one curved seam (the left piece's right knob in the right piece) plus the right piece; the cut between #19 and #20 runs through the left piece where no seam is",
+      "assembled": [[0, 1]],
+      "pieces": [
+        [{ "x": 1530, "y": 575 }, { "x": 1545, "y": 600 }, { "x": 1575, "y": 580 }, { "x": 1600, "y": 600 }, { "x": 1575, "y": 628 }, { "x": 1515, "y": 562 }],
+        [{ "x": 1660, "y": 560 }, { "x": 1662, "y": 510 }, { "x": 1680, "y": 600 }, { "x": 1660, "y": 635 }, { "x": 1665, "y": 585 }]
+      ]
+    },
+    "9": {
+      "verdict": "ok",
+      "note": "#19 is the left part of the left piece of the pair (see M8)",
+      "assembled": [[0, 1]],
+      "pieces": [
+        [{ "x": 1530, "y": 575 }, { "x": 1545, "y": 600 }, { "x": 1575, "y": 580 }, { "x": 1600, "y": 600 }, { "x": 1575, "y": 628 }, { "x": 1515, "y": 562 }],
+        [{ "x": 1660, "y": 560 }, { "x": 1662, "y": 510 }, { "x": 1680, "y": 600 }, { "x": 1660, "y": 635 }, { "x": 1665, "y": 585 }]
+      ]
+    },
+    "10": {
+      "verdict": "ok",
+      "note": "#5 (unknown) holds parts of the grey-mauve piece of the pair (see M5) and of the green piece lying against it; both low contrast",
+      "assembled": [[0, 1]],
+      "pieces": [
+        [{ "x": 1534, "y": 175 }, { "x": 1520, "y": 215 }, { "x": 1560, "y": 225 }, { "x": 1550, "y": 248 }],
+        [{ "x": 1510, "y": 320 }, { "x": 1590, "y": 290 }, { "x": 1620, "y": 320 }, { "x": 1560, "y": 345 }, { "x": 1580, "y": 330 }],
+        [{ "x": 1600, "y": 140 }, { "x": 1640, "y": 150 }, { "x": 1641, "y": 214 }, { "x": 1630, "y": 180 }]
+      ]
+    },
+    "11": {
+      "verdict": "ok",
+      "note": "#9 is only the top knob of a pale grey-green piece at the block's right edge (see M4); the piece itself is not found",
+      "assembled": [[0, 1, 2]],
+      "pieces": [
+        [{ "x": 1100, "y": 600 }, { "x": 1250, "y": 850 }, { "x": 1250, "y": 300 }],
+        [{ "x": 1390, "y": 300 }, { "x": 1440, "y": 300 }, { "x": 1390, "y": 350 }, { "x": 1435, "y": 360 }, { "x": 1415, "y": 272 }, { "x": 1415, "y": 385 }],
+        [{ "x": 1400, "y": 500 }, { "x": 1430, "y": 480 }, { "x": 1380, "y": 520 }, { "x": 1440, "y": 525 }]
+      ]
+    },
+    "12": {
+      "verdict": "ok",
+      "note": "#2 is a loose pink piece plus a large blob of the darker table at the top of the photo to its right",
+      "pieces": [
+        [{ "x": 960, "y": 60 }, { "x": 990, "y": 80 }, { "x": 935, "y": 45 }, { "x": 940, "y": 100 }, { "x": 965, "y": 125 }]
+      ],
+      "table": [{ "x": 1000, "y": 15 }]
+    },
+    "13": {
+      "verdict": "ok",
+      "note": "#3 is the light green half of one loose piece whose other half, dark green to black, is #6 (together about one piece in area)",
+      "pieces": [
+        [{ "x": 300, "y": 225 }, { "x": 325, "y": 265 }, { "x": 290, "y": 255 }, { "x": 255, "y": 265 }, { "x": 250, "y": 300 }, { "x": 285, "y": 315 }]
+      ]
+    },
+    "14": {
+      "verdict": "ok",
+      "note": "#6 is the dark half of the piece of M13",
+      "pieces": [
+        [{ "x": 300, "y": 225 }, { "x": 325, "y": 265 }, { "x": 290, "y": 255 }, { "x": 255, "y": 265 }, { "x": 250, "y": 300 }, { "x": 285, "y": 315 }]
+      ]
+    },
+    "15": {
+      "verdict": "ok",
+      "note": "#37 is an assembled pair (a pink piece and a black one) that also takes in the right knob of the loose piece below it (#41)",
+      "assembled": [[0, 1]],
+      "pieces": [
+        [{ "x": 720, "y": 1260 }, { "x": 700, "y": 1300 }, { "x": 740, "y": 1262 }],
+        [{ "x": 800, "y": 1330 }, { "x": 780, "y": 1370 }],
+        [{ "x": 690, "y": 1400 }, { "x": 680, "y": 1430 }, { "x": 730, "y": 1400 }, { "x": 764, "y": 1398 }]
+      ]
+    },
+    "16": {
+      "verdict": "ok",
+      "note": "#41 is one loose piece (turned ~45°) without its right knob, which went to #37",
+      "assembled": [[0, 1]],
+      "pieces": [
+        [{ "x": 720, "y": 1260 }, { "x": 700, "y": 1300 }, { "x": 740, "y": 1262 }],
+        [{ "x": 800, "y": 1330 }, { "x": 780, "y": 1370 }],
+        [{ "x": 690, "y": 1400 }, { "x": 680, "y": 1430 }, { "x": 730, "y": 1400 }, { "x": 764, "y": 1398 }]
+      ]
+    }
+  }
+}
