@@ -3,7 +3,8 @@
  * - 'missed' point: is it now inside a detected piece / patch? If not, why (score, mask, specks)?
  * - 'not_a_piece': is the region still detected as a piece / patch?
  * - 'merged': is the region now split into several regions?
- * - 'bad_outline': how does the current outline compare (IoU, shape confidence)?
+ * - 'bad_outline': how does the current outline compare (IoU, shape confidence)? With the review's
+ *   points of the pieces in the marked area: is every piece whole in one region (piecesWhole)?
  * - 'wrong_place': is the user's correct cell now the top-1 placement?
  * - confirmed placements: still top-1?
  * - box photo: corner error of the current detectBox against the user's quad.
@@ -123,6 +124,37 @@ export function scoreObjects(objects: ReviewObject[], regions: RasterRegion[], a
     regions: shown.length,
     real: shown.filter((r) => perRegion.has(r)).length,
   };
+}
+
+/**
+ * Judge regions against the by-eye points of the pieces in a marked area (review `pieces`): every
+ * piece whole in one piece / patch region, no region with points of two pieces, except one patch
+ * region holding exactly one of the `assembled` groups (indices into `pieces`).
+ */
+export function piecesWhole(pieces: Point[][], assembled: number[][], regions: RasterRegion[]): { ok: boolean; now: string; ids: number[] } {
+  const visible = regions.filter((r) => r.region.kind !== 'unknown');
+  const problems: string[] = [];
+  const holder: (RasterRegion | undefined)[] = [];
+  const byRegion = new Map<RasterRegion, Set<number>>();
+  pieces.forEach((pts, k) => {
+    const hits = pts.map((p) => visible.find((r) => containsPoint(r, p)));
+    const found = [...new Set(hits.filter((h): h is RasterRegion => !!h))];
+    for (const h of found) byRegion.set(h, (byRegion.get(h) ?? new Set()).add(k));
+    if (hits.some((h) => !h)) problems.push(`piece ${k + 1}: ${hits.filter((h) => !h).length} of ${pts.length} points in no region`);
+    if (found.length > 1) problems.push(`piece ${k + 1} cut into #${found.map((r) => r.id).join(',#')}`);
+    holder.push(found.length === 1 && !hits.some((h) => !h) ? found[0] : undefined);
+  });
+  for (const [r, ks] of byRegion) {
+    if (ks.size < 2) continue;
+    const group = assembled.some((g) => g.length === ks.size && g.every((k) => ks.has(k)));
+    const names = [...ks].map((k) => k + 1).join(', ');
+    if (!group) problems.push(`#${r.id} holds pieces ${names}, not one assembled group`);
+    else if (r.region.kind !== 'patch') problems.push(`#${r.id} holds the assembled pieces ${names} but is a ${r.region.kind}`);
+  }
+  const ids = [...byRegion.keys()].map((r) => r.id);
+  if (problems.length > 0) return { ok: false, now: problems.join('; '), ids };
+  const now = [...byRegion].map(([r, ks]) => `#${r.id} ${r.region.kind}: ${ks.size > 1 ? 'pieces' : 'piece'} ${[...ks].map((k) => k + 1).join(', ')}`).join('; ') + ' (each whole)';
+  return { ok: true, now, ids };
 }
 
 export interface FeedbackReplay {
@@ -357,6 +389,16 @@ export function replayFeedback(bundle: FeedbackBundle, name: string, opts: Repla
       out.marks.push({ index, mark, at, original: origText, now: nowText, fixed: split, verdict: split ? 'SPLIT' : 'STILL MERGED', why: split || parts.length === 0 ? undefined : diagText(parts[0].r.id), currentIds: parts.map((o) => o.r.id) });
       return;
     }
+    const truth = opts.review?.marks[String(index)];
+    if (mark.kind === 'bad_outline' && truth?.pieces?.length) {
+      // The review says what the area really holds: judged against it.
+      const j = piecesWhole(truth.pieces, truth.assembled ?? [], curR);
+      out.marks.push({
+        index, mark, at, original: origText, now: j.now, fixed: j.ok, verdict: j.ok ? 'FIXED' : 'STILL WRONG',
+        why: j.ok ? undefined : j.ids.map((id) => `#${id}: ${diagText(id)}`).join('; '), currentIds: j.ids,
+      });
+      return;
+    }
     if (mark.kind === 'bad_outline') {
       const c = correspondent(orig, curR, 0.3);
       if (!c) {
@@ -462,7 +504,8 @@ export type FeedbackMetrics = Record<string, number>;
 
 /**
  * Per-file metrics (rates 0..1; keys without any applicable mark are left out so they are neither
- * gated nor averaged): missedFound, falseRemoved, mergedSplit, wrongFixed, placementsTop1, boxError.
+ * gated nor averaged): missedFound, falseRemoved, mergedSplit, outlineFixed (bad_outline marks with
+ * the review's piece points), wrongFixed, placementsTop1, boxError.
  * With a review only marks reviewed 'ok' count; mergedExact is the share of merged marks with a
  * reviewed part count that now come out as exactly that many regions. With an answer key:
  * objectRecall (objects found), objectClean (found alone in their region) and objectPrecision
@@ -478,6 +521,8 @@ export function feedbackMetrics(r: FeedbackReplay): FeedbackMetrics {
   rate('missedFound', 'missed');
   rate('falseRemoved', 'not_a_piece');
   rate('mergedSplit', 'merged');
+  // (Only bad_outline marks whose review says what the area holds are judged.)
+  rate('outlineFixed', 'bad_outline');
   const exact = r.marks.filter((j) => j.mark.kind === 'merged' && counts(j) && j.review?.parts);
   if (exact.length > 0) m.mergedExact = exact.filter((j) => j.currentIds.length === j.review!.parts).length / exact.length;
   rate('wrongFixed', 'wrong_place');

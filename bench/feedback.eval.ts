@@ -6,6 +6,8 @@
  *   falseRemoved    'not_a_piece' regions no longer detected as piece / patch
  *   mergedSplit     'merged' regions now split into several regions
  *   mergedExact     'merged' regions now split into exactly the reviewed number of parts
+ *   outlineFixed    'bad_outline' marks whose review lists the pieces there: each piece now whole in
+ *                   one region (an assembled group: one patch, or one region per piece)
  *   objectRecall    answer-key objects (review.objects) inside a piece / patch region
  *   objectClean     answer-key objects alone in their region (not merged with another)
  *   objectPrecision piece / patch regions holding an answer-key object (the rest are false)
@@ -35,7 +37,7 @@ import { compareToBaseline, confusionTable, report, saveBaselineSuite, tallySide
 
 const DIR = resolve(REPO_ROOT, 'test-corpus/feedback');
 const files = existsSync(DIR) ? readdirSync(DIR).filter((f) => f.toLowerCase().endsWith('.json') && !isReviewFile(f)).sort() : [];
-const COLUMNS = ['items', 'regions', 'missedFound', 'falseRemoved', 'mergedSplit', 'mergedExact', 'objectRecall', 'objectClean', 'objectPrecision', 'wrongFixed', 'placementsTop1', 'boxError', 'ms'];
+const COLUMNS = ['items', 'regions', 'missedFound', 'falseRemoved', 'mergedSplit', 'mergedExact', 'outlineFixed', 'objectRecall', 'objectClean', 'objectPrecision', 'wrongFixed', 'placementsTop1', 'boxError', 'ms'];
 const results: Record<string, MetricRecord> = {};
 const confusion: SideConfusion = {};
 

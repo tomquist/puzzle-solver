@@ -26,7 +26,10 @@ group counts as one). With a review only 'ok' marks count in the benchmark; the 
 unchanged. For photos where every piece can be told apart, the review also lists one point per
 loose piece or assembled group (`objects`), checked by eye on close-ups, never copied from a
 result: an answer key that also catches mistakes nobody marked (objectRecall, objectClean,
-objectPrecision).
+objectPrecision). A 'bad_outline' mark is judged when its review lists the pieces the marked area
+really holds (`pieces`: a few by-eye points spread over each piece, `assembled`: which of them form
+an assembled group): fixed when each piece lies whole in one region and only an assembled group
+shares one, as a patch (outlineFixed).
 
 Feedback files contain the user's photos – only commit files you are allowed to publish. The
 puzzle picture and the box photo show the publisher's (usually copyrighted) artwork: strip them

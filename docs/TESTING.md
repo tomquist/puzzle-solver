@@ -99,7 +99,9 @@ replayed by `npm run feedback:inspect` and the benchmark. The user's marks are i
 truth: every mark is checked by eye first and the verdicts go into `<file>.review.json`
 (test-corpus/feedback/README.md). Where the pieces can be told apart, the review also holds an
 answer key: one by-eye point per piece or assembled group (optionally for part of the photo). It
-catches mistakes nobody marked, such as a regression that drops pieces on an easy photo.
+catches mistakes nobody marked, such as a regression that drops pieces on an easy photo. A wrong
+outline is judged against by-eye points of the pieces the reviewer found in it (and which of them
+are assembled): each piece whole in one region, only an assembled group sharing one, as a patch.
 Freely licensed table photos of other puzzles (`feedback/flickr-*.json`, test-corpus/CREDITS.md)
 are wrapped into the same format with `npm run feedback:from-photo` and carry only an answer key:
 stress tests for other tables, motifs, oblique views and small pieces.
