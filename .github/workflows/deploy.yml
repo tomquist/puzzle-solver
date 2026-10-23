@@ -44,13 +44,36 @@ jobs:
         with:
           path: dist
 
+  # The accuracy benchmark (`npm run bench` locally) as parallel jobs, each running some of the
+  # bench files (balanced by their run times; docs/TESTING.md). The placed-cell bench's three
+  # shards only record here; bench-placed-gate gates them together.
   bench:
-    name: Accuracy benchmark
+    name: Accuracy benchmark (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Chromium and its system libraries come with the image (see e2e).
     container:
       image: mcr.microsoft.com/playwright:v1.56.1-noble
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: placed-1
+            files: bench/placed.eval.ts
+          - name: placed-2
+            files: bench/placed-2.eval.ts
+          - name: placed-3
+            files: bench/placed-3.eval.ts
+          - name: scan
+            files: bench/scan.eval.ts
+          - name: grid-sides
+            files: bench/grid.eval.ts bench/sides.eval.ts
+          # private, corpus and puzzlemap skip without their (local) data.
+          - name: feedback-box
+            files: bench/feedback.eval.ts bench/box.eval.ts bench/private.eval.ts bench/corpus.eval.ts bench/puzzlemap
+    env:
+      # Shard records of one workflow run (bench/shards.ts).
+      BENCH_RUN_ID: ${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
 
@@ -63,15 +86,58 @@ jobs:
         run: npm ci
 
       - name: Run benchmark (gated by bench/baseline.json)
-        run: npm run bench
+        run: npm run bench -- ${{ matrix.files }}
 
       - name: Upload benchmark report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bench-report
+          name: bench-report-${{ matrix.name }}
           path: .debug/bench/
           if-no-files-found: ignore
+          overwrite: true
+
+  # The placed-cell gate on the averages over all scenes, as `npm run bench` gates them in its last
+  # shard: from the records the three placed jobs uploaded.
+  bench-placed-gate:
+    name: Accuracy benchmark (placed-cell gate)
+    needs: bench
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BENCH_RUN_ID: ${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download the placed shards' records
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bench-report-placed-*
+          path: .debug/bench/
+          merge-multiple: true
+
+      - name: Gate the placed-cell bench
+        run: npm run bench:placed-gate
+
+      - name: Upload the placed-cell report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-report-placed-gate
+          path: |
+            .debug/bench/placed.md
+            .debug/bench/placed.json
+          if-no-files-found: ignore
+          overwrite: true
 
   e2e:
     name: Browser end-to-end tests
@@ -109,7 +175,7 @@ jobs:
   deploy:
     name: Deploy to GitHub Pages
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    needs: [build, bench, e2e]
+    needs: [build, bench, bench-placed-gate, e2e]
     runs-on: ubuntu-latest
     permissions:
       pages: write
