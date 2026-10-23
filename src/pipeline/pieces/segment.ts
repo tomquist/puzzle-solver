@@ -671,14 +671,84 @@ function refill(mask: Mask, bbox: Rect, cluster: Candidate, opened: Mask): Mask 
 }
 
 /**
+ * Maximum over (2r+1)² squares (clamped at the edges) of a w×h image, in O(w·h) whatever the radius:
+ * van Herk / Gil-Werman, the running maxima from the start and from the end of blocks of 2r+1
+ * samples, first along the rows, then along the columns (whole rows at a time).
+ */
+function maxFilter(src: Float32Array, w: number, h: number, r: number): Float32Array {
+  const k = 2 * r + 1;
+  const g = new Float32Array(w * h), f = new Float32Array(w * h), rows = new Float32Array(w * h), out = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const o = y * w;
+    for (let b = o; b < o + w; b += k) {
+      const e = Math.min(o + w, b + k) - 1;
+      g[b] = src[b];
+      for (let i = b + 1; i <= e; i++) g[i] = src[i] > g[i - 1] ? src[i] : g[i - 1];
+      f[e] = src[e];
+      for (let i = e - 1; i >= b; i--) f[i] = src[i] > f[i + 1] ? src[i] : f[i + 1];
+    }
+    for (let x = 0; x < w; x++) {
+      const a = f[o + (x > r ? x - r : 0)], c = g[o + (x + r < w ? x + r : w - 1)];
+      rows[o + x] = a > c ? a : c;
+    }
+  }
+  for (let b = 0; b < h; b += k) {
+    const e = Math.min(h, b + k) - 1;
+    g.set(rows.subarray(b * w, (b + 1) * w), b * w);
+    for (let i = (b + 1) * w; i < (e + 1) * w; i++) g[i] = rows[i] > g[i - w] ? rows[i] : g[i - w];
+    f.set(rows.subarray(e * w, (e + 1) * w), e * w);
+    for (let i = e * w - 1; i >= b * w; i--) f[i] = rows[i] > f[i + w] ? rows[i] : f[i + w];
+  }
+  for (let y = 0; y < h; y++) {
+    const a = (y > r ? y - r : 0) * w, c = (y + r < h ? y + r : h - 1) * w, o = y * w;
+    for (let x = 0; x < w; x++) out[o + x] = f[a + x] > g[c + x] ? f[a + x] : g[c + x];
+  }
+  return out;
+}
+
+/** Side (px) of the tiles in which black top-hats are computed and kept per photo (blackTopHat). */
+const TOP_HAT_TILE = 128;
+/** Black top-hat tiles per photo and radius (blackTopHat). */
+const topHatTiles = new WeakMap<RGBAImage, Map<number, (Float32Array | undefined)[]>>();
+
+/**
  * Black top-hat of the luminance over `rect` ((2r+1)² closing minus luminance, gray levels): high on
  * thin dark valleys such as the crease between two touching pieces (cardboard edge, shadow), low on
- * the step edges of a piece's print.
+ * the step edges of a piece's print. Computed in tiles of the photo as they are first needed and
+ * kept with the photo: the clusters asked about overlap (a cluster at several neck radii, its parts,
+ * its edges).
  */
 function blackTopHat(img: RGBAImage, rect: Rect, r: number): Float32Array {
+  const T = TOP_HAT_TILE, cols = Math.ceil(img.width / T);
+  let byRadius = topHatTiles.get(img);
+  if (!byRadius) topHatTiles.set(img, (byRadius = new Map()));
+  let tiles = byRadius.get(r);
+  if (!tiles) byRadius.set(r, (tiles = []));
+  const { x: x0, y: y0, width: w, height: h } = rect;
+  const out = new Float32Array(w * h);
+  for (let ty = Math.floor(y0 / T); ty <= Math.floor((y0 + h - 1) / T); ty++) {
+    for (let tx = Math.floor(x0 / T); tx <= Math.floor((x0 + w - 1) / T); tx++) {
+      const tw = Math.min(T, img.width - tx * T), th = Math.min(T, img.height - ty * T);
+      const tile = (tiles[ty * cols + tx] ??= topHatTile(img, { x: tx * T, y: ty * T, width: tw, height: th }, r));
+      // The part of the tile inside `rect`.
+      const X0 = Math.max(x0, tx * T), X1 = Math.min(x0 + w, tx * T + tw);
+      for (let y = Math.max(y0, ty * T); y < Math.min(y0 + h, ty * T + th); y++) {
+        out.set(tile.subarray((y - ty * T) * tw + X0 - tx * T, (y - ty * T) * tw + X1 - tx * T), (y - y0) * w + X0 - x0);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The black top-hat (blackTopHat) over `rect`, from the photo around it (the edge pixels of the photo
+ * repeated beyond it).
+ */
+function topHatTile(img: RGBAImage, rect: Rect, r: number): Float32Array {
   const { width: W, height: H, data } = img;
   const { x: x0, y: y0, width: w, height: h } = rect;
-  const pad = r + 1, pw = w + 2 * pad, ph = h + 2 * pad;
+  // (The closing at a pixel takes in every pixel within 2r.)
+  const pad = 2 * r + 1, pw = w + 2 * pad, ph = h + 2 * pad;
   const Y = new Float32Array(pw * ph);
   for (let y = 0; y < ph; y++) {
     const yy = Math.min(H - 1, Math.max(0, y + y0 - pad));
@@ -687,26 +757,13 @@ function blackTopHat(img: RGBAImage, rect: Rect, r: number): Float32Array {
       Y[y * pw + x] = 0.299 * data[o] + 0.587 * data[o + 1] + 0.114 * data[o + 2];
     }
   }
-  // Closing = min filter of the max filter (r-px radius squares, separable).
-  const filt = (src: Float32Array, isMax: boolean): Float32Array => {
-    const tmp = new Float32Array(pw * ph), out = new Float32Array(pw * ph);
-    for (let y = 0; y < ph; y++) {
-      for (let x = 0; x < pw; x++) {
-        let v = src[y * pw + x];
-        for (let k = Math.max(0, x - r); k <= Math.min(pw - 1, x + r); k++) v = isMax ? Math.max(v, src[y * pw + k]) : Math.min(v, src[y * pw + k]);
-        tmp[y * pw + x] = v;
-      }
-    }
-    for (let y = 0; y < ph; y++) {
-      for (let x = 0; x < pw; x++) {
-        let v = tmp[y * pw + x];
-        for (let k = Math.max(0, y - r); k <= Math.min(ph - 1, y + r); k++) v = isMax ? Math.max(v, tmp[k * pw + x]) : Math.min(v, tmp[k * pw + x]);
-        out[y * pw + x] = v;
-      }
-    }
-    return out;
+  // Closing = min filter of the max filter (r-px radius squares, separable; a min filter is the max
+  // filter of the negated values).
+  const negate = (a: Float32Array) => {
+    for (let i = 0; i < a.length; i++) a[i] = -a[i];
+    return a;
   };
-  const closed = filt(filt(Y, true), false);
+  const closed = negate(maxFilter(negate(maxFilter(Y, pw, ph, r)), pw, ph, r));
   const out = new Float32Array(w * h);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) out[y * w + x] = closed[(y + pad) * pw + x + pad] - Y[(y + pad) * pw + x + pad];
   return out;
@@ -2385,6 +2442,8 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
   }
   if (refArea > 0) cands = mergeFragments(cands, refAreaAt, refBody, W, H);
   lap('split');
+  // (The crease maps of the split are no longer needed.)
+  topHatTiles.delete(scored);
   if (diag) diag.blockiness = blockiness;
   // Soft cast shadows around dark pieces in close-ups, then (JPEGs) colour bled into the table.
   cands = cands.map((c) => {
