@@ -13,6 +13,14 @@
  * when the user picked the wrong one for a real problem (e.g. "outline off" on glare with no piece
  * inside: not_a_piece); the mark is then judged as that kind (region marks only).
  *
+ * `pieces` (bad_outline marks): what the marked area really holds, as by-eye points spread over
+ * each piece (photo pixels, well inside: body, knobs, tabs, so that a cut through a piece leaves
+ * points on both sides), and `assembled`: the groups of those pieces (0-based indices) that are
+ * assembled. With it the mark is judged: fixed when every piece lies whole in one piece / patch
+ * region (all its points in the same region) and no region holds points of two pieces, except one
+ * patch region holding exactly one assembled group (an assembled group stays one region; split
+ * exactly along its seams, one region per piece, is right as well).
+ *
  * `objects` (optional) is a complete answer key for the photo: one point (photo pixels, well inside)
  * for every loose piece and every assembled group, found by checking the photo by eye, not taken
  * from any result. It scores the whole result, including mistakes nobody marked. `unsure` objects
@@ -29,6 +37,10 @@ export interface MarkReview {
   parts?: number;
   /** The kind the mark should have had (region marks only); it is judged as this kind. */
   kind?: 'not_a_piece' | 'merged' | 'bad_outline' | 'wrong_place';
+  /** bad_outline marks: points of each piece the marked area holds (see above). */
+  pieces?: { x: number; y: number }[][];
+  /** Groups of `pieces` (0-based indices) that are assembled: one patch region per group is right too. */
+  assembled?: number[][];
   note?: string;
 }
 
@@ -62,6 +74,8 @@ export function readReview(feedbackPath: string): FeedbackReview | undefined {
   for (const [key, m] of Object.entries(review.marks ?? {})) {
     if (!/^\d+$/.test(key) || !['ok', 'wrong', 'unsure'].includes(m.verdict)) throw new Error(`${path}: bad review entry "${key}"`);
     if (m.kind !== undefined && !['not_a_piece', 'merged', 'bad_outline', 'wrong_place'].includes(m.kind)) throw new Error(`${path}: bad kind in review entry "${key}"`);
+    if (m.assembled !== undefined && (!Array.isArray(m.assembled) || m.assembled.some((g) => !Array.isArray(g) || g.some((k) => !Number.isInteger(k) || k < 0 || k >= (m.pieces?.length ?? 0))))) throw new Error(`${path}: bad assembled groups in review entry "${key}"`);
+    if (m.pieces !== undefined && (!Array.isArray(m.pieces) || m.pieces.some((ps) => !Array.isArray(ps) || ps.length === 0 || ps.some((q) => !Number.isFinite(q?.x) || !Number.isFinite(q?.y))))) throw new Error(`${path}: bad pieces in review entry "${key}"`);
   }
   for (const o of review.objects ?? []) if (!Number.isFinite(o.x) || !Number.isFinite(o.y)) throw new Error(`${path}: bad object ${JSON.stringify(o)}`);
   return review;

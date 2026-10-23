@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { polygonSignedArea } from '../../cv/geometry';
-import { createMask, createRGBA, type RGBAImage } from '../../cv/image';
+import { createGray, createMask, createRGBA, maskArea, type RGBAImage } from '../../cv/image';
 import { fillPolygon } from '../../cv/raster';
 import { resizeRGBA } from '../../cv/resize';
 import { DEBUG_IMAGES, loadTestAsset, savePng } from '../../testing/nodeImageIO';
 import { generateJigsaw, renderPiecesPhoto, Rng, type RGB, type RenderOptions } from '../../testing/synth';
-import { segmentPieces } from './segment';
+import { dropFarWeak, segmentPieces } from './segment';
 import type { SegmentDiagnostics } from './types';
 import { cropPhoto, drawOverlay, evaluateScene, makeTouching, maskIoU, type SceneEval } from './testkit';
 
@@ -586,5 +586,38 @@ describe('segmentPieces on a full-size photo', () => {
     const ev = evaluateScene(seg, truth, cut, 0.85);
     expect(ev.pieces.filter((p) => p.detected).length).toBe(40);
     expect(ev.pieces.filter((p) => (p.cornerErrorRel ?? 1) <= 0.05).length).toBeGreaterThanOrEqual(38);
+  });
+});
+
+describe('weak foreground far from strong pixels', () => {
+  /**
+   * A 60 px strong square (score 255) and weak pixels (score 100) on a 300×200 photo, the whole as
+   * one region of 1.5–2 pieces of 60×60 px: `weak(x, y)` says where the weak pixels lie. Returns the
+   * areas of the parts left when the far weak ones are dropped (high 200, reach 6 px), null when
+   * nothing changed.
+   */
+  const run = (weak: (x: number, y: number) => boolean) => {
+    const W = 300, H = 200;
+    const score = createGray(W, H), mask = createMask(W, H), none = createMask(W, H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const strong = x >= 40 && x < 100 && y >= 70 && y < 130;
+        if (!strong && !weak(x, y)) continue;
+        mask.data[y * W + x] = 1;
+        score.data[y * W + x] = strong ? 255 : 100;
+      }
+    }
+    const parts = dropFarWeak({ mask, bbox: { x: 0, y: 0, width: W, height: H }, area: maskArea(mask) }, score, 200, none, 6, 50, 3600, 20, W, H, true);
+    return parts?.map((p) => p.area) ?? null;
+  };
+
+  it('drops a weak area hanging off a piece by a short stretch, with its foot', () => {
+    // A weak disc (shaded table) joined to the square's right side by a 7 px strip.
+    expect(run((x, y) => Math.hypot(x - 160, y - 100) <= 30 || (x >= 100 && x < 135 && Math.abs(y - 100) <= 3))).toEqual([3600]);
+  });
+
+  it('keeps a weak area lying along the strong part of a piece', () => {
+    // A weak block below the square sharing its whole lower side (the piece's own pale print).
+    expect(run((x, y) => x >= 40 && x < 100 && y >= 130 && y < 165)).toBeNull();
   });
 });

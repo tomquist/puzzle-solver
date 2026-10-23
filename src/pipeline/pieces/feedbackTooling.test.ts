@@ -10,7 +10,9 @@ import { PNG } from 'pngjs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { serializeFeedback, type FeedbackBundle } from '../../feedback/format';
 import { writeInspection } from '../../../scripts/feedback/inspect';
-import { evaluateFeedbackFile, feedbackMetrics, replayFeedback, type FeedbackMetrics, type FeedbackReplay } from '../../../scripts/feedback/replay';
+import { evaluateFeedbackFile, feedbackMetrics, piecesWhole, replayFeedback, type FeedbackMetrics, type FeedbackReplay } from '../../../scripts/feedback/replay';
+import { rasterizeRegions } from '../../../scripts/feedback/regions';
+import type { DetectedRegion } from '../../model/types';
 import { readReview, reviewPath, type FeedbackReview } from '../../../scripts/feedback/review';
 import { makeSyntheticFeedback } from '../../../scripts/feedback/synthetic';
 
@@ -87,6 +89,24 @@ describe('feedback tooling', () => {
     expect(summary).toMatch(/STILL MISSED/);
     expect(summary).toMatch(/placements: top-1 now 3\/3/);
     expect(summary).toMatch(/box: corner error/);
+  });
+
+  it('judges a wrong outline against the pieces the review found in it', () => {
+    // Two assembled pieces side by side (x 0–100 and 100–200) and a loose one (x 300–400).
+    const rect = (id: number, kind: DetectedRegion['kind'], x0: number, x1: number): DetectedRegion => ({
+      id, kind, bbox: { x: x0, y: 0, width: x1 - x0, height: 100 }, contour: [{ x: x0, y: 0 }, { x: x1, y: 0 }, { x: x1, y: 100 }, { x: x0, y: 100 }],
+      area: (x1 - x0) * 100, touchesBorder: false, orientationDeg: 0, issues: [],
+    });
+    const pts = (x0: number) => [{ x: x0 + 20, y: 20 }, { x: x0 + 80, y: 50 }, { x: x0 + 20, y: 80 }];
+    const pieces = [pts(0), pts(100), pts(300)], pair = [[0, 1]];
+    const judge = (...rs: DetectedRegion[]) => piecesWhole(pieces, pair, rasterizeRegions(rs)).ok;
+    // The pair as one patch, or one region per piece: right.
+    expect(judge(rect(1, 'patch', 0, 200), rect(2, 'piece', 300, 400))).toBe(true);
+    expect(judge(rect(1, 'piece', 0, 100), rect(2, 'piece', 100, 200), rect(3, 'piece', 300, 400))).toBe(true);
+    // A cut through a piece, the pair as a single piece, the loose piece merged: wrong.
+    expect(judge(rect(1, 'piece', 0, 150), rect(2, 'piece', 150, 200), rect(3, 'piece', 300, 400))).toBe(false);
+    expect(judge(rect(1, 'piece', 0, 200), rect(2, 'piece', 300, 400))).toBe(false);
+    expect(judge(rect(1, 'patch', 0, 400))).toBe(false);
   });
 
   it('replays segmentation only when the file has no reference picture', { timeout: 60_000 }, () => {

@@ -6,13 +6,14 @@
 import { describe, expect, it } from 'vitest';
 import { traceOuterContour } from '../../cv/contour';
 import type { Point } from '../../cv/geometry';
-import { cloneRGBA, createMask, type Mask, type RGBAImage } from '../../cv/image';
-import { dilate } from '../../cv/morphology';
+import { cloneRGBA, createMask, createRGBA, type Mask, type RGBAImage } from '../../cv/image';
+import { dilate, erode } from '../../cv/morphology';
 import { fillPolygon } from '../../cv/raster';
 import { resizeRGBA } from '../../cv/resize';
 import { DEBUG_IMAGES, loadTestAsset, savePng } from '../../testing/nodeImageIO';
 import { generateJigsaw, renderPiecesPhoto, type PieceTruth, type RGB } from '../../testing/synth';
-import { outerAngle, segmentPieces } from './segment';
+import type { SideKind } from '../../model/types';
+import { cutSupport, outerAngle, PAIR_KEY, segmentPieces } from './segment';
 import { drawOverlay } from './testkit';
 
 const W = 1400, H = 1000;
@@ -254,5 +255,164 @@ describe('splitting always ends', () => {
       }
     }
     expect(seg.regions.find((r) => r.region.id === id)!.region.bbox.width).toBeLessThan(140);
+  });
+});
+
+/**
+ * A drawn piece: side kinds top, right, bottom, left, where along each side its knob sits (default
+ * the middle), and the knobs' size: discs of radius `knob` (default 0.16 body sizes) centred
+ * `offset` (default 0.15) outside a side; blanks are the same disc cut in.
+ */
+interface Drawn {
+  sides: [SideKind, SideKind, SideKind, SideKind];
+  along?: [number, number, number, number];
+  knob?: number;
+  offset?: number;
+}
+
+/** Whether body point (u, v) (body units, the body is the unit square) lies in a drawn piece. */
+function inPiece(u: number, v: number, piece: Drawn): boolean {
+  const a = piece.along ?? [0.5, 0.5, 0.5, 0.5], r = piece.knob ?? 0.16, off = piece.offset ?? 0.15;
+  const centre = (i: number, out: number): Point =>
+    [{ x: a[0], y: -out }, { x: 1 + out, y: a[1] }, { x: a[2], y: 1 + out }, { x: -out, y: a[3] }][i];
+  const near = (c: Point) => (u - c.x) ** 2 + (v - c.y) ** 2 <= r ** 2;
+  if (piece.sides.some((s, i) => s === 'blank' && near(centre(i, -off)))) return false;
+  if (u >= 0 && u <= 1 && v >= 0 && v <= 1) return true;
+  return piece.sides.some((s, i) => s === 'tab' && near(centre(i, off)));
+}
+
+/**
+ * Flat-printed pieces drawn on a grey table: each item is a piece or an assembled group of pieces
+ * (body offsets in body units), turned and placed on its own; every piece is filled with one colour
+ * and outlined by a 2 px dark rim, so that the pieces of a group meet along a dark seam.
+ */
+function drawnScene(items: { pieces: (Drawn & { at: Point })[]; centre: Point; deg: number; colour?: RGB; apart?: number }[], body: number) {
+  const photo = createRGBA(W, H);
+  let seed = 11;
+  const uniform = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const noise = () => (uniform() + uniform() - 1) * 4;
+  for (let i = 0; i < W * H; i++) photo.data.set([150 + noise(), 152 + noise(), 156 + noise(), 255], i * 4);
+  /** Photo position of body point (u, v) of piece p of item k. */
+  const toPhoto = (k: number, p: number, u: number, v: number): Point => {
+    const it = items[k], at = it.pieces[p].at, t = (it.deg * Math.PI) / 180;
+    const x = (u + at.x) * body, y = (v + at.y) * body;
+    return { x: it.centre.x + x * Math.cos(t) - y * Math.sin(t), y: it.centre.y + x * Math.sin(t) + y * Math.cos(t) };
+  };
+  items.forEach((it) => {
+    const t = (it.deg * Math.PI) / 180;
+    const owner = new Int32Array(W * H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const dx = (x - it.centre.x) / body, dy = (y - it.centre.y) / body;
+        if (dx * dx + dy * dy > 9) continue;
+        const bu = dx * Math.cos(t) + dy * Math.sin(t), bv = -dx * Math.sin(t) + dy * Math.cos(t);
+        // The first piece claiming a pixel owns it (a tab lies in its partner's blank).
+        const p = it.pieces.findIndex((q) => inPiece(bu - q.at.x, bv - q.at.y, q));
+        if (p >= 0) owner[y * W + x] = p + 1;
+      }
+    }
+    it.pieces.forEach((_, p) => {
+      const m = createMask(W, H);
+      for (let i = 0; i < W * H; i++) m.data[i] = owner[i] === p + 1 ? 1 : 0;
+      // A thin line of table (and shadow) around a loose piece lying against others.
+      if (it.apart) {
+        const ring = dilate(m, it.apart);
+        for (let i = 0; i < W * H; i++) if (ring.data[i] && !m.data[i]) photo.data.set([150 + noise(), 152 + noise(), 156 + noise(), 255], i * 4);
+      }
+      const inner = erode(m, 2);
+      for (let i = 0; i < W * H; i++) {
+        if (!m.data[i]) continue;
+        const c = inner.data[i] ? it.colour ?? [205, 140, 62] : [70, 48, 30];
+        photo.data.set([c[0] + noise(), c[1] + noise(), c[2] + noise(), 255], i * 4);
+      }
+    });
+  });
+  /** Photo positions of body points `uv` of piece p of item k. */
+  const points = (k: number, p: number, uv: number[][]): Point[] => uv.map(([u, v]) => toPhoto(k, p, u, v));
+  return { photo, points };
+}
+
+const filledMask = (w: number, h: number): Mask => ({ width: w, height: h, data: new Uint8Array(w * h).fill(1) });
+
+describe('cuts follow seams', () => {
+  it('keeps an assembled pair whole instead of cutting a piece at its waist', () => {
+    // The upper piece has big knobs at top and bottom and deep blanks on both sides, low on them:
+    // its waist between the blanks (0.32 bodies) is narrower than the side it shares with the lower
+    // piece, its partner in an assembled pair, so the narrowest neck of the pair runs through its
+    // even print, where no seam is (cut there before: a 0.6 and a 1.2 piece region).
+    const waisted: Drawn = { sides: ['tab', 'blank', 'tab', 'blank'], along: [0.5, 0.65, 0.5, 0.65], knob: 0.24, offset: 0.1 };
+    const lower: Drawn = { sides: ['blank', 'tab', 'flat', 'tab'] };
+    const singles: Drawn[] = [waisted, lower, { sides: ['tab', 'flat', 'blank', 'tab'] }, { sides: ['blank', 'blank', 'tab', 'flat'] }, { sides: ['flat', 'tab', 'tab', 'blank'] }];
+    const { photo, points } = drawnScene([
+      { pieces: [{ ...waisted, at: { x: -0.5, y: -1 } }, { ...lower, at: { x: -0.5, y: 0 } }], centre: { x: 650, y: 500 }, deg: 40 },
+      ...singles.map((d, j) => ({ pieces: [{ ...d, at: { x: -0.5, y: -0.5 } }], centre: { x: 150 + 270 * j, y: j % 2 ? 160 : 840 }, deg: 25 * j })),
+    ], 120);
+    const seg = segmentPieces(photo);
+    debug('waist', photo, seg, []);
+    // Each piece of the pair lies whole in one region; one region for both is an assembled patch.
+    // (Points clear of the blanks: above and below the upper piece's waist, all over the lower one.)
+    const up = new Set(points(0, 0, [[0.3, 0.25], [0.7, 0.25], [0.5, 0.55], [0.5, 0.9]]).map((p) => regionAt(seg, p)));
+    const down = new Set(points(0, 1, [[0.25, 0.3], [0.75, 0.3], [0.25, 0.75], [0.75, 0.75]]).map((p) => regionAt(seg, p)));
+    expect([...up], 'upper piece in one region').toHaveLength(1);
+    expect([...down], 'lower piece in one region').toHaveLength(1);
+    const [u] = up, [l] = down;
+    expect(u).toBeDefined();
+    if (u === l) expect(seg.regions.find((r) => r.region.id === u)!.region.kind).toBe('patch');
+    singles.forEach((_, j) => {
+      const ids = new Set(points(j + 1, 0, [[0.5, 0.5], [0.35, 0.3], [0.65, 0.3]]).map((p) => regionAt(seg, p)));
+      expect([...ids], `single ${j}`).toHaveLength(1);
+      expect([...ids][0], `single ${j}`).toBeDefined();
+    });
+  });
+
+  it('separates a loose piece touching an assembled pair at the contact, not at a waist of the pair', () => {
+    // A yellow loose piece, turned 8°, lies with its lower right against the top knob and corner of
+    // an orange assembled pair, a thin line of table between them. The upper orange piece's narrow
+    // top went with the loose piece at the opening, so the narrowest neck ran through the upper
+    // piece's waist (cut there before: the loose piece with the top of the upper one).
+    const upper: Drawn = { sides: ['tab', 'blank', 'tab', 'blank'] };
+    const lower: Drawn = { sides: ['blank', 'tab', 'flat', 'tab'] };
+    const loose: Drawn = { sides: ['flat', 'blank', 'tab', 'tab'] };
+    const singles: Drawn[] = [upper, lower, { sides: ['tab', 'flat', 'blank', 'tab'] }, { sides: ['blank', 'blank', 'tab', 'flat'] }, { sides: ['flat', 'tab', 'tab', 'blank'] }];
+    const { photo, points } = drawnScene([
+      { pieces: [{ ...upper, at: { x: -0.5, y: -1 } }, { ...lower, at: { x: -0.5, y: 0 } }], centre: { x: 700, y: 560 }, deg: 0 },
+      { pieces: [{ ...loose, at: { x: -0.5, y: -0.5 } }], centre: { x: 625, y: 385 }, deg: 8, colour: [200, 178, 70], apart: 2 },
+      ...singles.map((d, j) => ({ pieces: [{ ...d, at: { x: -0.5, y: -0.5 } }], centre: { x: 150 + 270 * j, y: j % 2 ? 160 : 860 }, deg: 25 * j })),
+    ], 120);
+    const seg = segmentPieces(photo);
+    debug('loose-pair', photo, seg, []);
+    const kindOf = (id: number | undefined) => seg.regions.find((r) => r.region.id === id)?.region.kind;
+    const one = (pts: Point[]) => {
+      const ids = new Set(pts.map((p) => regionAt(seg, p)));
+      expect([...ids]).toHaveLength(1);
+      return [...ids][0];
+    };
+    const l = one(points(1, 0, [[0.3, 0.3], [0.6, 0.3], [0.5, 0.6], [0.3, 0.75]]));
+    const u = one(points(0, 0, [[0.3, 0.25], [0.7, 0.25], [0.5, 0.55], [0.3, 0.85]]));
+    const d = one(points(0, 1, [[0.25, 0.3], [0.75, 0.3], [0.25, 0.75], [0.75, 0.75]]));
+    expect(kindOf(l)).toBe('piece');
+    expect(u).not.toBe(l);
+    if (u === d) expect(kindOf(u)).toBe('patch');
+  });
+
+  it('finds a seam along a cut on the dark line between two pieces, none on a cut through one piece', () => {
+    // Two pieces of one colour side by side (x < 100 and x ≥ 100) meeting along a dark line; a cut
+    // along the line and one across the left piece (x = 50).
+    const w = 200, h = 120;
+    const img = createRGBA(w, h, [205, 140, 62, 255]);
+    for (let y = 0; y < h; y++) for (let x = 98; x < 102; x++) img.data.set([70, 48, 30, 255], (y * w + x) * 4);
+    const cluster = { mask: filledMask(w, h), bbox: { x: 0, y: 0, width: w, height: h } };
+    const labels = (at: number) => Int32Array.from({ length: w * h }, (_, i) => (i % w < at ? 1 : 2));
+    const along = cutSupport(cluster, labels(100), filledMask(w, h), img, 100).get(PAIR_KEY + 2)!;
+    const across = cutSupport(cluster, labels(50), filledMask(w, h), img, 100).get(PAIR_KEY + 2)!;
+    expect(along.n).toBeGreaterThan(50);
+    expect(along.seam / along.n).toBeGreaterThan(0.9);
+    expect(across.n).toBeGreaterThan(50);
+    expect(across.seam).toBe(0);
+    // Table showing between the pieces before closing is a seam as well.
+    const gap = filledMask(w, h);
+    for (let y = 0; y < h; y++) gap.data[y * w + 50] = 0;
+    const apart = cutSupport(cluster, labels(50), gap, img, 100).get(PAIR_KEY + 2)!;
+    expect(apart.seam / apart.n).toBeGreaterThan(0.9);
   });
 });

@@ -8,16 +8,17 @@
  * (no opening: the thin dark cardboard rim often is the only evidence of a piece whose print matches
  * the table, and filling the closed rim recovers it) → connected components → outline tracing and
  * shape analysis → peeling of glare halos and soft shadows → splitting of touching pieces at narrow
- * necks (loose pieces lying against a large patch peeled off at wider ones, with the table they
- * enclose opened) or along the edges between them (dark creases count as cuts only between pieces at
- * their own angles) → reassembly of fragments → outlines snapped to brightness edges in blocky
- * JPEGs → (option) graph-cut refinement of outlines in doubt, trimming halos the colour models
- * clearly take for table (refine.ts) → classification (piece / patch / fragment / clutter at the
- * photo border) → reading-order ids → quality.
+ * necks where a seam runs along the cut (loose pieces lying against a large patch peeled off at
+ * wider ones, with the table they enclose opened) or along the edges between them (dark creases
+ * count as cuts only between pieces at their own angles or cores apart along a seam) → reassembly
+ * of fragments → outlines snapped to brightness edges in blocky JPEGs → (option) graph-cut
+ * refinement of outlines in doubt, trimming halos the colour models clearly take for table
+ * (refine.ts) → classification (piece / patch / fragment / clutter at the photo border) →
+ * reading-order ids → quality.
  */
 import { componentMask, labelComponents, labelRuns, removeSmallComponents } from '../../cv/components';
 import { traceOuterContour } from '../../cv/contour';
-import { distanceTransform } from '../../cv/distance';
+import { distanceTransform, squaredDistanceTransform } from '../../cv/distance';
 import { gmmNegLogLikBest } from '../../cv/gmm';
 import { solveLinear, type Point } from '../../cv/geometry';
 import { cloneMask, createGray, createMask, cropMask, cropRGBA, maskArea, maskBounds, type GrayImage, type Mask, type RGBAImage, type Rect } from '../../cv/image';
@@ -301,14 +302,17 @@ const THIN_ELONGATION = 2.5;
 const WEAK_REACH = 0.2;
 /** Smallest strong area (piece areas) that anchors weak foreground around it. */
 const ANCHOR_MIN = 0.02;
+/** Share of a far weak area's outline along the rest of its region below which it hangs off it (dropFarWeak). */
+const HANGING_CONTACT = 0.2;
 
 /**
  * Keep a region's weak pixels (score below `high`, not added by the texture cue) only within
  * `reach` px of a strong area of at least `minAnchor` px; holes enclosed by what remains stay
- * filled. Returns the remaining
- * parts as candidates, or null when nothing changed.
+ * filled. `measured`: `refArea` comes from single pieces (only then is a region known to be a few
+ * pieces, see below). Returns the remaining parts as candidates, or null when nothing changed.
+ * Exported for tests.
  */
-function dropFarWeak(c: Candidate, score: GrayImage, high: number, texOnly: Mask, reach: number, minAnchor: number, refArea: number, minArea: number, W: number, H: number): Candidate[] | null {
+export function dropFarWeak(c: Pick<Candidate, 'mask' | 'bbox' | 'area'>, score: GrayImage, high: number, texOnly: Mask, reach: number, minAnchor: number, refArea: number, minArea: number, W: number, H: number, measured: boolean): Candidate[] | null {
   const r = Math.ceil(reach), pad = r + 1;
   const { width: w, height: h } = c.mask;
   const pw = w + 2 * pad, ph = h + 2 * pad;
@@ -347,24 +351,55 @@ function dropFarWeak(c: Candidate, score: GrayImage, high: number, texOnly: Mask
     if (m.data[i] && !filled.data[i]) gone.data[i] = 1;
   }
   // Only weak areas that are no part of a piece go: a band (much longer than wide), a large
-  // surface, or anything reaching the photo border (the floor beyond the table edge). A weak piece
-  // interior far from strong pixels stays.
+  // surface, anything reaching the photo border (the floor beyond the table edge), or (in a cluster
+  // of a few touching pieces, which the split takes apart) an area hanging off the region by a short
+  // stretch of its outline. A weak piece interior far from strong pixels stays.
   const body = Math.sqrt(refArea);
+  const fewPieces = measured && c.area >= 1.4 * refArea && c.area <= EDGE_RECUT_MAX_PIECES * refArea;
   const gc = labelComponents(gone, 8);
   dropped = 0;
+  let hang: Mask | null = null;
   for (const st of gc.stats) {
     const len = Math.max(st.bbox.width, st.bbox.height);
     const X0 = st.bbox.x + c.bbox.x - pad, Y0 = st.bbox.y + c.bbox.y - pad;
     const atBorder = X0 <= 0 || Y0 <= 0 || X0 + st.bbox.width >= W || Y0 + st.bbox.height >= H;
     const band = len >= 1.5 * body && st.area / len < 0.5 * body;
-    if (atBorder || band || st.area >= 2 * refArea) {
+    const { x: gx, y: gy, width: gw, height: gh } = st.bbox;
+    // Hanging off the region by a short stretch of its outline (the rest along the table): shaded
+    // table grown onto touching pieces, tying them together beyond any neck (a piece's own weak print
+    // lies along its strong rim; a weak area on its own, all table round, may be a pale piece).
+    let hanging = false;
+    if (fewPieces) {
+      let along = 0, open = 0;
+      for (let y = gy; y < gy + gh; y++) {
+        for (let x = gx; x < gx + gw; x++) {
+          const i = y * pw + x;
+          if (gc.labels[i] !== st.label) continue;
+          for (const j of [i - 1, i + 1, i - pw, i + pw]) {
+            if (gc.labels[j] === st.label) continue;
+            if (filled.data[j]) along++;
+            else open++;
+          }
+        }
+      }
+      hanging = along > 0 && along < HANGING_CONTACT * (along + open);
+    }
+    if (atBorder || band || hanging || st.area >= 2 * refArea) {
       dropped += st.area;
+      if (hanging) {
+        hang ??= createMask(pw, ph);
+        for (let y = gy; y < gy + gh; y++) for (let x = gx; x < gx + gw; x++) if (gc.labels[y * pw + x] === st.label) hang.data[y * pw + x] = 1;
+      }
       continue;
     }
-    const { x: gx, y: gy, width: gw, height: gh } = st.bbox;
     for (let y = gy; y < gy + gh; y++) for (let x = gx; x < gx + gw; x++) if (gc.labels[y * pw + x] === st.label) filled.data[y * pw + x] = 1;
   }
   if (dropped < 0.02 * c.area) return null;
+  // The weak foot of a hanging area (within reach of the strong pixels, so kept above) goes with it.
+  if (hang) {
+    const foot = dilate(hang, reach, 'disk');
+    for (let i = 0; i < filled.data.length; i++) if (foot.data[i] && !anchor.data[i]) filled.data[i] = 0;
+  }
   const parts = labelComponents(filled, 8);
   return parts.stats
     .filter((st) => st.area >= minArea)
@@ -636,14 +671,84 @@ function refill(mask: Mask, bbox: Rect, cluster: Candidate, opened: Mask): Mask 
 }
 
 /**
+ * Maximum over (2r+1)² squares (clamped at the edges) of a w×h image, in O(w·h) whatever the radius:
+ * van Herk / Gil-Werman, the running maxima from the start and from the end of blocks of 2r+1
+ * samples, first along the rows, then along the columns (whole rows at a time).
+ */
+function maxFilter(src: Float32Array, w: number, h: number, r: number): Float32Array {
+  const k = 2 * r + 1;
+  const g = new Float32Array(w * h), f = new Float32Array(w * h), rows = new Float32Array(w * h), out = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const o = y * w;
+    for (let b = o; b < o + w; b += k) {
+      const e = Math.min(o + w, b + k) - 1;
+      g[b] = src[b];
+      for (let i = b + 1; i <= e; i++) g[i] = src[i] > g[i - 1] ? src[i] : g[i - 1];
+      f[e] = src[e];
+      for (let i = e - 1; i >= b; i--) f[i] = src[i] > f[i + 1] ? src[i] : f[i + 1];
+    }
+    for (let x = 0; x < w; x++) {
+      const a = f[o + (x > r ? x - r : 0)], c = g[o + (x + r < w ? x + r : w - 1)];
+      rows[o + x] = a > c ? a : c;
+    }
+  }
+  for (let b = 0; b < h; b += k) {
+    const e = Math.min(h, b + k) - 1;
+    g.set(rows.subarray(b * w, (b + 1) * w), b * w);
+    for (let i = (b + 1) * w; i < (e + 1) * w; i++) g[i] = rows[i] > g[i - w] ? rows[i] : g[i - w];
+    f.set(rows.subarray(e * w, (e + 1) * w), e * w);
+    for (let i = e * w - 1; i >= b * w; i--) f[i] = rows[i] > f[i + w] ? rows[i] : f[i + w];
+  }
+  for (let y = 0; y < h; y++) {
+    const a = (y > r ? y - r : 0) * w, c = (y + r < h ? y + r : h - 1) * w, o = y * w;
+    for (let x = 0; x < w; x++) out[o + x] = f[a + x] > g[c + x] ? f[a + x] : g[c + x];
+  }
+  return out;
+}
+
+/** Side (px) of the tiles in which black top-hats are computed and kept per photo (blackTopHat). */
+const TOP_HAT_TILE = 128;
+/** Black top-hat tiles per photo and radius (blackTopHat). */
+const topHatTiles = new WeakMap<RGBAImage, Map<number, (Float32Array | undefined)[]>>();
+
+/**
  * Black top-hat of the luminance over `rect` ((2r+1)² closing minus luminance, gray levels): high on
  * thin dark valleys such as the crease between two touching pieces (cardboard edge, shadow), low on
- * the step edges of a piece's print.
+ * the step edges of a piece's print. Computed in tiles of the photo as they are first needed and
+ * kept with the photo: the clusters asked about overlap (a cluster at several neck radii, its parts,
+ * its edges).
  */
 function blackTopHat(img: RGBAImage, rect: Rect, r: number): Float32Array {
+  const T = TOP_HAT_TILE, cols = Math.ceil(img.width / T);
+  let byRadius = topHatTiles.get(img);
+  if (!byRadius) topHatTiles.set(img, (byRadius = new Map()));
+  let tiles = byRadius.get(r);
+  if (!tiles) byRadius.set(r, (tiles = []));
+  const { x: x0, y: y0, width: w, height: h } = rect;
+  const out = new Float32Array(w * h);
+  for (let ty = Math.floor(y0 / T); ty <= Math.floor((y0 + h - 1) / T); ty++) {
+    for (let tx = Math.floor(x0 / T); tx <= Math.floor((x0 + w - 1) / T); tx++) {
+      const tw = Math.min(T, img.width - tx * T), th = Math.min(T, img.height - ty * T);
+      const tile = (tiles[ty * cols + tx] ??= topHatTile(img, { x: tx * T, y: ty * T, width: tw, height: th }, r));
+      // The part of the tile inside `rect`.
+      const X0 = Math.max(x0, tx * T), X1 = Math.min(x0 + w, tx * T + tw);
+      for (let y = Math.max(y0, ty * T); y < Math.min(y0 + h, ty * T + th); y++) {
+        out.set(tile.subarray((y - ty * T) * tw + X0 - tx * T, (y - ty * T) * tw + X1 - tx * T), (y - y0) * w + X0 - x0);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The black top-hat (blackTopHat) over `rect`, from the photo around it (the edge pixels of the photo
+ * repeated beyond it).
+ */
+function topHatTile(img: RGBAImage, rect: Rect, r: number): Float32Array {
   const { width: W, height: H, data } = img;
   const { x: x0, y: y0, width: w, height: h } = rect;
-  const pad = r + 1, pw = w + 2 * pad, ph = h + 2 * pad;
+  // (The closing at a pixel takes in every pixel within 2r.)
+  const pad = 2 * r + 1, pw = w + 2 * pad, ph = h + 2 * pad;
   const Y = new Float32Array(pw * ph);
   for (let y = 0; y < ph; y++) {
     const yy = Math.min(H - 1, Math.max(0, y + y0 - pad));
@@ -652,26 +757,13 @@ function blackTopHat(img: RGBAImage, rect: Rect, r: number): Float32Array {
       Y[y * pw + x] = 0.299 * data[o] + 0.587 * data[o + 1] + 0.114 * data[o + 2];
     }
   }
-  // Closing = min filter of the max filter (r-px radius squares, separable).
-  const filt = (src: Float32Array, isMax: boolean): Float32Array => {
-    const tmp = new Float32Array(pw * ph), out = new Float32Array(pw * ph);
-    for (let y = 0; y < ph; y++) {
-      for (let x = 0; x < pw; x++) {
-        let v = src[y * pw + x];
-        for (let k = Math.max(0, x - r); k <= Math.min(pw - 1, x + r); k++) v = isMax ? Math.max(v, src[y * pw + k]) : Math.min(v, src[y * pw + k]);
-        tmp[y * pw + x] = v;
-      }
-    }
-    for (let y = 0; y < ph; y++) {
-      for (let x = 0; x < pw; x++) {
-        let v = tmp[y * pw + x];
-        for (let k = Math.max(0, y - r); k <= Math.min(ph - 1, y + r); k++) v = isMax ? Math.max(v, tmp[k * pw + x]) : Math.min(v, tmp[k * pw + x]);
-        out[y * pw + x] = v;
-      }
-    }
-    return out;
+  // Closing = min filter of the max filter (r-px radius squares, separable; a min filter is the max
+  // filter of the negated values).
+  const negate = (a: Float32Array) => {
+    for (let i = 0; i < a.length; i++) a[i] = -a[i];
+    return a;
   };
-  const closed = filt(filt(Y, true), false);
+  const closed = negate(maxFilter(negate(maxFilter(Y, pw, ph, r)), pw, ph, r));
   const out = new Float32Array(w * h);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) out[y * w + x] = closed[(y + pad) * pw + x + pad] - Y[(y + pad) * pw + x + pad];
   return out;
@@ -710,6 +802,232 @@ const VALLEY_CORE = 2;
 const VALLEY_SHARE = 0.4;
 /** Most pieces a cluster is split into along edges. */
 const MAX_EDGE_SPLIT = 12;
+/** Distance (body sizes, at least 2 px) from a cut within which a seam supports it (cutSupport). */
+const SEAM_TOLERANCE = 0.04;
+/** Band along a cluster's outline (body sizes, at least 3 px) where its rim and shadow look like a seam. */
+const OUTLINE_BAND = 0.06;
+/** Smallest stretch of seam evidence (pixels per body size): shorter specks are print or noise. */
+const SEAM_MIN_LENGTH = 0.3;
+/** Margin (opening radii) around a cut within which it is settled and judged (seamCuts). */
+const SEAM_WINDOW = 3;
+/** Share of a cut that must run along a seam for it to stand (seamCuts). */
+const SEAM_SHARE = 0.5;
+/** Share of a cut between cores apart that must run along a seam for them to be separate pieces (splitAtEdges). */
+const SEAM_APART = 0.8;
+/**
+ * Cores apart along a seam count as separate pieces (splitAtEdges) only for parts of at least
+ * SEAM_APART_PART piece areas, within SEAM_APART_WHOLE of a whole number of pieces, turned against
+ * each other by SEAM_APART_TURN degrees or more.
+ */
+const SEAM_APART_PART = 0.75;
+const SEAM_APART_WHOLE = 0.2;
+const SEAM_APART_TURN = 4;
+
+/** Per pair of parts (key min·PAIR_KEY + max): judged cut pixels, and those along a seam. */
+export type CutSupport = Map<number, { n: number; seam: number }>;
+/** Key base of a pair of labels in CutSupport. */
+export const PAIR_KEY = 4096;
+
+type Part = { mask: Mask; bbox: Rect };
+
+/**
+ * Seam evidence of a cluster (bbox-local mask): pixels where the table shows between pieces before
+ * closing (`preClose` off inside the cluster), or a thin dark crease runs (black top-hat ≥
+ * CREASE_MIN, see blackTopHat: the cardboard edges and shadow between the pieces), in stretches of
+ * at least SEAM_MIN_LENGTH body sizes (shorter specks are print or noise). The band along the
+ * cluster outline (OUTLINE_BAND body sizes: every outline's rim and soft shadow) holds none.
+ * Returns the evidence and the squared distance to the outside of the cluster.
+ */
+function seamEvidence(c: Part, preClose: Mask, img: RGBAImage, body: number): { seam: Mask; d2: Float32Array; band: number } {
+  const { width: w, height: h } = c.mask;
+  const { x: bx, y: by } = c.bbox;
+  const r = Math.max(3, Math.round(CREASE_WIDTH * body));
+  const dark = blackTopHat(img, c.bbox, r);
+  const d2 = squaredDistanceTransform(c.mask, 0, true);
+  const band = Math.max(3, OUTLINE_BAND * body);
+  const seam = createMask(w, h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (d2[i] > band * band && (dark[i] >= CREASE_MIN || !preClose.data[(y + by) * preClose.width + x + bx])) seam.data[i] = 1;
+    }
+  }
+  return { seam: removeSmallComponents(seam, Math.max(8, Math.round(SEAM_MIN_LENGTH * body))), d2, band };
+}
+
+/**
+ * Seam support of the cuts of a label map over a cluster (bbox-local, labels > 0): per pair of
+ * neighbouring labels, the cut pixels judged and those with seam evidence (seamEvidence) within
+ * SEAM_TOLERANCE body sizes. Cut pixels within reach of the outline band are not judged: a cut
+ * that short is a narrow contact, which is how loose pieces touch. Exported for tests.
+ */
+export function cutSupport(c: Part, labels: Int32Array, preClose: Mask, img: RGBAImage, body: number): CutSupport {
+  const { width: w, height: h } = c.mask;
+  const { seam, d2, band } = seamEvidence(c, preClose, img, body);
+  const tol = Math.max(2, Math.round(SEAM_TOLERANCE * body));
+  const near = dilate(seam, tol).data;
+  const judged = (band + tol) ** 2;
+  const out: CutSupport = new Map();
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x, l = labels[i];
+      if (l === 0 || d2[i] <= judged) continue;
+      // Each cut pixel once per neighbouring label (4-neighbours).
+      let seen = 0;
+      for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1]) {
+        if (j < 0) continue;
+        const m = labels[j];
+        if (m === 0 || m === l || m === seen) continue;
+        seen = m;
+        const key = Math.min(l, m) * PAIR_KEY + Math.max(l, m);
+        const s = out.get(key) ?? { n: 0, seam: 0 };
+        s.n++;
+        if (near[i]) s.seam++;
+        out.set(key, s);
+      }
+    }
+  }
+  return out;
+}
+
+/** Parts (photo coordinates, inside the cluster's bbox) as a label map over the cluster's bbox (1, 2, …). */
+function partLabels(c: Part, parts: Part[]): Int32Array {
+  const { width: w, height: h } = c.mask;
+  const labels = new Int32Array(w * h);
+  parts.forEach((p, k) => {
+    for (let y = 0; y < p.bbox.height; y++) {
+      for (let x = 0; x < p.bbox.width; x++) {
+        if (!p.mask.data[y * p.bbox.width + x]) continue;
+        const X = x + p.bbox.x - c.bbox.x, Y = y + p.bbox.y - c.bbox.y;
+        if (X >= 0 && Y >= 0 && X < w && Y < h) labels[Y * w + X] = k + 1;
+      }
+    }
+  });
+  return labels;
+}
+
+/** The pixels of a label map carrying one of `ids`, as a part in photo coordinates (null: none). */
+function labelsPart(c: Part, labels: Int32Array, ids: number[]): Part | null {
+  const { width: w, height: h } = c.mask;
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!ids.includes(labels[y * w + x])) continue;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+  }
+  if (x1 < 0) return null;
+  const mw = x1 - x0 + 1, mh = y1 - y0 + 1;
+  const mask = createMask(mw, mh);
+  for (let y = 0; y < mh; y++) for (let x = 0; x < mw; x++) if (ids.includes(labels[(y + y0) * w + x + x0])) mask.data[y * mw + x] = 1;
+  return { mask, bbox: { x: x0 + c.bbox.x, y: y0 + c.bbox.y, width: mw, height: mh } };
+}
+
+/**
+ * A label map of a cluster's parts (`labels`, parts 1…n, see partLabels) with the cuts settled on
+ * the strongest colour edges between the parts' cores (the cluster opened with a disc of radius `r`, as splitAtNecks
+ * found them): a watershed from the cores over everything the opening took off (necks, knobs,
+ * narrow ends of a piece). The opening's own cut lies where the cores' floods meet, on a knob
+ * pressed against a neighbour halfway along the knob: the contact itself is the strongest edge
+ * nearby.
+ */
+function settleCuts(c: Part, labels: Int32Array, n: number, img: RGBAImage, r: number): Int32Array {
+  const { width: w, height: h } = c.mask;
+  const p = Math.ceil(r) + 1, pw = w + 2 * p, ph = h + 2 * p;
+  const padded = createMask(pw, ph);
+  for (let y = 0; y < h; y++) padded.data.set(c.mask.data.subarray(y * w, (y + 1) * w), (y + p) * pw + p);
+  // Each part's marker is the largest core within it (splitAtNecks gives the pixels of cores too
+  // small to stand, such as a narrow piece end, to a neighbouring part: they are no evidence).
+  const cores = labelComponents(open(padded, r, 'disk'), 8);
+  const coreAt = (x: number, y: number) => cores.labels[(y + p) * pw + x + p];
+  const size = new Map<number, number>();
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const l = labels[y * w + x], k = coreAt(x, y);
+      if (l > 0 && k > 0) size.set(k * PAIR_KEY + l, (size.get(k * PAIR_KEY + l) ?? 0) + 1);
+    }
+  }
+  const best = new Int32Array(n + 1), bestSize = new Float64Array(n + 1);
+  for (const [key, n] of size) {
+    const l = key % PAIR_KEY;
+    if (n > bestSize[l]) { bestSize[l] = n; best[l] = Math.floor(key / PAIR_KEY); }
+  }
+  const markers = new Int32Array(w * h);
+  const inside = createMask(w, h);
+  const marked = new Uint8Array(n + 1);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x, l = labels[i];
+      if (l === 0) continue;
+      inside.data[i] = 1;
+      if (best[l] > 0 && coreAt(x, y) === best[l]) { markers[i] = l; marked[l] = 1; }
+    }
+  }
+  // (A part without a core of its own keeps its pixels as they are.)
+  for (let i = 0; i < labels.length; i++) if (labels[i] > 0 && !marked[labels[i]]) markers[i] = labels[i];
+  watershed(inside, colourGradient(img, c.bbox), markers);
+  return markers;
+}
+
+/**
+ * The parts of a cluster split at necks (opening radius `r`) with every cut that runs through a
+ * piece undone: settled on the strongest edges between the parts' cores (settleCuts), a cut that
+ * lies on a seam along less than SEAM_SHARE of its judged length (cutSupport) has no seam to
+ * follow, and its two parts are joined again (the cuts that stand are kept as the opening made
+ * them; settling only judges them). A narrowest neck is not always a contact: a piece with blanks
+ * on opposite sides has a waist, and in an assembled pair that waist is narrower than the side the
+ * two pieces share, so the neck cut went through the piece's even print while the real seam ran
+ * elsewhere. Null when fewer than two parts remain.
+ */
+function seamCuts(c: Part, parts: Part[], preClose: Mask, img: RGBAImage, body: number, r: number): Part[] | null {
+  const { width: w, height: h } = c.mask;
+  const labels = partLabels(c, parts);
+  // Bounding box of the cut between each pair of neighbouring parts.
+  const boxes = new Map<number, number[]>();
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x, l = labels[i];
+      if (l === 0) continue;
+      for (const j of [x < w - 1 ? i + 1 : -1, y < h - 1 ? i + w : -1]) {
+        const m = j < 0 ? 0 : labels[j];
+        if (m === 0 || m === l) continue;
+        const key = Math.min(l, m) * PAIR_KEY + Math.max(l, m), b = boxes.get(key);
+        if (!b) boxes.set(key, [x, y, x, y]);
+        else [b[0], b[1], b[2], b[3]] = [Math.min(b[0], x), Math.min(b[1], y), Math.max(b[2], x), Math.max(b[3], y)];
+      }
+    }
+  }
+  // Each cut judged within SEAM_WINDOW opening radii around it (the cluster beyond counts as
+  // outside): the cores whose floods settle it lie there, and a large cluster is not gone over again
+  // for every cut.
+  const support: CutSupport = new Map();
+  const m = Math.ceil(SEAM_WINDOW * r);
+  for (const [key, [x0, y0, x1, y1]] of boxes) {
+    const X0 = Math.max(0, x0 - m), Y0 = Math.max(0, y0 - m), ww = Math.min(w, x1 + m + 1) - X0, wh = Math.min(h, y1 + m + 1) - Y0;
+    const win: Part = { mask: cropMask(c.mask, { x: X0, y: Y0, width: ww, height: wh }), bbox: { x: c.bbox.x + X0, y: c.bbox.y + Y0, width: ww, height: wh } };
+    const wl = new Int32Array(ww * wh);
+    for (let y = 0; y < wh; y++) wl.set(labels.subarray((y + Y0) * w + X0, (y + Y0) * w + X0 + ww), y * ww);
+    const st = cutSupport(win, settleCuts(win, wl, parts.length, img, r), preClose, img, body).get(key);
+    if (st) support.set(key, st);
+  }
+  const root = parts.map((_, i) => i + 1);
+  root.unshift(0);
+  const find = (l: number): number => (root[l] === l ? l : (root[l] = find(root[l])));
+  const minJudged = Math.max(3, Math.round(SEAM_TOLERANCE * body));
+  for (const [key, s] of support) {
+    if (s.n < minJudged || s.seam >= SEAM_SHARE * s.n) continue;
+    const a = find(Math.floor(key / PAIR_KEY)), b = find(key % PAIR_KEY);
+    if (a !== b) root[a] = b;
+  }
+  const groups = new Map<number, number[]>();
+  for (let l = 1; l <= parts.length; l++) groups.set(find(l), [...(groups.get(find(l)) ?? []), l]);
+  if (groups.size < 2) return null;
+  const out = [...groups.values()].map((ids) => labelsPart(c, labels, ids)).filter((q): q is Part => q !== null);
+  return out.length >= 2 ? out : null;
+}
 
 /** Difference of two orientations modulo 90° (0..45). */
 function quarterDiff(a: number, b: number): number {
@@ -952,15 +1270,30 @@ function splitAtEdges(c: Candidate, ra: number, body: number, preClose: Mask, im
     }
     for (const l of live) edgeScore[l] = vals[l].length ? median(vals[l]) : Infinity;
   }
+  // Seam evidence along the cuts between cores apart (cutSupport).
+  const seams = viaValley ? cutSupport(c, labels, preClose, img, body) : null;
   for (const [key, v] of stats) {
     const a = Math.floor(key / 64), b = key % 64;
     const pa = parts.get(a), pb = parts.get(b);
     if (!pa || !pb) continue;
     const ca = pa.shape?.confidence ?? 0, cb = pb.shape?.confidence ?? 0;
     const crease = median(v);
-    // Parts from separate blobs: apart before closing, or (pieces at their own angles) apart in their cores.
+    // Parts from separate blobs: apart before closing, or apart in their cores where they are pieces
+    // at their own angles or a seam runs all along the cut between them (a loose piece touching an
+    // assembled group at nearly its angle).
     const sepBlob = blobOf[a] !== blobOf[b];
-    const apart = sepBlob && (viaGap || (viaValley && (mixed || c.secondPeak > TOUCHING_SECOND_PEAK)));
+    const seam = seams?.get(a * PAIR_KEY + b);
+    // (Only between whole pieces of a small cluster, at angles of their own however slight: inside
+    // an assembled group, print apart from its neighbours' gives cores apart too, cut along the
+    // group's seams into parts that are no whole number of pieces.)
+    const whole = (n: number) => n >= SEAM_APART_PART && Math.abs(n - Math.round(n)) <= SEAM_APART_WHOLE;
+    const turnedApart = () => {
+      const ta = outerAngle(pa, c, OUTER_MIN_SUPPORT * body), tb = outerAngle(pb, c, OUTER_MIN_SUPPORT * body);
+      return ta !== null && tb !== null && quarterDiff(ta, tb) >= SEAM_APART_TURN;
+    };
+    const seamed = !!seam && seam.n >= Math.max(3, Math.round(SEAM_TOLERANCE * body)) && seam.seam >= SEAM_APART * seam.n &&
+      c.area <= EDGE_RECUT_MAX_PIECES * ra && whole(area[a] / ra) && whole(area[b] / ra) && turnedApart();
+    const apart = sepBlob && (viaGap || (viaValley && (mixed || c.secondPeak > TOUCHING_SECOND_PEAK || seamed)));
     const evidence = (crease >= CREASE_MIN && mixed) || apart || (Math.max(ca, cb) >= 0.7 && (Math.min(ca, cb) >= UNCERTAIN_CONFIDENCE || c.secondPeak > TOUCHING_SECOND_PEAK));
     // A part with a faint outline wrapped around its neighbour is that piece's glare halo or shadow.
     const wrap = v.length / Math.max(1, Math.min(polygonPerimeter(pa.contour), polygonPerimeter(pb.contour)));
@@ -1921,7 +2254,7 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
       for (const c of cands) {
         // Weak pixels (between the thresholds) far from any strong one: shading bands, the edge of
         // a second surface, shadows that only hysteresis tied to a piece.
-        const anchored = dropFarWeak(c, score, th.high, texOnly, Math.max(2, WEAK_REACH * ref.refBody), Math.max(minArea, ANCHOR_MIN * ref.refArea), ref.refArea, minArea, W, H);
+        const anchored = dropFarWeak(c, score, th.high, texOnly, Math.max(2, WEAK_REACH * ref.refBody), Math.max(minArea, ANCHOR_MIN * ref.refArea), ref.refArea, minArea, W, H, ref.singles.length > 0);
         if (anchored) changed = true;
         for (const a of anchored ?? [c]) {
           const parts = removeThin(a, ref.refBody, ref.refArea, minArea, W, H);
@@ -2042,7 +2375,10 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
       for (let k = from; k < NECK_RADII.length; k++) {
         // Every part at least half a piece: the opening only cuts contacts clearly narrower than a
         // piece body (pieces of an assembled patch touch along whole sides).
-        const parts = splitAtNecks(c, Math.max(2, NECK_RADII[k] * bodyAt), 0.3 * ra, 0.5 * ra);
+        const necks = splitAtNecks(c, Math.max(2, NECK_RADII[k] * bodyAt), 0.3 * ra, 0.5 * ra);
+        if (!necks) continue;
+        // (Cuts through a piece's waist are undone: no seam runs there.)
+        const parts = seamCuts(c, necks, preClose, scored, bodyAt, Math.max(2, NECK_RADII[k] * bodyAt));
         if (!parts) continue;
         const out: Candidate[] = [];
         for (const p of parts) {
@@ -2106,6 +2442,8 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
   }
   if (refArea > 0) cands = mergeFragments(cands, refAreaAt, refBody, W, H);
   lap('split');
+  // (The crease maps of the split are no longer needed.)
+  topHatTiles.delete(scored);
   if (diag) diag.blockiness = blockiness;
   // Soft cast shadows around dark pieces in close-ups, then (JPEGs) colour bled into the table.
   cands = cands.map((c) => {

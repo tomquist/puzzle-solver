@@ -1103,12 +1103,40 @@ function densify(pts: Point[], step: number): Point[] {
   return out;
 }
 
-/** Smallest distance between two point sets, `b` shifted by (dx, dy). */
+/** `pts` sorted by x (for {@link minDistance}). */
+function byX(pts: Point[]): Point[] {
+  return [...pts].sort((p, q) => p.x - q.x);
+}
+
+/**
+ * Smallest distance between two point sets, `b` (sorted by x, {@link byX}) shifted by (dx, dy): for
+ * each point of `a`, the points of `b` outwards from its x until the x distance alone reaches the
+ * best so far (the same squared distances as all pairs would give, so the same minimum).
+ */
 function minDistance(a: Point[], b: Point[], dx: number, dy: number): number {
   let best = Infinity;
+  const n = b.length;
   for (const p of a) {
-    for (const q of b) {
-      const ex = q.x + dx - p.x, ey = q.y + dy - p.y;
+    // First point of b at or right of p (x distance ≥ 0); x distances grow outwards from there.
+    let lo = 0, hi = n;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (b[mid].x + dx - p.x < 0) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let k = lo; k < n; k++) {
+      const q = b[k];
+      const ex = q.x + dx - p.x;
+      if (ex * ex >= best) break;
+      const ey = q.y + dy - p.y;
+      const d = ex * ex + ey * ey;
+      if (d < best) best = d;
+    }
+    for (let k = lo - 1; k >= 0; k--) {
+      const q = b[k];
+      const ex = q.x + dx - p.x;
+      if (ex * ex >= best) break;
+      const ey = q.y + dy - p.y;
       const d = ex * ex + ey * ey;
       if (d < best) best = d;
     }
@@ -1235,7 +1263,7 @@ export function renderPiecesPhoto(
       const A = items[2 * k], B = items[2 * k + 1];
       const local = (it: Item) => it.union.map((p) => applyMat3(similarityAbout(it.pivot, { x: 0, y: 0 }, it.theta, it.scale), p));
       const la = local(A), lb = local(B);
-      const coarseA = densify(la, 2), coarseB = densify(lb, 2), fineA = densify(la, 0.5), fineB = densify(lb, 0.5);
+      const coarseA = densify(la, 2), coarseB = byX(densify(lb, 2)), fineA = densify(la, 0.5), fineB = byX(densify(lb, 0.5));
       const ca = { x: (A.local.x0 + A.local.x1) / 2, y: (A.local.y0 + A.local.y1) / 2 }, cb = { x: (B.local.x0 + B.local.x1) / 2, y: (B.local.y0 + B.local.y1) / 2 };
       const phi = prng2.uniform(0, 2 * Math.PI), dx = Math.cos(phi), dy = Math.sin(phi);
       const gap = prng2.uniform(g0, g1);
@@ -1748,23 +1776,20 @@ export function renderBoxPhoto(reference: RGBAImage, opts: BoxPhotoOptions = {})
   const grain = smoothNoise(W, H, 40, rng);
   const fine = smoothNoise(W, H, 6, rng);
   const woodAngle = rng.uniform(-0.2, 0.2);
+  const wc = Math.cos(woodAngle), ws = Math.sin(woodAngle);
+  const b: RGB = bgOpt === 'wood' ? [150, 105, 70] : bgOpt === 'plain' ? [200, 200, 195] : bgOpt;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const i = y * W + x;
-      let c: RGB;
+      let v: number;
       if (bgOpt === 'wood') {
-        const t = y * Math.cos(woodAngle) + x * Math.sin(woodAngle);
+        const t = y * wc + x * ws;
         const s = 0.5 + 0.5 * Math.sin(t / 7 + 6 * grain[i]);
-        const v = 0.85 + 0.15 * s + 0.04 * fine[i];
-        c = [150 * v, 105 * v, 70 * v];
-      } else {
-        const b = bgOpt === 'plain' ? [200, 200, 195] : bgOpt;
-        const v = 1 + 0.03 * grain[i] + 0.02 * fine[i];
-        c = [b[0] * v, b[1] * v, b[2] * v];
-      }
-      scene.data[i * 3] = c[0];
-      scene.data[i * 3 + 1] = c[1];
-      scene.data[i * 3 + 2] = c[2];
+        v = 0.85 + 0.15 * s + 0.04 * fine[i];
+      } else v = 1 + 0.03 * grain[i] + 0.02 * fine[i];
+      scene.data[i * 3] = b[0] * v;
+      scene.data[i * 3 + 1] = b[1] * v;
+      scene.data[i * 3 + 2] = b[2] * v;
     }
   }
   // Soft shadow of the lid.
@@ -1824,14 +1849,16 @@ export function perturbReference(img: RGBAImage, opts: PerturbOptions = {}): RGB
   const gamma = opts.gamma ?? rng.uniform(0.92, 1.08);
   const { width: w, height: h } = img;
   const f = createFloat(w, h, 3);
+  const [g0, g1, g2] = gain, [o0, o1, o2] = off;
   for (let i = 0; i < w * h; i++) {
     const r = img.data[i * 4], g = img.data[i * 4 + 1], b = img.data[i * 4 + 2];
     const y = 0.299 * r + 0.587 * g + 0.114 * b;
-    const rgb = [y + sat * (r - y), y + sat * (g - y), y + sat * (b - y)];
-    for (let c = 0; c < 3; c++) {
-      const v = Math.max(0, Math.min(255, rgb[c] * gain[c] + off[c]));
-      f.data[i * 3 + c] = 255 * Math.pow(v / 255, gamma);
-    }
+    const v0 = Math.max(0, Math.min(255, (y + sat * (r - y)) * g0 + o0));
+    const v1 = Math.max(0, Math.min(255, (y + sat * (g - y)) * g1 + o1));
+    const v2 = Math.max(0, Math.min(255, (y + sat * (b - y)) * g2 + o2));
+    f.data[i * 3] = 255 * Math.pow(v0 / 255, gamma);
+    f.data[i * 3 + 1] = 255 * Math.pow(v1 / 255, gamma);
+    f.data[i * 3 + 2] = 255 * Math.pow(v2 / 255, gamma);
   }
   const blurred = opts.blurSigma === 0 ? f : gaussianBlurFloat(f, opts.blurSigma ?? 0.7);
   const out = createRGBA(w, h);

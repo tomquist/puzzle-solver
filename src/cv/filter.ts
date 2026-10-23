@@ -23,9 +23,24 @@ export function convolveSeparable(img: FloatImage, kx: Float32Array, ky: Float32
   const ry = (ky.length - 1) >> 1;
   const tmp = new Float32Array(img.data.length);
   const src = img.data;
+  // Every sum runs over the taps in kernel order from 0 (as a plain loop with clamped indices
+  // would), so the result does not depend on how the loops below are arranged.
+  const xa = Math.min(rx, w), xb = Math.max(xa, w - rx);
   for (let y = 0; y < h; y++) {
     const row = y * w;
     for (let x = 0; x < w; x++) {
+      if (x === xa && x < xb) {
+        // Interior: no clamping.
+        for (; x < xb; x++) {
+          for (let ch = 0; ch < c; ch++) {
+            let acc = 0;
+            for (let k = 0, q = (row + x - rx) * c + ch; k <= 2 * rx; k++, q += c) acc += src[q] * kx[k];
+            tmp[(row + x) * c + ch] = acc;
+          }
+        }
+        x--;
+        continue;
+      }
       for (let ch = 0; ch < c; ch++) {
         let acc = 0;
         for (let k = -rx; k <= rx; k++) {
@@ -40,19 +55,19 @@ export function convolveSeparable(img: FloatImage, kx: Float32Array, ky: Float32
   }
   const out = createFloat(w, h, c);
   const dst = out.data;
+  // Vertical: a row of sums at a time (in float64, as a scalar sum would be), taps in kernel order.
+  const rowLen = w * c;
+  const acc = new Float64Array(rowLen);
   for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      for (let ch = 0; ch < c; ch++) {
-        let acc = 0;
-        for (let k = -ry; k <= ry; k++) {
-          let yy = y + k;
-          if (yy < 0) yy = 0;
-          else if (yy >= h) yy = h - 1;
-          acc += tmp[(yy * w + x) * c + ch] * ky[k + ry];
-        }
-        dst[(y * w + x) * c + ch] = acc;
-      }
+    acc.fill(0);
+    for (let k = -ry; k <= ry; k++) {
+      let yy = y + k;
+      if (yy < 0) yy = 0;
+      else if (yy >= h) yy = h - 1;
+      const wk = ky[k + ry], o = yy * rowLen;
+      for (let i = 0; i < rowLen; i++) acc[i] += tmp[o + i] * wk;
     }
+    dst.set(acc, y * rowLen);
   }
   return out;
 }

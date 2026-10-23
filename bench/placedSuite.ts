@@ -18,36 +18,34 @@
  * PLACED_PRECISION_TOLERANCE (0.002; relative to the same run, no baseline numbers).
  *
  * Every scan scenario and seed, split over PLACED_SHARDS files (bench/placed-<k>.eval.ts) that run in
- * parallel: each writes its scenes' records to .debug/bench/placed-shards/, and the last one to
- * finish in the run gates and reports them all (run them together: `bench/placed` as the filter).
+ * parallel: each writes its scenes' records to .debug/bench/placed-shards/ (bench/shards.ts), and the
+ * last one to finish in the run gates and reports them all (run them together: `bench/placed` as the
+ * filter). Shards run elsewhere (CI: one job each) leave that to `npm run bench:placed-gate` over
+ * their records (bench/placedGate.ts). The gate is on the averages over all scenes, as one run.
+ *
+ * Each scene is rendered, segmented and matched without marks (the first pass, which ignores them)
+ * once; every setting analyses a copy from there on (pipeline/analyzeScan.ts `analyzeSegmented`),
+ * with the same result as analyzeScan from the photo.
  *
  *   npm run bench                                  # all settings, every scene
  *   PLACED=f0.3-e0.25,others npm run bench         # some settings (plus 'none')
  *   PLACED_SCENES=quick npm run bench              # the first seed of a few scenes only
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { analyzeScan } from '../src/pipeline/analyzeScan';
+import { analyzeSegmented, forkSegmented, scanFirstPass, segmentScan, type AnalyzeScanOptions } from '../src/pipeline/analyzeScan';
 import { cellKey } from '../src/model/types';
-import { CONSISTENCY, PLACEMENT_TUNING, REPO_ROOT, SEGMENT_OPTIONS } from '../src/testing/nodeImageIO';
-import { average, evaluateScan, report, yieldToEventLoop, type MetricRecord } from './lib';
-import { gapNeighbours, PLACED_PRECISION_TOLERANCE, PLACED_TOLERANCE, placedSettingsFromEnv, simulatePlacedCells } from './placed';
+import { CONSISTENCY, PLACEMENT_TUNING, SEGMENT_OPTIONS } from '../src/testing/nodeImageIO';
+import { evaluateScan, yieldToEventLoop, type MetricRecord } from './lib';
+import { gapNeighbours, placedSettingsFromEnv, simulatePlacedCells } from './placed';
+import { gatePlaced, mergedPlacedRecords, PLACED_SHARDS, PLACED_SUITE } from './placedGate';
+import { writeShardRecords } from './shards';
 import { renderScene, SCENARIOS } from './scanScenarios';
 
 /** PLACED_SCENES=quick: the first seed of these (plain areas and small grids, textured photos). */
 const QUICK_SCENES = ['starry-320-dark', 'wave-1000-dark', 'starry-patches', 'starry-noisy-blurry', 'wave-woodgrain', 'starry-grey-neighbors', 'starry-portrait-18-woodgrain'];
 const QUICK = process.env.PLACED_SCENES === 'quick';
-/** Shards of the scenes (one bench file each). */
-export const PLACED_SHARDS = 3;
 const ALL_RUNS = SCENARIOS.flatMap((s) => (QUICK ? (QUICK_SCENES.includes(s.name) ? [s.seeds[0]] : []) : s.seeds).map((seed) => ({ s, seed })));
-/** Records of one run of the bench, shared by its shard files (set in vitest.bench.config.ts). */
-const RUN_ID = process.env.BENCH_RUN_ID ?? `pid${process.ppid}`;
-const SHARD_DIR = resolve(REPO_ROOT, '.debug/bench/placed-shards');
 const settings = placedSettingsFromEnv(process.env.PLACED);
-const COLUMNS = ['top1', 'top3', 'rotationOk', 'confidentPrecision', 'confidentTurnPrecision', 'confidentShare', 'confidentWrong', 'markedTop1', 'marked', 'conflicts', 'gaps', 'gapTop1', 'gapTop1None', 'gapTop3', 'gapTop3None', 'marks', 'wrong'];
-/** Metrics gated against the no-marks run. */
-const GATED = ['top1', 'top3', 'confidentPrecision'];
 
 /** The placed-cell bench for shard `shard` (of {@link PLACED_SHARDS}): its scenes, then the combined gate when it finishes last. */
 export function placedSuite(shard: number): void {
@@ -61,11 +59,16 @@ export function placedSuite(shard: number): void {
         const scanCells = truth.flatMap((t) => t.pieces.map((i) => ({ row: cut.pieces[i].row, col: cut.pieces[i].col })));
         /** Per truth item (single pieces): right cell first / among the best three, without marks. */
         const unmarked = new Map<number, { top1: boolean; top3: boolean }>();
+        // Segmentation and the first matching pass do not depend on the marks: once per scene, and
+        // every setting analyses a copy from there on (as analyzeScan would from the photo).
+        const opts: AnalyzeScanOptions = { maxSide: Math.max(photo.width, photo.height), segment: SEGMENT_OPTIONS, consistency: CONSISTENCY, tuning: PLACEMENT_TUNING };
+        const segmented = segmentScan(photo, opts);
+        const firstPass = scanFirstPass(index, segmented, opts);
         for (const setting of settings) {
           await yieldToEventLoop();
           const marks = simulatePlacedCells(s.grid, scanCells, setting, seed);
           const t0 = performance.now();
-          const { result } = analyzeScan(index, photo, { maxSide: Math.max(photo.width, photo.height), segment: SEGMENT_OPTIONS, consistency: CONSISTENCY, tuning: PLACEMENT_TUNING, placedCells: marks.cells });
+          const { result } = analyzeSegmented(index, forkSegmented(segmented), { ...opts, placedCells: marks.cells }, firstPass);
           const { metrics, regionToTruth } = evaluateScan(result, truth, cut, performance.now() - t0);
           // Single pieces whose own cell carries a wrong mark.
           let marked = 0, markedTop1 = 0, conflicts = 0;
@@ -109,51 +112,15 @@ export function placedSuite(shard: number): void {
 
     it('wrong marks never make the placements worse than no marks (all shards)', () => {
       // This shard's records, then the gate when every shard of the run has written its own.
-      mkdirSync(SHARD_DIR, { recursive: true });
-      const own = resolve(SHARD_DIR, `${RUN_ID}-${shard}.json`);
-      writeFileSync(`${own}.tmp`, JSON.stringify(Object.fromEntries(perSetting)));
-      renameSync(`${own}.tmp`, own);
-      const files = Array.from({ length: PLACED_SHARDS }, (_, k) => resolve(SHARD_DIR, `${RUN_ID}-${k}.json`));
-      if (!files.every(existsSync)) {
+      writeShardRecords(PLACED_SUITE, shard, Object.fromEntries(perSetting));
+      const all = mergedPlacedRecords();
+      if (!all) {
         console.log(`placed bench: shard ${shard + 1} done; the last shard of the run gates`);
         return;
       }
-      const all = new Map<string, MetricRecord[]>();
-      for (const f of files) {
-        const recs = JSON.parse(readFileSync(f, 'utf8')) as Record<string, Record<string, number | null>[]>;
-        for (const [name, list] of Object.entries(recs)) all.set(name, [...(all.get(name) ?? []), ...list.map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, v ?? NaN])))]);
-      }
-      const results = summary(all);
-      console.log('\n' + report('placed', results, COLUMNS) + '\n');
-      const none = results.none;
-      const problems: string[] = [];
-      for (const [name, rec] of Object.entries(results)) {
-        if (name === 'none') continue;
-        for (const k of GATED) {
-          const tol = k === 'confidentPrecision' ? PLACED_PRECISION_TOLERANCE : PLACED_TOLERANCE;
-          if (rec[k] < none[k] - tol - 1e-9) problems.push(`${name}.${k}: ${rec[k].toFixed(3)} < none ${none[k].toFixed(3)} - ${tol}`);
-        }
-      }
+      const { table, problems } = gatePlaced(all);
+      console.log('\n' + table + '\n');
       expect(problems, problems.join('\n')).toEqual([]);
     });
   });
-}
-
-/** Per setting: metrics averaged over the scenes (markedTop1 and the gap rates over the scenes' such pieces; counts summed). */
-function summary(perSetting: Map<string, MetricRecord[]>): Record<string, MetricRecord> {
-  const out: Record<string, MetricRecord> = {};
-  for (const [name, recs] of perSetting) {
-    if (recs.length === 0) continue;
-    const avg = average(recs);
-    const withMarked = recs.filter((r) => r.marked > 0);
-    avg.markedTop1 = withMarked.length > 0 ? withMarked.reduce((a, r) => a + r.markedTop1 * r.marked, 0) / withMarked.reduce((a, r) => a + r.marked, 0) : NaN;
-    avg.marked = recs.reduce((a, r) => a + r.marked, 0);
-    avg.conflicts = recs.reduce((a, r) => a + r.conflicts, 0);
-    avg.confidentWrong = recs.reduce((a, r) => a + r.confidentWrong, 0);
-    const sum = (k: string) => recs.reduce((a, r) => a + r[k], 0);
-    avg.gaps = sum('gaps');
-    for (const k of ['gapTop1', 'gapTop3', 'gapTop1None', 'gapTop3None']) avg[k] = avg.gaps > 0 ? sum(k) / avg.gaps : NaN;
-    out[name] = avg;
-  }
-  return out;
 }
