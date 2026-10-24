@@ -467,12 +467,13 @@ function scoreOfSums(t: Template, num: number, s0: number, s1: number, s2: numbe
 }
 
 /**
- * {@link scoreAt} at (X, Y) and (X + 1, Y) into `out[0]`, `out[1]`, in one pass over the template
- * (each position's sums in the template's pixel order: the same scores).
+ * {@link scoreAt} at two positions, top-left pixel `pos` (Y · stride + X) and `pos + d`, into
+ * `out[0]`, `out[1]`, in one pass over the template (each position's sums in the template's pixel
+ * order: the same scores).
  */
-export function scorePair(level: RefLevel, t: Template, X: number, Y: number, p: ScoreParams, out: Float64Array): void {
+export function scorePair(level: RefLevel, t: Template, pos: number, d: number, p: ScoreParams, out: Float64Array): void {
   const D = level.data, SQ = level.sq, off = t.off, V = t.val, n = t.n;
-  const base = Y * level.stride + X;
+  const base = pos, d3 = 3 * d;
   let num = 0, s0 = 0, s1 = 0, s2 = 0, ss = 0;
   let mum = 0, u0 = 0, u1 = 0, u2 = 0, us = 0;
   for (let i = 0, j = 0; i < n; i++, j += 3) {
@@ -485,12 +486,12 @@ export function scorePair(level: RefLevel, t: Template, X: number, Y: number, p:
     s1 += r1;
     s2 += r2;
     ss += SQ[pi];
-    const w0 = D[q + 3], w1 = D[q + 4], w2 = D[q + 5];
+    const w0 = D[q + d3], w1 = D[q + d3 + 1], w2 = D[q + d3 + 2];
     mum += v0 * w0 + v1 * w1 + v2 * w2;
     u0 += w0;
     u1 += w1;
     u2 += w2;
-    us += SQ[pi + 1];
+    us += SQ[pi + d];
   }
   out[0] = scoreOfSums(t, num, s0, s1, s2, ss, p);
   out[1] = scoreOfSums(t, mum, u0, u1, u2, us, p);

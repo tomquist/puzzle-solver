@@ -248,22 +248,30 @@ function makeHypotheses(index: ReferenceIndex, input: MatchInput, src: PhotoSour
 
 /** Exhaustive search of top-left positions in a window; returns the best. */
 function searchWindow(level: RefLevel, t: Template, X0: number, Y0: number, r: number, sp: ScoreParams): { X: number; Y: number; raw: number } | null {
-  let best: { X: number; Y: number; raw: number } | null = null;
   const byPos = scoreMemo(t, sp);
+  // The window's positions not scored yet, two at a time (any two: rows and columns alike).
+  let pending = -1;
   for (let Y = Y0 - r; Y <= Y0 + r; Y++) {
     for (let X = X0 - r; X <= X0 + r; X++) {
       if (!fits(level, t, X, Y)) continue;
       const pos = Y * level.stride + X;
-      let v = byPos.get(pos);
-      if (v === undefined) {
-        // Two positions of the row at once where the next one is wanted too.
-        if (X < X0 + r && fits(level, t, X + 1, Y) && !byPos.has(pos + 1)) {
-          scorePair(level, t, X, Y, sp, pairScores);
-          byPos.set(pos + 1, pairScores[1]);
-          v = pairScores[0];
-        } else v = scoreAt(level, t, X, Y, sp);
-        byPos.set(pos, v);
+      if (byPos.has(pos)) continue;
+      if (pending < 0) {
+        pending = pos;
+        continue;
       }
+      scorePair(level, t, pending, pos - pending, sp, pairScores);
+      byPos.set(pending, pairScores[0]);
+      byPos.set(pos, pairScores[1]);
+      pending = -1;
+    }
+  }
+  if (pending >= 0) byPos.set(pending, scoreAt(level, t, pending % level.stride, Math.floor(pending / level.stride), sp));
+  let best: { X: number; Y: number; raw: number } | null = null;
+  for (let Y = Y0 - r; Y <= Y0 + r; Y++) {
+    for (let X = X0 - r; X <= X0 + r; X++) {
+      if (!fits(level, t, X, Y)) continue;
+      const v = byPos.get(Y * level.stride + X)!;
       if (!best || v > best.raw) best = { X, Y, raw: v };
     }
   }
