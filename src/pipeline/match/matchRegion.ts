@@ -252,7 +252,7 @@ function searchWindow(level: RefLevel, t: Template, X0: number, Y0: number, r: n
   for (let Y = Y0 - r; Y <= Y0 + r; Y++) {
     for (let X = X0 - r; X <= X0 + r; X++) {
       if (!fits(level, t, X, Y)) continue;
-      const v = scoreAt(level, t, X, Y, sp);
+      const v = scoreAtMemo(level, t, X, Y, sp);
       if (!best || v > best.raw) best = { X, Y, raw: v };
     }
   }
@@ -289,13 +289,29 @@ function searchBounds(level: RefLevel, t: Template): { x0: number; x1: number; y
 function coarseSearch(index: ReferenceIndex, ci: number, hyp: Hypothesis, cache: TemplateCache, sp: ScoreParams, out: Candidate[], placed?: PlacedPrior): void {
   const level = index.levels[ci];
   const t = cache.get(level, ci, hyp.map);
-  if (!t) return;
-  const b = searchBounds(level, t);
-  if (!b) return;
-  const nx = b.x1 - b.x0 + 1, ny = b.y1 - b.y0 + 1;
-  const map = new Float32Array(nx * ny);
+  if (!t || !searchBounds(level, t)) return;
   const pl = ci > 0 ? index.levels[0] : null;
   const t0 = pl ? cache.get(pl, 0, hyp.map) : null;
+  // The local maxima depend on the template (photo source, level, mapping), the prefilter level and
+  // the score parameters only: a second pass of the region (with the placed marks) finds the same.
+  const memo = (t.coarse ??= new Map());
+  const key = spKey(sp);
+  let found = memo.get(key);
+  if (!found || found.pl !== pl) memo.set(key, (found = { pl, maxima: coarseMaxima(level, t, pl, t0, sp) }));
+  const m = found.maxima;
+  for (let k = 0; k < m.length; k += 3) {
+    const ref = pivotRef(level, t, m[k], m[k + 1]);
+    out.push({ hyp, map: hyp.map, ref, raw: m[k + 2], ...scored(index, hyp, ref, m[k + 2], placed), level: ci });
+  }
+}
+
+/** The local maxima of {@link coarseSearch}'s score map: (X, Y, raw) triples, row by row. */
+function coarseMaxima(level: RefLevel, t: Template, pl: RefLevel | null, t0: Template | null, sp: ScoreParams): number[] {
+  const maxima: number[] = [];
+  const b = searchBounds(level, t);
+  if (!b) return maxima;
+  const nx = b.x1 - b.x0 + 1, ny = b.y1 - b.y0 + 1;
+  const map = new Float32Array(nx * ny);
   const b0 = pl && t0 ? searchBounds(pl, t0) : null;
   if (pl && t0 && b0) {
     const nx0 = b0.x1 - b0.x0 + 1, ny0 = b0.y1 - b0.y0 + 1;
@@ -351,10 +367,10 @@ function coarseSearch(index: ReferenceIndex, ci: number, hyp: Hypothesis, cache:
         }
       }
       if (!isMax) continue;
-      const ref = pivotRef(level, t, b.x0 + i, b.y0 + j);
-      out.push({ hyp, map: hyp.map, ref, raw: v, ...scored(index, hyp, ref, v, placed), level: ci });
+      maxima.push(b.x0 + i, b.y0 + j, v);
     }
   }
+  return maxima;
 }
 
 /**
@@ -395,18 +411,60 @@ function suppress(cands: Candidate[], radius: number, limit: number, placed?: Pl
   return kept;
 }
 
+/**
+ * The templates of one match (one region, one pass), by rounded mapping: the first template built
+ * under a key serves every mapping that rounds to it. Behind it, the templates of the photo source
+ * by level and exact mapping, shared by every match of the source (the second pass with the placed
+ * marks, scorePlacement, the scale measurement), with the scores computed on them (`Template.coarse`,
+ * {@link scoreAtMemo}): a template is a pure function of the source, level and mapping, so reusing
+ * one gives exactly what building it again gives.
+ */
 class TemplateCache {
   private readonly cache = new Map<string, Template | null>();
-  constructor(private readonly src: PhotoSource) {}
+  private readonly shared: WeakMap<RefLevel, Map<string, Template | null>>;
+  constructor(private readonly src: PhotoSource) {
+    let shared = sharedTemplates.get(src);
+    if (!shared) sharedTemplates.set(src, (shared = new WeakMap()));
+    this.shared = shared;
+  }
   get(level: RefLevel, li: number, m: Mapping): Template | null {
     const key = `${li}|${m.pivot.x.toFixed(3)}|${m.pivot.y.toFixed(3)}|${m.phi.toFixed(5)}|${m.s.toFixed(6)}${m.ax === undefined && m.ay === undefined ? '' : `|${(m.ax ?? 1).toFixed(5)}|${(m.ay ?? 1).toFixed(5)}`}`;
     let t = this.cache.get(key);
     if (t === undefined) {
-      t = buildTemplate(this.src, m, level, 0.6, level.ppc < 6 ? 5 : 12);
+      let byLevel = this.shared.get(level);
+      if (!byLevel) this.shared.set(level, (byLevel = new Map()));
+      // (Numbers print exactly: one key per mapping.)
+      const exact = `${m.pivot.x}|${m.pivot.y}|${m.phi}|${m.s}|${m.ax}|${m.ay}`;
+      t = byLevel.get(exact);
+      if (t === undefined) {
+        t = buildTemplate(this.src, m, level, 0.6, level.ppc < 6 ? 5 : 12);
+        byLevel.set(exact, t);
+      }
       this.cache.set(key, t);
     }
     return t;
   }
+}
+const sharedTemplates = new WeakMap<PhotoSource, WeakMap<RefLevel, Map<string, Template | null>>>();
+
+/** Key of score parameters (scores computed with equal parameters are shared). */
+function spKey(sp: ScoreParams): string {
+  let k = spKeys.get(sp);
+  if (k === undefined) spKeys.set(sp, (k = `${sp.eps}|${sp.beta}|${sp.cap}|${sp.hinge}`));
+  return k;
+}
+const spKeys = new WeakMap<ScoreParams, string>();
+
+/** {@link scoreAt}, remembered on the template (per score parameters and position). */
+function scoreAtMemo(level: RefLevel, t: Template, X: number, Y: number, sp: ScoreParams): number {
+  const memo = (t.scores ??= new Map());
+  const key = spKey(sp);
+  let byPos = memo.get(key);
+  if (!byPos) memo.set(key, (byPos = new Map()));
+  const pos = Y * level.stride + X;
+  let v = byPos.get(pos);
+  if (v === undefined) byPos.set(pos, (v = scoreAt(level, t, X, Y, sp)));
+  return v;
 }
 
 /** Re-search a candidate's position on level `li` around its current reference position. */
@@ -1196,7 +1254,7 @@ function informationFeatures(
     for (const [dx, dy] of dirs) {
       const XX = peak.X + Math.round(dx * frac * level.ppc), YY = peak.Y + Math.round(dy * frac * level.ppc);
       if (!fits(level, t, XX, YY)) continue;
-      worst = Math.min(worst, peak.raw - scoreAt(level, t, XX, YY, sp));
+      worst = Math.min(worst, peak.raw - scoreAtMemo(level, t, XX, YY, sp));
     }
     if (k === 0) f.drop25 = Number.isFinite(worst) ? worst : 0;
     else f.drop50 = Number.isFinite(worst) ? worst : 0;

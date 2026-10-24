@@ -284,6 +284,10 @@ export interface Template {
   variance: number;
   /** Lazily computed pixel runs for prefix-sum scoring. */
   runs?: { ro: Int32Array; rl: Int32Array };
+  /** Scores remembered by the matcher (match/matchRegion.ts): per score parameters, by position. */
+  scores?: Map<string, Map<number, number>>;
+  /** The matcher's coarse-search maxima (X, Y, raw triples) per score parameters, with the prefilter level they were found with. */
+  coarse?: Map<string, { pl: RefLevel | null; maxima: number[] }>;
 }
 
 /**
