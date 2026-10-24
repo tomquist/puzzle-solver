@@ -6,7 +6,7 @@
  */
 import type { RegionMatch } from '../../model/types';
 import { runSteps, type Steps } from '../steps';
-import { capForBorder, capForSize, matchRegionDetailed, matchRegionDetailedSteps, placedConflictOfMatch, type MatchDetail } from './matchRegion';
+import { capForBorder, capForSize, matchRegionDetailed, matchRegionDetailedSteps, placedConflictOfMatch, releaseTemplates, type MatchDetail } from './matchRegion';
 import { buildTemplate, DEFAULT_SCORE, type ColorCorrection, type ScoreParams } from './template';
 import type { MatchInput, MatchOptions, ReferenceIndex } from './types';
 
@@ -135,14 +135,21 @@ export interface FirstPass {
 
 /** {@link FirstPass} of `inputs` (the placed marks of `opts` are ignored). */
 export function firstMatchPass(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions = {}): FirstPass {
-  return runSteps(firstMatchPassSteps(index, inputs, opts));
+  // (Its templates are kept for the analyses that reuse it: they let go of them.)
+  return runSteps(firstMatchPassSteps(index, inputs, opts, true));
 }
 
-function* firstMatchPassSteps(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions, onRegion?: (done: number) => void): Steps<FirstPass> {
+/**
+ * The first pass; `keep`: keep each region's templates for a second pass (one with placed marks
+ * may repeat its work on the same photo source; see matchRegion.ts `releaseTemplates`).
+ */
+function* firstMatchPassSteps(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions, keep: boolean, onRegion?: (done: number) => void): Steps<FirstPass> {
   const firstOpts = (opts.placedCells?.length ?? 0) > 0 ? { ...opts, placedCells: undefined } : opts;
   const details: MatchDetail[] = [];
   for (const inp of inputs) {
-    details.push(yield* matchRegionDetailedSteps(index, inp, firstOpts));
+    const d = yield* matchRegionDetailedSteps(index, inp, firstOpts, { share: keep });
+    if (!keep) releaseTemplates(d.src);
+    details.push(d);
     onRegion?.(details.length);
   }
   return { details, correction: estimateColorCorrection(index, details) };
@@ -164,26 +171,34 @@ export function* matchRegionsDetailedSteps(index: ReferenceIndex, inputs: MatchI
   // (With marks a second pass follows for sure: the first counts for 60 %; otherwise for 90 %.)
   const firstShare = marked ? 0.6 : 0.9;
   const n = inputs.length;
-  const { details: first, correction } = reuse ? copyFirstPass(reuse) : yield* firstMatchPassSteps(index, inputs, opts, onProgress && ((k) => onProgress((firstShare * k) / n)));
+  const { details: first, correction } = reuse ? copyFirstPass(reuse) : yield* firstMatchPassSteps(index, inputs, opts, marked, onProgress && ((k) => onProgress((firstShare * k) / n)));
+  // The second pass repeats the first's work only without a colour correction (which changes the
+  // photo sources), and only for the regions it matches again.
+  const sure = (d: MatchDetail) => d.match.status === 'confident' && d.match.candidates[0].confidence >= 0.9;
+  for (const d of first) if (correction || sure(d)) releaseTemplates(d.src);
   let out = first;
   if (correction || marked) {
     out = [];
-    const again = first.filter((d) => !(d.match.status === 'confident' && d.match.candidates[0].confidence >= 0.9)).length;
+    const again = first.filter((d) => !sure(d)).length;
     let done = 0;
     for (let i = 0; i < inputs.length; i++) {
       const d = first[i];
-      if (d.match.status === 'confident' && d.match.candidates[0].confidence >= 0.9) {
+      if (sure(d)) {
         if (marked) {
           const conflict = placedConflictOfMatch(d.match, opts.placedCells!);
           if (conflict) d.match.placedConflict = conflict;
         }
         out.push(d);
       } else {
-        out.push(yield* matchRegionDetailedSteps(index, inputs[i], opts, correction ? { correction, score: CORRECTED_SCORE } : {}));
+        const again2 = yield* matchRegionDetailedSteps(index, inputs[i], opts, correction ? { correction, score: CORRECTED_SCORE } : {});
+        releaseTemplates(d.src);
+        releaseTemplates(again2.src);
+        out.push(again2);
         onProgress?.(firstShare + ((1 - firstShare) * ++done) / again);
       }
     }
   }
+  for (const d of first) releaseTemplates(d.src);
   onProgress?.(1);
   // Outlines that include cast shadow / table: judged against the whole scan (hard shadows affect
   // every piece of a photo, so the scan's typical border tells what is normal).

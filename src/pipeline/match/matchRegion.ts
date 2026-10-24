@@ -462,37 +462,50 @@ function suppress(cands: Candidate[], radius: number, limit: number, placed?: Pl
 
 /**
  * The templates of one match (one region, one pass), by rounded mapping: the first template built
- * under a key serves every mapping that rounds to it. Behind it, the templates of the photo source
- * by level and exact mapping, shared by every match of the source (the second pass with the placed
- * marks, scorePlacement, the scale measurement), with the scores computed on them (`Template.coarse`,
- * {@link scoreAtMemo}): a template is a pure function of the source, level and mapping, so reusing
- * one gives exactly what building it again gives.
+ * under a key serves every mapping that rounds to it. With `share`, behind it the templates of the
+ * photo source by level and exact mapping, shared by the matches of the source until
+ * {@link releaseTemplates} (the second pass with the placed marks repeats the first's work on the
+ * same source), with the scores computed on them (`Template.coarse`, {@link scoreAtMemo}): a
+ * template is a pure function of the source, level and mapping, so reusing one gives exactly what
+ * building it again gives.
  */
 class TemplateCache {
   private readonly cache = new Map<string, Template | null>();
-  private readonly shared: WeakMap<RefLevel, Map<string, Template | null>>;
-  constructor(private readonly src: PhotoSource) {
+  private readonly shared: WeakMap<RefLevel, Map<string, Template | null>> | undefined;
+  constructor(private readonly src: PhotoSource, share = false, private readonly upTo = Infinity) {
     let shared = sharedTemplates.get(src);
-    if (!shared) sharedTemplates.set(src, (shared = new WeakMap()));
+    if (!shared && share) sharedTemplates.set(src, (shared = new WeakMap()));
     this.shared = shared;
   }
   get(level: RefLevel, li: number, m: Mapping): Template | null {
     const key = `${li}|${m.pivot.x.toFixed(3)}|${m.pivot.y.toFixed(3)}|${m.phi.toFixed(5)}|${m.s.toFixed(6)}${m.ax === undefined && m.ay === undefined ? '' : `|${(m.ax ?? 1).toFixed(5)}|${(m.ay ?? 1).toFixed(5)}`}`;
     let t = this.cache.get(key);
     if (t === undefined) {
-      let byLevel = this.shared.get(level);
-      if (!byLevel) this.shared.set(level, (byLevel = new Map()));
-      // (Numbers print exactly: one key per mapping.)
-      const exact = `${m.pivot.x}|${m.pivot.y}|${m.phi}|${m.s}|${m.ax}|${m.ay}`;
-      t = byLevel.get(exact);
-      if (t === undefined) {
-        t = buildTemplate(this.src, m, level, 0.6, level.ppc < 6 ? 5 : 12);
-        byLevel.set(exact, t);
+      if (!this.shared || li > this.upTo) t = buildTemplate(this.src, m, level, 0.6, level.ppc < 6 ? 5 : 12);
+      else {
+        let byLevel = this.shared.get(level);
+        if (!byLevel) this.shared.set(level, (byLevel = new Map()));
+        // (Numbers print exactly: one key per mapping.)
+        const exact = `${m.pivot.x}|${m.pivot.y}|${m.phi}|${m.s}|${m.ax}|${m.ay}`;
+        t = byLevel.get(exact);
+        if (t === undefined) {
+          t = buildTemplate(this.src, m, level, 0.6, level.ppc < 6 ? 5 : 12);
+          byLevel.set(exact, t);
+        }
       }
       this.cache.set(key, t);
     }
     return t;
   }
+}
+
+/**
+ * Let go of the templates a photo source's matches share (see `TemplateCache`): a large patch's
+ * run holds hundreds of MB of them. The matching passes release them as soon as no later pass can
+ * use them.
+ */
+export function releaseTemplates(src: PhotoSource | undefined): void {
+  if (src) sharedTemplates.delete(src);
 }
 const sharedTemplates = new WeakMap<PhotoSource, WeakMap<RefLevel, Map<string, Template | null>>>();
 
@@ -698,6 +711,8 @@ export interface MatchContext {
   /** Colour correction applied to the photo (weighted Lab affine), e.g. from {@link estimateColorCorrection}. */
   correction?: ColorCorrection;
   score?: ScoreParams;
+  /** Keep this run's templates for later runs on the same photo source (until `releaseTemplates`; see `TemplateCache`). */
+  share?: boolean;
 }
 
 /** Evidence used for the confidence of the best placement. */
@@ -860,7 +875,8 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
   if (hyps.length === 0) return empty;
   yield;
 
-  const cache = new TemplateCache(src);
+  // (Not the finest level's templates: four times the pixels of the next, too much memory to keep.)
+  const cache = new TemplateCache(src, ctx.share === true, index.levels.length - 2);
   const L = index.levels.length;
   const cell = Math.sqrt(index.cellW * index.cellH);
 
