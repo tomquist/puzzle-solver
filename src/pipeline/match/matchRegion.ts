@@ -21,7 +21,7 @@
  */
 import { findSimilarity, type Point } from '../../cv/geometry';
 import { cellKey, type CellRef, type MatchStatus, type Placement, type PlacedConflict, type RefLattice, type RegionMatch, type SideKind, type UncertainReason } from '../../model/types';
-import { buildTemplate, colourDistanceMap, DEFAULT_SCORE, makePhotoSource, scoreAt, scoreMap, type ColorCorrection, type Mapping, type PhotoSource, type ScoreParams, type Template } from './template';
+import { buildTemplate, colourDistanceMap, DEFAULT_SCORE, makePhotoSource, scoreAt, scoreMap, scorePair, type ColorCorrection, type Mapping, type PhotoSource, type ScoreParams, type Template } from './template';
 import { estimatePatchPitch } from '../pieces/patchPitch';
 import { fitPatchLattice, latticeCells, latticeCoords, latticePoint, type LatticeCell, type PatchLattice } from '../pieces/patchLattice';
 import { NOT_ONE_PIECE_CAP, onePieceArea } from './groups';
@@ -248,16 +248,36 @@ function makeHypotheses(index: ReferenceIndex, input: MatchInput, src: PhotoSour
 
 /** Exhaustive search of top-left positions in a window; returns the best. */
 function searchWindow(level: RefLevel, t: Template, X0: number, Y0: number, r: number, sp: ScoreParams): { X: number; Y: number; raw: number } | null {
+  const byPos = scoreMemo(t, sp);
+  // The window's positions not scored yet, two at a time (any two: rows and columns alike).
+  let pending = -1;
+  for (let Y = Y0 - r; Y <= Y0 + r; Y++) {
+    for (let X = X0 - r; X <= X0 + r; X++) {
+      if (!fits(level, t, X, Y)) continue;
+      const pos = Y * level.stride + X;
+      if (byPos.has(pos)) continue;
+      if (pending < 0) {
+        pending = pos;
+        continue;
+      }
+      scorePair(level, t, pending, pos - pending, sp, pairScores);
+      byPos.set(pending, pairScores[0]);
+      byPos.set(pos, pairScores[1]);
+      pending = -1;
+    }
+  }
+  if (pending >= 0) byPos.set(pending, scoreAt(level, t, pending % level.stride, Math.floor(pending / level.stride), sp));
   let best: { X: number; Y: number; raw: number } | null = null;
   for (let Y = Y0 - r; Y <= Y0 + r; Y++) {
     for (let X = X0 - r; X <= X0 + r; X++) {
       if (!fits(level, t, X, Y)) continue;
-      const v = scoreAt(level, t, X, Y, sp);
+      const v = byPos.get(Y * level.stride + X)!;
       if (!best || v > best.raw) best = { X, Y, raw: v };
     }
   }
   return best;
 }
+const pairScores = new Float64Array(2);
 
 function topLeftFor(level: RefLevel, t: Template, ref: Point): { X: number; Y: number } {
   return {
@@ -289,20 +309,65 @@ function searchBounds(level: RefLevel, t: Template): { x0: number; x1: number; y
 function coarseSearch(index: ReferenceIndex, ci: number, hyp: Hypothesis, cache: TemplateCache, sp: ScoreParams, out: Candidate[], placed?: PlacedPrior): void {
   const level = index.levels[ci];
   const t = cache.get(level, ci, hyp.map);
-  if (!t) return;
-  const b = searchBounds(level, t);
-  if (!b) return;
-  const nx = b.x1 - b.x0 + 1, ny = b.y1 - b.y0 + 1;
-  const map = new Float32Array(nx * ny);
+  if (!t || !searchBounds(level, t)) return;
   const pl = ci > 0 ? index.levels[0] : null;
   const t0 = pl ? cache.get(pl, 0, hyp.map) : null;
+  // The local maxima depend on the template (photo source, level, mapping), the prefilter level and
+  // the score parameters only: a second pass of the region (with the placed marks) finds the same.
+  const memo = (t.coarse ??= new Map());
+  const key = spKey(sp);
+  let found = memo.get(key);
+  if (!found || found.pl !== pl) memo.set(key, (found = { pl, maxima: coarseMaxima(level, t, pl, t0, sp) }));
+  const m = found.maxima;
+  for (let k = 0; k < m.length; k += 3) {
+    const ref = pivotRef(level, t, m[k], m[k + 1]);
+    out.push({ hyp, map: hyp.map, ref, raw: m[k + 2], ...scored(index, hyp, ref, m[k + 2], placed), level: ci });
+  }
+}
+
+/**
+ * The `k`-th smallest value (from 0) of `values` (no NaN), by quickselect on a copy: the value
+ * sorting would put at `k`, in linear time.
+ */
+export function kthSmallest(values: Float32Array, k: number): number {
+  const a = Float32Array.from(values);
+  let lo = 0, hi = a.length - 1;
+  while (hi > lo) {
+    // Median of three as the pivot; then Hoare partition: [lo, j] ≤ p ≤ [i, hi], (j, i) all p.
+    let x = a[lo], y = a[(lo + hi) >> 1], z = a[hi];
+    if (x > y) [x, y] = [y, x];
+    if (y > z) y = z;
+    const p = x > y ? x : y;
+    let i = lo, j = hi;
+    while (i <= j) {
+      while (a[i] < p) i++;
+      while (a[j] > p) j--;
+      if (i <= j) {
+        const tmp = a[i];
+        a[i++] = a[j];
+        a[j--] = tmp;
+      }
+    }
+    if (k <= j) hi = j;
+    else if (k >= i) lo = i;
+    else return a[k];
+  }
+  return a[k];
+}
+
+/** The local maxima of {@link coarseSearch}'s score map: (X, Y, raw) triples, row by row. */
+function coarseMaxima(level: RefLevel, t: Template, pl: RefLevel | null, t0: Template | null, sp: ScoreParams): number[] {
+  const maxima: number[] = [];
+  const b = searchBounds(level, t);
+  if (!b) return maxima;
+  const nx = b.x1 - b.x0 + 1, ny = b.y1 - b.y0 + 1;
+  const map = new Float32Array(nx * ny);
   const b0 = pl && t0 ? searchBounds(pl, t0) : null;
   if (pl && t0 && b0) {
     const nx0 = b0.x1 - b0.x0 + 1, ny0 = b0.y1 - b0.y0 + 1;
     const pre = new Float32Array(nx0 * ny0);
     scoreMap(pl, t0, b0.x0, b0.x1, b0.y0, b0.y1, sp, pre);
-    const sorted = Float32Array.from(pre).sort();
-    const thr = sorted[Math.max(0, Math.floor(sorted.length * (1 - PREFILTER_KEEP)) - 1)];
+    const thr = kthSmallest(pre, Math.max(0, Math.floor(pre.length * (1 - PREFILTER_KEEP)) - 1));
     const sel = new Uint8Array(nx * ny);
     const ax = level.scaleX / pl.scaleX, ay = level.scaleY / pl.scaleY;
     for (let j = 0; j < ny0; j++) {
@@ -351,10 +416,10 @@ function coarseSearch(index: ReferenceIndex, ci: number, hyp: Hypothesis, cache:
         }
       }
       if (!isMax) continue;
-      const ref = pivotRef(level, t, b.x0 + i, b.y0 + j);
-      out.push({ hyp, map: hyp.map, ref, raw: v, ...scored(index, hyp, ref, v, placed), level: ci });
+      maxima.push(b.x0 + i, b.y0 + j, v);
     }
   }
+  return maxima;
 }
 
 /**
@@ -395,18 +460,79 @@ function suppress(cands: Candidate[], radius: number, limit: number, placed?: Pl
   return kept;
 }
 
+/**
+ * The templates of one match (one region, one pass), by rounded mapping: the first template built
+ * under a key serves every mapping that rounds to it. With `share`, behind it the templates of the
+ * photo source by level and exact mapping, shared by the matches of the source until
+ * {@link releaseTemplates} (the second pass with the placed marks repeats the first's work on the
+ * same source), with the scores computed on them (`Template.coarse`, {@link scoreAtMemo}): a
+ * template is a pure function of the source, level and mapping, so reusing one gives exactly what
+ * building it again gives.
+ */
 class TemplateCache {
   private readonly cache = new Map<string, Template | null>();
-  constructor(private readonly src: PhotoSource) {}
+  private readonly shared: WeakMap<RefLevel, Map<string, Template | null>> | undefined;
+  constructor(private readonly src: PhotoSource, share = false, private readonly upTo = Infinity) {
+    let shared = sharedTemplates.get(src);
+    if (!shared && share) sharedTemplates.set(src, (shared = new WeakMap()));
+    this.shared = shared;
+  }
   get(level: RefLevel, li: number, m: Mapping): Template | null {
     const key = `${li}|${m.pivot.x.toFixed(3)}|${m.pivot.y.toFixed(3)}|${m.phi.toFixed(5)}|${m.s.toFixed(6)}${m.ax === undefined && m.ay === undefined ? '' : `|${(m.ax ?? 1).toFixed(5)}|${(m.ay ?? 1).toFixed(5)}`}`;
     let t = this.cache.get(key);
     if (t === undefined) {
-      t = buildTemplate(this.src, m, level, 0.6, level.ppc < 6 ? 5 : 12);
+      if (!this.shared || li > this.upTo) t = buildTemplate(this.src, m, level, 0.6, level.ppc < 6 ? 5 : 12);
+      else {
+        let byLevel = this.shared.get(level);
+        if (!byLevel) this.shared.set(level, (byLevel = new Map()));
+        // (Numbers print exactly: one key per mapping.)
+        const exact = `${m.pivot.x}|${m.pivot.y}|${m.phi}|${m.s}|${m.ax}|${m.ay}`;
+        t = byLevel.get(exact);
+        if (t === undefined) {
+          t = buildTemplate(this.src, m, level, 0.6, level.ppc < 6 ? 5 : 12);
+          byLevel.set(exact, t);
+        }
+      }
       this.cache.set(key, t);
     }
     return t;
   }
+}
+
+/**
+ * Let go of the templates a photo source's matches share (see `TemplateCache`): a large patch's
+ * run holds hundreds of MB of them. The matching passes release them as soon as no later pass can
+ * use them.
+ */
+export function releaseTemplates(src: PhotoSource | undefined): void {
+  if (src) sharedTemplates.delete(src);
+}
+const sharedTemplates = new WeakMap<PhotoSource, WeakMap<RefLevel, Map<string, Template | null>>>();
+
+/** Key of score parameters (scores computed with equal parameters are shared). */
+function spKey(sp: ScoreParams): string {
+  let k = spKeys.get(sp);
+  if (k === undefined) spKeys.set(sp, (k = `${sp.eps}|${sp.beta}|${sp.cap}|${sp.hinge}`));
+  return k;
+}
+const spKeys = new WeakMap<ScoreParams, string>();
+
+/** The scores remembered on template `t` for parameters `sp`, by position (Y · stride + X). */
+function scoreMemo(t: Template, sp: ScoreParams): Map<number, number> {
+  const memo = (t.scores ??= new Map());
+  const key = spKey(sp);
+  let byPos = memo.get(key);
+  if (!byPos) memo.set(key, (byPos = new Map()));
+  return byPos;
+}
+
+/** {@link scoreAt}, remembered on the template (per score parameters and position). */
+function scoreAtMemo(level: RefLevel, t: Template, X: number, Y: number, sp: ScoreParams): number {
+  const byPos = scoreMemo(t, sp);
+  const pos = Y * level.stride + X;
+  let v = byPos.get(pos);
+  if (v === undefined) byPos.set(pos, (v = scoreAt(level, t, X, Y, sp)));
+  return v;
 }
 
 /** Re-search a candidate's position on level `li` around its current reference position. */
@@ -585,6 +711,8 @@ export interface MatchContext {
   /** Colour correction applied to the photo (weighted Lab affine), e.g. from {@link estimateColorCorrection}. */
   correction?: ColorCorrection;
   score?: ScoreParams;
+  /** Keep this run's templates for later runs on the same photo source (until `releaseTemplates`; see `TemplateCache`). */
+  share?: boolean;
 }
 
 /** Evidence used for the confidence of the best placement. */
@@ -638,7 +766,17 @@ export interface MatchDetail {
   placements?: CandidatePlacement[];
   /** Why the placement would be unsure (see {@link uncertainReasonOf}; set whatever the status, for later demotions). */
   reason?: UncertainReason;
+  /** The finest level the placement was refined on, when not the index's finest (a large patch: see {@link FINE_ENOUGH_PIXELS}). */
+  fineLevel?: number;
 }
+
+/**
+ * Template pixels from which a level places a region well enough that finer levels are skipped
+ * (≈ 120 cells at 16 px per cell: a large assembled patch). The finest level would hold four times
+ * as many and costs most of such a patch's matching (seconds on a phone), for a place already
+ * known to a sixteenth of a cell; the patch's cells come from its seams anyway.
+ */
+export const FINE_ENOUGH_PIXELS = 30000;
 
 /** Body size (photo px) below which a region counts as small: fewer pixels than the finest level's 32 px per cell, by a margin. */
 const SMALL_BODY = 24;
@@ -737,7 +875,8 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
   if (hyps.length === 0) return empty;
   yield;
 
-  const cache = new TemplateCache(src);
+  // (Not the finest level's templates: four times the pixels of the next, too much memory to keep.)
+  const cache = new TemplateCache(src, ctx.share === true, index.levels.length - 2);
   const L = index.levels.length;
   const cell = Math.sqrt(index.cellW * index.cellH);
 
@@ -764,8 +903,15 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
   // 0.30, lost entirely with its own cell marked).
   let cands = suppress(coarse, 0.6 * cell, nKeep, placed, nKeep);
 
-  // 2. Position refinement through the finer levels.
+  // 2. Position refinement through the finer levels: down to the finest, or to the first whose
+  // template of the best place holds FINE_ENOUGH_PIXELS (a large patch: a finer level would only
+  // multiply the work).
+  let fineLevel = L - 1;
   for (let li = ci + 1; li < L; li++) {
+    if (li > ci + 1 && cands.length > 0 && (cache.get(index.levels[li - 1], li - 1, cands[0].map)?.n ?? 0) >= FINE_ENOUGH_PIXELS) {
+      fineLevel = li - 1;
+      break;
+    }
     const r = Math.ceil((index.levels[li].ppc / index.levels[li - 1].ppc) * (li === ci + 1 ? 1.5 : 1)) + 1;
     const next: Candidate[] = [];
     for (const c of cands) {
@@ -784,7 +930,7 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
   if (placed) for (const c of [...cands].sort((a, b) => b.photo - a.photo).slice(0, 2)) fine.add(c);
   for (let i = 0; i < cands.length; i++) {
     if (!fine.has(cands[i])) continue;
-    cands[i] = refineAngleScale(index, L - 1, cands[i], cache, sp, placed);
+    cands[i] = refineAngleScale(index, fineLevel, cands[i], cache, sp, placed);
     yield;
   }
 
@@ -855,7 +1001,7 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
   if (conflict) match.placedConflict = conflict;
   const reason = uncertainReasonOf(features, input, roughBody);
   if (status === 'ambiguous') match.uncertainReason = reason;
-  return { match, best: { map: best.map, ref: best.ref }, src, features, params: sp, lattice, reason, placements };
+  return { match, best: { map: best.map, ref: best.ref }, src, features, params: sp, lattice, reason, placements, ...(fineLevel < L - 1 ? { fineLevel } : {}) };
 }
 
 /** The placed-cell prior of a run (undefined without placed cells or with no penalty). */
@@ -1034,9 +1180,10 @@ export function scorePlacement(index: ReferenceIndex, input: MatchInput, detail:
     if (angleDiff(norm360(hyp.map.phi * DEG), rotationDeg) > 45) continue;
     let c: Candidate | null = { hyp, map: hyp.map, ref: centre, raw: -Infinity, score: -Infinity, photo: -Infinity, level: li0 };
     c = refinePosition(index, li0, c, cache, Math.ceil(0.3 * index.levels[li0].ppc), sp, c.map, placed);
-    for (let li = li0 + 1; li < L && c; li++) c = refinePosition(index, li, c, cache, Math.ceil(index.levels[li].ppc / index.levels[li - 1].ppc) + 1, sp, c.map, placed);
+    const fine = Math.max(li0, detail.fineLevel ?? L - 1);
+    for (let li = li0 + 1; li <= fine && c; li++) c = refinePosition(index, li, c, cache, Math.ceil(index.levels[li].ppc / index.levels[li - 1].ppc) + 1, sp, c.map, placed);
     if (!c) continue;
-    c = refineAngleScale(index, L - 1, c, cache, sp, placed);
+    c = refineAngleScale(index, fine, c, cache, sp, placed);
     if (!best || c.score > best.score) best = c;
   }
   if (!best) return null;
@@ -1196,7 +1343,7 @@ function informationFeatures(
     for (const [dx, dy] of dirs) {
       const XX = peak.X + Math.round(dx * frac * level.ppc), YY = peak.Y + Math.round(dy * frac * level.ppc);
       if (!fits(level, t, XX, YY)) continue;
-      worst = Math.min(worst, peak.raw - scoreAt(level, t, XX, YY, sp));
+      worst = Math.min(worst, peak.raw - scoreAtMemo(level, t, XX, YY, sp));
     }
     if (k === 0) f.drop25 = Number.isFinite(worst) ? worst : 0;
     else f.drop50 = Number.isFinite(worst) ? worst : 0;

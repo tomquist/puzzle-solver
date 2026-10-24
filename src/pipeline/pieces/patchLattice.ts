@@ -93,6 +93,8 @@ interface Samples {
   /** 1 for outline pixels (their weights are the outline's, not seam responses). */
   edge: Uint8Array;
   n: number;
+  /** Lazily: row ends and the samples with weight per axis (see `project`). */
+  index?: { ends: Int32Array; withA: Int32Array; withB: Int32Array };
 }
 
 /** Seam and outline evidence at every patch pixel (directions from the prior angle). */
@@ -238,34 +240,55 @@ function fitAxis(prof: Float64Array, u0: number, bin: number, pitches: number[])
   return best;
 }
 
-/** Profiles of the samples projected onto û (a) and v̂ (b) at `angle`, around the point `c`. */
+/**
+ * Profiles of the samples projected onto û (a) and v̂ (b) at `angle`, around the point `c`.
+ * Along a row of samples both projections are monotonic in x (and so is their rounding): a row's
+ * first and last samples hold its extremes. Samples without weight add nothing to a profile.
+ * (The same profiles, bit for bit, as projecting every sample.)
+ */
 function project(s: Samples, angle: number, c: Point, bin: number) {
   const ca = Math.cos(angle), sa = Math.sin(angle);
+  const { ends, withA, withB } = (s.index ??= sampleIndex(s));
+  const X = s.x, Y = s.y, cx = c.x, cy = c.y;
   let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
-  if (projA.length < s.n) {
-    projA = new Float64Array(s.n);
-    projB = new Float64Array(s.n);
-  }
-  const A = projA, B = projB;
-  for (let k = 0; k < s.n; k++) {
-    const dx = s.x[k] - c.x, dy = s.y[k] - c.y;
+  for (let r = 0; r < ends.length; r++) {
+    const k = ends[r];
+    const dx = X[k] - cx, dy = Y[k] - cy;
     const a = dx * ca + dy * sa, b = -dx * sa + dy * ca;
-    A[k] = a;
-    B[k] = b;
     if (a < a0) a0 = a;
     if (a > a1) a1 = a;
     if (b < b0) b0 = b;
     if (b > b1) b1 = b;
   }
   const pa = new Float64Array(Math.floor((a1 - a0) / bin) + 1), pb = new Float64Array(Math.floor((b1 - b0) / bin) + 1);
-  for (let k = 0; k < s.n; k++) {
-    pa[Math.floor((A[k] - a0) / bin)] += s.wa[k];
-    pb[Math.floor((B[k] - b0) / bin)] += s.wb[k];
+  const wa = s.wa, wb = s.wb;
+  for (let q = 0; q < withA.length; q++) {
+    const k = withA[q];
+    const dx = X[k] - cx, dy = Y[k] - cy;
+    pa[Math.floor((dx * ca + dy * sa - a0) / bin)] += wa[k];
+  }
+  for (let q = 0; q < withB.length; q++) {
+    const k = withB[q];
+    const dx = X[k] - cx, dy = Y[k] - cy;
+    pb[Math.floor((-dx * sa + dy * ca - b0) / bin)] += wb[k];
   }
   return { pa, a0, pb, b0 };
 }
-/** Scratch of {@link project}: the samples' axis coordinates (grown as needed). */
-let projA = new Float64Array(0), projB = new Float64Array(0);
+
+/** The first and last sample of every row, and the samples with weight on each axis (in order). */
+function sampleIndex(s: Samples): NonNullable<Samples['index']> {
+  const ends: number[] = [], withA: number[] = [], withB: number[] = [];
+  for (let k = 0; k < s.n; k++) {
+    if (k === 0 || s.y[k] !== s.y[k - 1]) {
+      if (k > 0) ends.push(k - 1);
+      ends.push(k);
+    }
+    if (s.wa[k] !== 0) withA.push(k);
+    if (s.wb[k] !== 0) withB.push(k);
+  }
+  if (s.n > 0) ends.push(s.n - 1);
+  return { ends: Int32Array.from(ends), withA: Int32Array.from(withA), withB: Int32Array.from(withB) };
+}
 
 const range = (centre: number, rel: number, step: number): number[] => {
   const out: number[] = [];
@@ -294,6 +317,20 @@ export function latticeSamples(image: RGBAImage, mask: Mask, l: PatchLattice): L
  * The result's origin is a seam crossing near the middle of the patch.
  */
 export function fitPatchLattice(image: RGBAImage, mask: Mask, prior: PatchLattice, opts: LatticeFitOptions = {}): PatchLattice {
+  // Remembered per patch (its mask and image, or the seam samples given) and prior: the matcher fits
+  // the same placement's lattice again in its second pass, the cell-size measurement after it.
+  let byImage = fitMemo.get(opts.samples ?? mask);
+  if (!byImage) fitMemo.set(opts.samples ?? mask, (byImage = new WeakMap()));
+  let memo = byImage.get(image);
+  if (!memo) byImage.set(image, (memo = new Map()));
+  const key = `${prior.origin.x}|${prior.origin.y}|${prior.angle}|${prior.pa}|${prior.pb}|${opts.fixedAngle === true}`;
+  let fit = memo.get(key);
+  if (!fit) memo.set(key, (fit = fitLattice(image, mask, prior, opts)));
+  return { ...fit, origin: { ...fit.origin }, strength: [fit.strength[0], fit.strength[1]] };
+}
+const fitMemo = new WeakMap<object, WeakMap<RGBAImage, Map<string, PatchLattice>>>();
+
+function fitLattice(image: RGBAImage, mask: Mask, prior: PatchLattice, opts: LatticeFitOptions): PatchLattice {
   const samples = opts.samples ?? seamSamples(image, mask, prior.angle, Math.sqrt(prior.pa * prior.pb));
   if (!samples) return { ...prior, strength: [-1, -1] };
   // Phases are measured from the prior's seam crossing nearest the patch's middle (an angle error

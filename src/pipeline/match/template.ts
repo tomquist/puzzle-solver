@@ -284,6 +284,12 @@ export interface Template {
   variance: number;
   /** Lazily computed pixel runs for prefix-sum scoring. */
   runs?: { ro: Int32Array; rl: Int32Array };
+  /** Lazily computed `off` × 3 (offsets into the level's interleaved data). */
+  off3?: Int32Array;
+  /** Scores remembered by the matcher (match/matchRegion.ts): per score parameters, by position. */
+  scores?: Map<string, Map<number, number>>;
+  /** The matcher's coarse-search maxima (X, Y, raw triples) per score parameters, with the prefilter level they were found with. */
+  coarse?: Map<string, { pl: RefLevel | null; maxima: number[] }>;
 }
 
 /**
@@ -321,13 +327,21 @@ export function buildTemplate(src: PhotoSource, m: Mapping, level: RefLevel, min
   const ok = new Uint8Array(gw * gh);
   let n = 0, mu0 = 0, mu1 = 0, mu2 = 0;
   let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+  // The products with the column coordinate, once per column (the same values as per pixel).
+  const cxu = new Float64Array(gw), sxu = new Float64Array(gw);
+  for (let i = 0; i < gw; i++) {
+    const xu = (iu0 + i) / lx;
+    cxu[i] = c * xu;
+    sxu[i] = -s * xu;
+  }
+  const px0 = m.pivot.x, py0 = m.pivot.y;
   for (let j = 0; j < gh; j++) {
     const yv = (iv0 + j) / ly;
+    const syv = s * yv, cyv = c * yv;
     for (let i = 0; i < gw; i++) {
-      const xu = (iu0 + i) / lx;
       // photo = pivot + R(-phi) (x, y) / s
-      const px = m.pivot.x + (c * xu + s * yv) * inv;
-      const py = m.pivot.y + (-s * xu + c * yv) * inv;
+      const px = px0 + (cxu[i] + syv) * inv;
+      const py = py0 + (sxu[i] + cyv) * inv;
       const qx = (px - ox + 0.5) * fx - 0.5, qy = (py - oy + 0.5) * fy - 0.5;
       if (qx < 0 || qy < 0 || qx > iw - 1 || qy > ih - 1) continue;
       const x0 = Math.floor(qx), y0 = Math.floor(qy);
@@ -436,6 +450,12 @@ export function scoreAt(level: RefLevel, t: Template, X: number, Y: number, p: S
     s2 += r2;
     ss += SQ[pi];
   }
+  return scoreOfSums(t, num, s0, s1, s2, ss, p);
+}
+
+/** {@link scoreAt} from its sums: the correlation `num` and the reference's channel and squared sums under the template. */
+function scoreOfSums(t: Template, num: number, s0: number, s1: number, s2: number, ss: number, p: ScoreParams): number {
+  const n = t.n;
   const invN = 1 / n;
   const m0 = s0 * invN, m1 = s1 * invN, m2 = s2 * invN;
   const varR = ss - (s0 * m0 + s1 * m1 + s2 * m2);
@@ -444,6 +464,37 @@ export function scoreAt(level: RefLevel, t: Template, X: number, Y: number, p: S
   const d0 = t.mean[0] - m0, d1 = t.mean[1] - m1, d2 = t.mean[2] - m2;
   const dm = Math.sqrt(d0 * d0 + d1 * d1 + d2 * d2);
   return ncc - colourPenalty(dm, p);
+}
+
+/**
+ * {@link scoreAt} at two positions, top-left pixel `pos` (Y · stride + X) and `pos + d`, into
+ * `out[0]`, `out[1]`, in one pass over the template (each position's sums in the template's pixel
+ * order: the same scores).
+ */
+export function scorePair(level: RefLevel, t: Template, pos: number, d: number, p: ScoreParams, out: Float64Array): void {
+  const D = level.data, SQ = level.sq, off = t.off, V = t.val, n = t.n;
+  const base = pos, d3 = 3 * d;
+  let num = 0, s0 = 0, s1 = 0, s2 = 0, ss = 0;
+  let mum = 0, u0 = 0, u1 = 0, u2 = 0, us = 0;
+  for (let i = 0, j = 0; i < n; i++, j += 3) {
+    const pi = base + off[i];
+    const q = pi * 3;
+    const v0 = V[j], v1 = V[j + 1], v2 = V[j + 2];
+    const r0 = D[q], r1 = D[q + 1], r2 = D[q + 2];
+    num += v0 * r0 + v1 * r1 + v2 * r2;
+    s0 += r0;
+    s1 += r1;
+    s2 += r2;
+    ss += SQ[pi];
+    const w0 = D[q + d3], w1 = D[q + d3 + 1], w2 = D[q + d3 + 2];
+    mum += v0 * w0 + v1 * w1 + v2 * w2;
+    u0 += w0;
+    u1 += w1;
+    u2 += w2;
+    us += SQ[pi + d];
+  }
+  out[0] = scoreOfSums(t, num, s0, s1, s2, ss, p);
+  out[1] = scoreOfSums(t, mum, u0, u1, u2, us, p);
 }
 
 /** Runs of consecutive valid template pixels: prefix offsets (relative to a position) and lengths, ×4 channels. */
@@ -469,7 +520,7 @@ function templateRuns(t: Template, stride: number): { ro: Int32Array; rl: Int32A
 export function scoreMap(level: RefLevel, t: Template, x0: number, x1: number, y0: number, y1: number, p: ScoreParams, out: Float32Array): void {
   const P = level.prefix;
   if (!P) throw new Error('scoreMap: level has no prefix sums');
-  const D = level.data, off = t.off, V = t.val, n = t.n, stride = level.stride, W1 = stride + 1;
+  const D = level.data, V = t.val, n = t.n, stride = level.stride, W1 = stride + 1;
   if (!t.runs) t.runs = templateRuns(t, stride);
   const { ro, rl } = t.runs;
   const R = ro.length;
@@ -477,29 +528,53 @@ export function scoreMap(level: RefLevel, t: Template, x0: number, x1: number, y
   const tm0 = t.mean[0] - level.center[0], tm1 = t.mean[1] - level.center[1], tm2 = t.mean[2] - level.center[2];
   const te = t.energy + fl;
   const nx = x1 - x0 + 1;
+  const off3 = t.off3 ??= t.off.map((o) => 3 * o);
+  /** Score at (X, Y) from its correlation sum `num`. */
+  const put = (X: number, Y: number, num: number) => {
+    const pb = (Y * W1 + X) * 4;
+    let s0 = 0, s1 = 0, s2 = 0, ss = 0;
+    for (let r = 0; r < R; r++) {
+      const a = pb + ro[r], b = a + rl[r];
+      s0 += P[b] - P[a];
+      s1 += P[b + 1] - P[a + 1];
+      s2 += P[b + 2] - P[a + 2];
+      ss += P[b + 3] - P[a + 3];
+    }
+    const m0 = s0 * invN, m1 = s1 * invN, m2 = s2 * invN;
+    const varR = ss - (s0 * m0 + s1 * m1 + s2 * m2);
+    const ncc = num / Math.sqrt(te * ((varR > 0 ? varR : 0) + fl));
+    const d0 = tm0 - m0, d1 = tm1 - m1, d2 = tm2 - m2;
+    const dm = Math.sqrt(d0 * d0 + d1 * d1 + d2 * d2);
+    out[(Y - y0) * nx + (X - x0)] = ncc - (hinge ? colourPenalty(dm, p) : (beta * (dm < cap ? dm : cap)) / cap);
+  };
   for (let Y = y0; Y <= y1; Y++) {
-    for (let X = x0; X <= x1; X++) {
-      const base = Y * stride + X;
+    let X = x0;
+    // Four neighbouring positions at a time (each one's sum in the template's pixel order, as one
+    // at a time: the same scores), sharing the template's values and offsets.
+    for (; X + 3 <= x1; X += 4) {
+      const base = (Y * stride + X) * 3;
+      let n0 = 0, n1 = 0, n2 = 0, n3 = 0;
+      for (let i = 0, j = 0; i < n; i++, j += 3) {
+        const q = base + off3[i];
+        const v0 = V[j], v1 = V[j + 1], v2 = V[j + 2];
+        n0 += v0 * D[q] + v1 * D[q + 1] + v2 * D[q + 2];
+        n1 += v0 * D[q + 3] + v1 * D[q + 4] + v2 * D[q + 5];
+        n2 += v0 * D[q + 6] + v1 * D[q + 7] + v2 * D[q + 8];
+        n3 += v0 * D[q + 9] + v1 * D[q + 10] + v2 * D[q + 11];
+      }
+      put(X, Y, n0);
+      put(X + 1, Y, n1);
+      put(X + 2, Y, n2);
+      put(X + 3, Y, n3);
+    }
+    for (; X <= x1; X++) {
+      const base = (Y * stride + X) * 3;
       let num = 0;
       for (let i = 0, j = 0; i < n; i++, j += 3) {
-        const q = (base + off[i]) * 3;
+        const q = base + off3[i];
         num += V[j] * D[q] + V[j + 1] * D[q + 1] + V[j + 2] * D[q + 2];
       }
-      const pb = (Y * W1 + X) * 4;
-      let s0 = 0, s1 = 0, s2 = 0, ss = 0;
-      for (let r = 0; r < R; r++) {
-        const a = pb + ro[r], b = a + rl[r];
-        s0 += P[b] - P[a];
-        s1 += P[b + 1] - P[a + 1];
-        s2 += P[b + 2] - P[a + 2];
-        ss += P[b + 3] - P[a + 3];
-      }
-      const m0 = s0 * invN, m1 = s1 * invN, m2 = s2 * invN;
-      const varR = ss - (s0 * m0 + s1 * m1 + s2 * m2);
-      const ncc = num / Math.sqrt(te * ((varR > 0 ? varR : 0) + fl));
-      const d0 = tm0 - m0, d1 = tm1 - m1, d2 = tm2 - m2;
-      const dm = Math.sqrt(d0 * d0 + d1 * d1 + d2 * d2);
-      out[(Y - y0) * nx + (X - x0)] = ncc - (hinge ? colourPenalty(dm, p) : (beta * (dm < cap ? dm : cap)) / cap);
+      put(X, Y, num);
     }
   }
 }
