@@ -834,6 +834,8 @@ function fitOwnLight(s: Samples, fit: BackgroundFit, idx: readonly number[], p: 
 
 /** Allowance (Lab units: L, a, b) on top of twice the main surface's local spread for a further plain paint. */
 const PLAIN_FLOOR = [0.6, 0.4, 0.4];
+/** (L* + 16) ratio to the main surface below which a further colour showing as piece-sized blobs too gets the main surface's lightness spread scaled by that ratio at most. */
+const DARK_PALETTE_RHO = 0.55;
 /** Share of a candidate table colour in piece-sized areas from which, unless surfaces hold more, it is no table colour. */
 const PIECE_BLOB_SHARE = 0.2;
 /** Smallest share of the photo of a component that shows a surface (larger than any piece lying there). */
@@ -1041,7 +1043,17 @@ function findPalette(s: Samples, fit: BackgroundFit, tex: Float32Array): void {
     // not table. Its samples are left out of the further search.
     // A colour shown as large areas must be uniform there like a surface: large areas of print
     // (assembled patches along the border) are not table either.
-    const lay = colourLayout(s, fit, colour);
+    let lay = colourLayout(s, fit, colour);
+    // A colour far darker than the main surface (DARK_PALETTE_RHO) that shows in piece-sized areas too
+    // may be the mix of dark grey and black print of several shades (the dark pieces of assembled
+    // groups along the border): its lightness spread, wider than the main surface's scaled by the
+    // light it gets, would take every dark piece a little lighter than it for table (pieces at L*
+    // 13–22 matched such a "table" at 8). Its spread is capped there and its layout judged again.
+    const rho = (colour.color[0] + 16) / (colour.refL + 16);
+    if (rho < DARK_PALETTE_RHO && lay.blob >= PIECE_BLOB_SHARE && colour.sigma[0] > mainSigma[0] * rho) {
+      colour.sigma[0] = Math.max(SIGMA_FLOOR[0], mainSigma[0] * rho);
+      lay = colourLayout(s, fit, colour);
+    }
     if ((lay.blob >= PIECE_BLOB_SHARE && lay.blob > lay.surface) || (lay.surface + lay.blob >= 0.5 && !surfaceLike(s, fit, lay.members, tex))) {
       for (const i of out) if (within(colour.color, lit(i, colour), 16)) ignored[i] = 1;
       continue;

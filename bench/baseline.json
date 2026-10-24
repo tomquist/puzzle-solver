@@ -968,6 +968,24 @@
         "falseRemoved": 1,
         "outlineFixed": 0.267
       },
+      "2026-10-24-assembled-board-gaps-1500pc.json": {
+        "mergedSplit": 0,
+        "outlineFixed": 0.077,
+        "mergedExact": 0
+      },
+      "2026-10-24-blue-table-blob-1500pc.json": {
+        "outlineFixed": 1,
+        "objectRecall": 1,
+        "objectClean": 1,
+        "objectPrecision": 1
+      },
+      "2026-10-24-board-dark-pieces-closeup-1500pc.json": {
+        "missedFound": 0,
+        "outlineFixed": 0.821,
+        "objectRecall": 1,
+        "objectClean": 0.5,
+        "objectPrecision": 1
+      },
       "flickr-chrisrycroft-birds-oak-partial.json": {
         "objectRecall": 0.5,
         "objectClean": 0.5,

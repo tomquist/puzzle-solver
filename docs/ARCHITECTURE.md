@@ -337,7 +337,26 @@ A weak region that is smooth all through, without a crisp edge along its outline
 shading of the table), is dropped before the split.
 In a cluster of a few touching pieces (by the piece size measured from single pieces), weak
 foreground that hangs off it by a short stretch of its outline (shaded table tying the pieces
-together) is dropped before the split.
+together) is dropped before the split; so is weak foreground that mostly faces the table and fades
+into it without a crisp edge anywhere along there (a sheen or shading spread between the pieces,
+`pieces/smoothWeak.ts`; a pale piece ends at a cut edge).
+A further table colour (`palette`) far darker than the main surface (L* + 16 below 0.55 of it) that
+also shows in piece-sized areas gets a lightness spread no larger than the main surface's scaled by
+that ratio (noise, shading and lighting multiply the light), and its layout is judged again: learned
+from dark grey and black print of several shades (the dark pieces of assembled groups along the
+border of a brown-board close-up), its spread had made every dark piece a little lighter than it
+score like the table.
+Pieces lying on a board in low side light cast shadows far deeper than the score's shadow tolerance
+(0.5–0.75 of the board's L* + 16) into the blanks along one side, which their outlines take in.
+Optionally (`SegmentOptions.castShadow`, off by default, `CAST=1` in the benchmark and feedback tools;
+see segment.ts CAST_SHADOW_DEFAULT) after the split a single piece's outline gives back the board in
+such shadow (`pieces/castShadow.ts`):
+pixels within 0.15 piece sizes of the outline, reached from the table through such pixels, darker
+than the table but not below 0.4 of it, in the table's own hue (chroma along the table's, 0.5–2.5
+times it, within 4 Lab units: dark grey or cool print is not shadow) and in a band wide enough to be a
+shadow (thin dark rims and creases stay); next to a piece darker than the table nothing within half
+the step from it to the table of its own brightness (its print); most of it deeper than 0.75 of the
+table (lighter shade is the score's). Kept when the piece keeps ≥ 70 %.
 
 **Piece shape** – smoothed contour; corner candidates from curvature/convex-hull; best 4-corner
 combination by rectangularity and area; sides classified flat/tab/blank from the deviation profile;

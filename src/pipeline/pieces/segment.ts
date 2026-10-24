@@ -39,6 +39,8 @@ import { lumaTexture, lumaTextureApplies, lumaTextureForeground, type LumaTextur
 import { estimatePatchPitch } from './patchPitch';
 import { fitGrainTable, grainCoherence, GRAIN_MIN_COHERENCE, type GrainTable } from './grain';
 import { refineByGraphCut } from './refine';
+import { crispOpenOutline } from './smoothWeak';
+import { CAST_BAND, CAST_BAND_MIN, castShadow } from './castShadow';
 import { analyzePieceShape, bodyOrientation, orientationHistogram } from './shape';
 import type { BackgroundModel, RegionDiagnostics, SegmentOptions, Segmentation, SegmentedRegion } from './types';
 import { boxBlurRGB, doubleMask, halveGray, interpolateReplicatedChroma, median, offsetPoints, smoothChroma } from './util';
@@ -385,7 +387,7 @@ const HANGING_CONTACT = 0.2;
  * pieces, see below). Returns the remaining parts as candidates, or null when nothing changed.
  * Exported for tests.
  */
-export function dropFarWeak(c: Pick<Candidate, 'mask' | 'bbox' | 'area'>, score: GrayImage, high: number, texOnly: Mask, reach: number, minAnchor: number, refArea: number, minArea: number, W: number, H: number, measured: boolean): Candidate[] | null {
+export function dropFarWeak(c: Pick<Candidate, 'mask' | 'bbox' | 'area'>, score: GrayImage, high: number, texOnly: Mask, reach: number, minAnchor: number, refArea: number, minArea: number, W: number, H: number, measured: boolean, img?: RGBAImage): Candidate[] | null {
   const r = Math.ceil(reach), pad = r + 1;
   const { width: w, height: h } = c.mask;
   const pw = w + 2 * pad, ph = h + 2 * pad;
@@ -456,6 +458,10 @@ export function dropFarWeak(c: Pick<Candidate, 'mask' | 'bbox' | 'area'>, score:
         }
       }
       hanging = along > 0 && along < HANGING_CONTACT * (along + open);
+      // Or mostly facing the table and fading into it all along there (no crisp cut edge, as in
+      // peelSoft's stain test): a sheen or a shading of the table spread between the pieces, not a
+      // pale piece, which ends at a cut edge (smoothWeak.ts).
+      if (!hanging && img && along > 0 && open > along) hanging = (crispOpenOutline(img, gc.labels, st.label, st.bbox, m, c.bbox.x - pad, c.bbox.y - pad) ?? 1) < SMOOTH_CRISP;
     }
     if (atBorder || band || hanging || st.area >= 2 * refArea) {
       dropped += st.area;
@@ -2197,6 +2203,33 @@ function peelShadowHalo(c: Candidate, img: RGBAImage, fit: BackgroundFit, noise:
   return { ...peeled, group: c.group, merged: c.merged };
 }
 
+/** Share of a region the largest part must keep when its cast shadow is trimmed. */
+const CAST_KEEP = 0.7;
+
+/**
+ * A single piece's outline without the deep cast shadow along it (castShadow.ts): the largest part
+ * left, unless that lost much of the region (then the "shadow" was dark print). Its shape confidence
+ * is no guide here: at the sizes these shadows show (pieces of 40–100 px), a shadow filling the
+ * blanks along one side squares the outline off as convincingly as the piece's own sides.
+ */
+function trimCastShadow(c: Candidate, img: RGBAImage, fit: BackgroundFit, band: number, ra: number, W: number, H: number): Candidate | null {
+  const pad = 2;
+  const x0 = Math.max(0, c.bbox.x - pad), y0 = Math.max(0, c.bbox.y - pad);
+  const x1 = Math.min(W, c.bbox.x + c.bbox.width + pad), y1 = Math.min(H, c.bbox.y + c.bbox.height + pad);
+  const w = x1 - x0, h = y1 - y0;
+  const m = createMask(w, h);
+  for (let y = 0; y < c.bbox.height; y++) m.data.set(c.mask.data.subarray(y * c.bbox.width, (y + 1) * c.bbox.width), (y + c.bbox.y - y0) * w + c.bbox.x - x0);
+  const cast = castShadow(m, x0, y0, img, fit, band);
+  if (!cast || cast.count < 0.02 * ra) return null;
+  for (let i = 0; i < w * h; i++) if (cast.shadow[i]) m.data[i] = 0;
+  const { labels, stats } = labelComponents(open(m, 1), 8);
+  if (stats.length === 0) return null;
+  const main = stats.reduce((a, b) => (b.area > a.area ? b : a));
+  if (main.area < CAST_KEEP * c.area || main.area < 0.5 * ra) return null;
+  const trimmed = makeCandidate(componentMask(labels, w, main.label, main.bbox), { x: main.bbox.x + x0, y: main.bbox.y + y0, width: main.bbox.width, height: main.bbox.height }, W, H, main.area);
+  return { ...trimmed, group: c.group, merged: c.merged };
+}
+
 /**
  * Wood-grain table model (SegmentOptions.grain) when the option is not given: off. On the HABA oak
  * photo it gives cleaner outlines and finds every piece, but leaves two touching pieces merged and
@@ -2205,6 +2238,16 @@ function peelShadowHalo(c: Candidate, img: RGBAImage, fit: BackgroundFit, noise:
  * on grained wood takes about twice as long. Two Flickr wood photos gain clearly.
  */
 const GRAIN_DEFAULT = false;
+
+/**
+ * Trimming of deep cast shadows off single pieces (SegmentOptions.castShadow) when the option is not
+ * given: off. On the brown-board photo of 2026-10-24 (2026-10-24-assembled-board-gaps) it gives two
+ * more outlines right (3 of 13 judged marks instead of 1) and changes no other feedback file, but on
+ * synthetic dark-wood scenes it moves outlines that matching relied on (wave-dark-wood-pieces kind
+ * accuracy 1 → 0.95, starry-wood-tiles-real top-1 0.69 → 0.63; without the deep-shadow share
+ * also Puzzle-Map segTop1 0.267 → 0.258 and placed confident precision 0.999 → 0.991).
+ */
+const CAST_SHADOW_DEFAULT = false;
 
 /** Graph-cut refinement (SegmentOptions.graphCut) when the option is not given. */
 const GRAPH_CUT_DEFAULT = false;
@@ -2654,7 +2697,7 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
       for (const c of cands) {
         // Weak pixels (between the thresholds) far from any strong one: shading bands, the edge of
         // a second surface, shadows that only hysteresis tied to a piece.
-        const anchored = dropFarWeak(c, score, th.high, texOnly, Math.max(2, WEAK_REACH * ref.refBody), Math.max(minArea, ANCHOR_MIN * ref.refArea), ref.refArea, minArea, W, H, ref.singles.length > 0);
+        const anchored = dropFarWeak(c, score, th.high, texOnly, Math.max(2, WEAK_REACH * ref.refBody), Math.max(minArea, ANCHOR_MIN * ref.refArea), ref.refArea, minArea, W, H, ref.singles.length > 0, scored);
         if (anchored) changed = true;
         for (const a of anchored ?? [c]) {
           const parts = removeThin(a, ref.refBody, ref.refArea, minArea, W, H);
@@ -2869,11 +2912,18 @@ export function segmentPieces(input: RGBAImage, opts: SegmentOptions = {}): Segm
   // (The crease maps of the split are no longer needed.)
   topHatTiles.delete(scored);
   if (diag) diag.blockiness = blockiness;
-  // Soft cast shadows around dark pieces in close-ups, then (JPEGs) colour bled into the table.
+  // Deep cast shadows taken in by single pieces (castShadow.ts), where the outline gets clearly better.
+  const trimmed = (c: Candidate): Candidate | null => {
+    if (!(opts.castShadow ?? CAST_SHADOW_DEFAULT) || refArea <= 0 || fit.color[0] < DARK_TABLE_L) return null;
+    const ra = refAreaAt(c), band = CAST_BAND * refBody * Math.sqrt(ra / refArea);
+    return c.area >= 0.5 * ra && c.area <= 1.4 * ra && band >= CAST_BAND_MIN ? trimCastShadow(c, scored, fit, band, ra, W, H) : null;
+  };
+  // Soft cast shadows around dark pieces in close-ups (else deep ones of any piece), then (JPEGs)
+  // colour bled into the table.
   cands = cands.map((c) => {
     if (c.touchesBorder) return c;
     const bodyAt = refBody * Math.sqrt(refAreaAt(c) / Math.max(1, refArea));
-    const peeled = (refArea > 0 ? peelShadowHalo(c, scored, fit, noise, bodyAt, W, H) : null) ?? c;
+    const peeled = (refArea > 0 ? peelShadowHalo(c, scored, fit, noise, bodyAt, W, H) : null) ?? trimmed(c) ?? c;
     return blocky ? snapOutline(peeled, scored, score, th.high, noise, bodyAt, W, H) ?? peeled : peeled;
   });
   lap('snap');
