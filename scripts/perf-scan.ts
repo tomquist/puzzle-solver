@@ -71,6 +71,24 @@ async function prepare() {
     if (chromium && !chrome) throw new Error('Chromium is needed: npx playwright install chromium');
     return chromium ? chrome!.decode(img) : decodeFeedbackImage(img);
   };
+  // `--extra name=path,…`: add feedback files (with their own reference picture) to an existing cache.
+  const extra = opt('extra');
+  if (extra) {
+    let entries: Entry[] = JSON.parse(readFileSync(resolve(CACHE, 'entries.json'), 'utf8'));
+    for (const item of extra.split(',')) {
+      const [name, path] = item.split('=');
+      const b = readFeedbackFile(path);
+      const chromium = fromChromium(b.app.userAgent);
+      const photo = writeRaw(`${name}.rgba`, await decode(b.scan!.photo, chromium));
+      const reference = b.reference ? writeRaw(`${name}-ref.rgba`, await decode(b.reference, chromium)) : undefined;
+      entries = entries.filter((e) => e.name !== name);
+      entries.push({ name, photo, reference, grid: b.puzzle.grid, cut: b.puzzle.cut });
+      console.log(name, photo.width, photo.height, reference ? 'ref' : 'no ref');
+    }
+    await chrome?.close();
+    writeFileSync(resolve(CACHE, 'entries.json'), JSON.stringify(entries, null, 1));
+    return;
+  }
   const entries: Entry[] = [];
   const priv = resolve('test-corpus/private'), fb = resolve('test-corpus/feedback');
   const fb17 = readFeedbackFile(resolve(priv, 'fb17.json'));
