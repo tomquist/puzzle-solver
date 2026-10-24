@@ -87,6 +87,14 @@ export function backgroundAt(model: Pick<BackgroundModel, 'coefficients' | 'widt
   return c;
 }
 
+/** Lab of every table colour at photo pixel (x, y): the main surface (with local corrections) and the further table colours under the lighting there. */
+export function tableColoursAt(fit: BackgroundFit, x: number, y: number): [number, number, number][] {
+  const out = [backgroundAt(fit, x, y)];
+  const u = norm(x, fit.width), v = norm(y, fit.height);
+  for (let k = 0; k < fit.palette.length; k++) out.push(paletteAt(fit, k, u, v));
+  return out;
+}
+
 /**
  * Chroma (a, b) and its spread of every table colour at photo pixel (x, y): the main surface (with
  * local corrections) and the further table colours under the lighting there.
