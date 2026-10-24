@@ -90,6 +90,11 @@ export interface SegmentOptions {
    */
   grain?: boolean;
   /**
+   * Give the deep cast shadows single pieces took in back to the table (castShadow.ts; pieces on a
+   * board in low side light). Default false: see segment.ts CAST_SHADOW_DEFAULT.
+   */
+  castShadow?: boolean;
+  /**
    * Give the pixels around neck cuts out again with the table in shade (narrow gaps between pieces
    * lying close) carved out, so a knob pressed against a neighbour stays with its own piece
    * (default true).

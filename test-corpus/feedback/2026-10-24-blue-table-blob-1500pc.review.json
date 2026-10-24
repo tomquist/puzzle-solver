@@ -1,0 +1,20 @@
+{
+  "reviewed": "2026-10-24",
+  "marks": {
+    "1": {
+      "verdict": "ok",
+      "note": "#2 is one loose piece (purple/green print, knobs at its top, right, left and bottom left) plus a pale sheen of the table above and left of it that fades into the table without any edge and reaches almost to piece #1's lower tip (which it took a sliver of); no second piece. Table points spread over that sheen. (A narrow strip of the same sheen in the blank right of the piece, around (990, 1170), is table too but not listed: the user marked the blob.)",
+      "pieces": [
+        [{ "x": 750, "y": 1130 }, { "x": 920, "y": 1115 }, { "x": 810, "y": 1260 }, { "x": 650, "y": 1280 }, { "x": 640, "y": 1400 }, { "x": 820, "y": 1420 }, { "x": 940, "y": 1265 }]
+      ],
+      "table": [{ "x": 780, "y": 950 }, { "x": 880, "y": 920 }, { "x": 950, "y": 1000 }, { "x": 1050, "y": 900 }, { "x": 720, "y": 1030 }, { "x": 1060, "y": 1080 }]
+    }
+  },
+  "objects": [
+    { "x": 1025, "y": 680, "note": "loose piece, top" },
+    { "x": 810, "y": 1260, "note": "loose piece with the sheen above it (M1)" },
+    { "x": 1580, "y": 980, "note": "loose piece, right" },
+    { "x": 1378, "y": 1300, "note": "loose piece, middle right" },
+    { "x": 868, "y": 1727, "note": "loose piece, bottom" }
+  ]
+}

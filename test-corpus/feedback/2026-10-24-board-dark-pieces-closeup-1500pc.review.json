@@ -1,0 +1,2117 @@
+{
+  "reviewed": "2026-10-24",
+  "marks": {
+    "1": {
+      "verdict": "ok",
+      "note": "Dark grey piece, the lower of the two middle pieces (MB) of the assembled group of three in the middle (left piece L, middle top MT, middle bottom MB; MB's knob reaches into L along a dark curved seam, MT and MB meet along a straight seam at y ≈ 1190); the group's dark print was taken for table. One patch over the group is right."
+    },
+    "2": {
+      "verdict": "ok",
+      "note": "Dark grey piece MT of the middle group (see M1)."
+    },
+    "3": {
+      "verdict": "ok",
+      "note": "Dark grey piece L of the middle group (see M1)."
+    },
+    "4": {
+      "verdict": "ok",
+      "note": "Loose piece P1 at the bottom left (purple and green print), touching the grey piece P2 below it; only fragments of it were found."
+    },
+    "5": {
+      "verdict": "ok",
+      "note": "Fragments of the touching loose pieces P1 (purple/green) and P2 (grey) at the bottom left: two pieces, not assembled (turned against each other).",
+      "pieces": [
+        [
+          {
+            "x": 300,
+            "y": 1545
+          },
+          {
+            "x": 220,
+            "y": 1700
+          },
+          {
+            "x": 420,
+            "y": 1650
+          },
+          {
+            "x": 450,
+            "y": 1830
+          },
+          {
+            "x": 300,
+            "y": 1920
+          }
+        ],
+        [
+          {
+            "x": 260,
+            "y": 2140
+          },
+          {
+            "x": 130,
+            "y": 2140
+          },
+          {
+            "x": 390,
+            "y": 2150
+          },
+          {
+            "x": 240,
+            "y": 2250
+          }
+        ]
+      ]
+    },
+    "6": {
+      "verdict": "ok",
+      "note": "P1's right knob (see M5).",
+      "pieces": [
+        [
+          {
+            "x": 300,
+            "y": 1545
+          },
+          {
+            "x": 220,
+            "y": 1700
+          },
+          {
+            "x": 420,
+            "y": 1650
+          },
+          {
+            "x": 450,
+            "y": 1830
+          },
+          {
+            "x": 300,
+            "y": 1920
+          }
+        ],
+        [
+          {
+            "x": 260,
+            "y": 2140
+          },
+          {
+            "x": 130,
+            "y": 2140
+          },
+          {
+            "x": 390,
+            "y": 2150
+          },
+          {
+            "x": 240,
+            "y": 2250
+          }
+        ]
+      ]
+    },
+    "7": {
+      "verdict": "ok",
+      "note": "Part of P1 (see M5).",
+      "pieces": [
+        [
+          {
+            "x": 300,
+            "y": 1545
+          },
+          {
+            "x": 220,
+            "y": 1700
+          },
+          {
+            "x": 420,
+            "y": 1650
+          },
+          {
+            "x": 450,
+            "y": 1830
+          },
+          {
+            "x": 300,
+            "y": 1920
+          }
+        ],
+        [
+          {
+            "x": 260,
+            "y": 2140
+          },
+          {
+            "x": 130,
+            "y": 2140
+          },
+          {
+            "x": 390,
+            "y": 2150
+          },
+          {
+            "x": 240,
+            "y": 2250
+          }
+        ]
+      ]
+    },
+    "8": {
+      "verdict": "ok",
+      "note": "MB's bottom knob (pink tip) only: the middle group of three assembled dark pieces (see M1).",
+      "assembled": [
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 700,
+            "y": 1250
+          },
+          {
+            "x": 790,
+            "y": 1130
+          },
+          {
+            "x": 690,
+            "y": 1450
+          },
+          {
+            "x": 790,
+            "y": 1600
+          },
+          {
+            "x": 880,
+            "y": 1250
+          },
+          {
+            "x": 830,
+            "y": 1480
+          }
+        ],
+        [
+          {
+            "x": 1000,
+            "y": 950
+          },
+          {
+            "x": 1180,
+            "y": 1000
+          },
+          {
+            "x": 1100,
+            "y": 1100
+          },
+          {
+            "x": 1230,
+            "y": 1050
+          },
+          {
+            "x": 1340,
+            "y": 1040
+          },
+          {
+            "x": 900,
+            "y": 1010
+          }
+        ],
+        [
+          {
+            "x": 1050,
+            "y": 1300
+          },
+          {
+            "x": 1150,
+            "y": 1450
+          },
+          {
+            "x": 1240,
+            "y": 1350
+          },
+          {
+            "x": 1340,
+            "y": 1350
+          },
+          {
+            "x": 1150,
+            "y": 1590
+          }
+        ]
+      ]
+    },
+    "9": {
+      "verdict": "ok",
+      "note": "A light stripe of L's print along its seam with MB (see M8).",
+      "assembled": [
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 700,
+            "y": 1250
+          },
+          {
+            "x": 790,
+            "y": 1130
+          },
+          {
+            "x": 690,
+            "y": 1450
+          },
+          {
+            "x": 790,
+            "y": 1600
+          },
+          {
+            "x": 880,
+            "y": 1250
+          },
+          {
+            "x": 830,
+            "y": 1480
+          }
+        ],
+        [
+          {
+            "x": 1000,
+            "y": 950
+          },
+          {
+            "x": 1180,
+            "y": 1000
+          },
+          {
+            "x": 1100,
+            "y": 1100
+          },
+          {
+            "x": 1230,
+            "y": 1050
+          },
+          {
+            "x": 1340,
+            "y": 1040
+          },
+          {
+            "x": 900,
+            "y": 1010
+          }
+        ],
+        [
+          {
+            "x": 1050,
+            "y": 1300
+          },
+          {
+            "x": 1150,
+            "y": 1450
+          },
+          {
+            "x": 1240,
+            "y": 1350
+          },
+          {
+            "x": 1340,
+            "y": 1350
+          },
+          {
+            "x": 1150,
+            "y": 1590
+          }
+        ]
+      ]
+    },
+    "10": {
+      "verdict": "ok",
+      "note": "MT's left knob only (see M8).",
+      "assembled": [
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 700,
+            "y": 1250
+          },
+          {
+            "x": 790,
+            "y": 1130
+          },
+          {
+            "x": 690,
+            "y": 1450
+          },
+          {
+            "x": 790,
+            "y": 1600
+          },
+          {
+            "x": 880,
+            "y": 1250
+          },
+          {
+            "x": 830,
+            "y": 1480
+          }
+        ],
+        [
+          {
+            "x": 1000,
+            "y": 950
+          },
+          {
+            "x": 1180,
+            "y": 1000
+          },
+          {
+            "x": 1100,
+            "y": 1100
+          },
+          {
+            "x": 1230,
+            "y": 1050
+          },
+          {
+            "x": 1340,
+            "y": 1040
+          },
+          {
+            "x": 900,
+            "y": 1010
+          }
+        ],
+        [
+          {
+            "x": 1050,
+            "y": 1300
+          },
+          {
+            "x": 1150,
+            "y": 1450
+          },
+          {
+            "x": 1240,
+            "y": 1350
+          },
+          {
+            "x": 1340,
+            "y": 1350
+          },
+          {
+            "x": 1150,
+            "y": 1590
+          }
+        ]
+      ]
+    },
+    "11": {
+      "verdict": "ok",
+      "note": "MT's light stripe and right knob only (see M8).",
+      "assembled": [
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 700,
+            "y": 1250
+          },
+          {
+            "x": 790,
+            "y": 1130
+          },
+          {
+            "x": 690,
+            "y": 1450
+          },
+          {
+            "x": 790,
+            "y": 1600
+          },
+          {
+            "x": 880,
+            "y": 1250
+          },
+          {
+            "x": 830,
+            "y": 1480
+          }
+        ],
+        [
+          {
+            "x": 1000,
+            "y": 950
+          },
+          {
+            "x": 1180,
+            "y": 1000
+          },
+          {
+            "x": 1100,
+            "y": 1100
+          },
+          {
+            "x": 1230,
+            "y": 1050
+          },
+          {
+            "x": 1340,
+            "y": 1040
+          },
+          {
+            "x": 900,
+            "y": 1010
+          }
+        ],
+        [
+          {
+            "x": 1050,
+            "y": 1300
+          },
+          {
+            "x": 1150,
+            "y": 1450
+          },
+          {
+            "x": 1240,
+            "y": 1350
+          },
+          {
+            "x": 1340,
+            "y": 1350
+          },
+          {
+            "x": 1150,
+            "y": 1590
+          }
+        ]
+      ]
+    },
+    "12": {
+      "verdict": "ok",
+      "note": "MB's light stripe and right knob only (see M8).",
+      "assembled": [
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 700,
+            "y": 1250
+          },
+          {
+            "x": 790,
+            "y": 1130
+          },
+          {
+            "x": 690,
+            "y": 1450
+          },
+          {
+            "x": 790,
+            "y": 1600
+          },
+          {
+            "x": 880,
+            "y": 1250
+          },
+          {
+            "x": 830,
+            "y": 1480
+          }
+        ],
+        [
+          {
+            "x": 1000,
+            "y": 950
+          },
+          {
+            "x": 1180,
+            "y": 1000
+          },
+          {
+            "x": 1100,
+            "y": 1100
+          },
+          {
+            "x": 1230,
+            "y": 1050
+          },
+          {
+            "x": 1340,
+            "y": 1040
+          },
+          {
+            "x": 900,
+            "y": 1010
+          }
+        ],
+        [
+          {
+            "x": 1050,
+            "y": 1300
+          },
+          {
+            "x": 1150,
+            "y": 1450
+          },
+          {
+            "x": 1240,
+            "y": 1350
+          },
+          {
+            "x": 1340,
+            "y": 1350
+          },
+          {
+            "x": 1150,
+            "y": 1590
+          }
+        ]
+      ]
+    },
+    "13": {
+      "verdict": "ok",
+      "note": "A sliver along the MT/MB seam (see M8).",
+      "assembled": [
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 700,
+            "y": 1250
+          },
+          {
+            "x": 790,
+            "y": 1130
+          },
+          {
+            "x": 690,
+            "y": 1450
+          },
+          {
+            "x": 790,
+            "y": 1600
+          },
+          {
+            "x": 880,
+            "y": 1250
+          },
+          {
+            "x": 830,
+            "y": 1480
+          }
+        ],
+        [
+          {
+            "x": 1000,
+            "y": 950
+          },
+          {
+            "x": 1180,
+            "y": 1000
+          },
+          {
+            "x": 1100,
+            "y": 1100
+          },
+          {
+            "x": 1230,
+            "y": 1050
+          },
+          {
+            "x": 1340,
+            "y": 1040
+          },
+          {
+            "x": 900,
+            "y": 1010
+          }
+        ],
+        [
+          {
+            "x": 1050,
+            "y": 1300
+          },
+          {
+            "x": 1150,
+            "y": 1450
+          },
+          {
+            "x": 1240,
+            "y": 1350
+          },
+          {
+            "x": 1340,
+            "y": 1350
+          },
+          {
+            "x": 1150,
+            "y": 1590
+          }
+        ]
+      ]
+    },
+    "14": {
+      "verdict": "ok",
+      "note": "A highlight on the MT/MB seam (see M8).",
+      "assembled": [
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 700,
+            "y": 1250
+          },
+          {
+            "x": 790,
+            "y": 1130
+          },
+          {
+            "x": 690,
+            "y": 1450
+          },
+          {
+            "x": 790,
+            "y": 1600
+          },
+          {
+            "x": 880,
+            "y": 1250
+          },
+          {
+            "x": 830,
+            "y": 1480
+          }
+        ],
+        [
+          {
+            "x": 1000,
+            "y": 950
+          },
+          {
+            "x": 1180,
+            "y": 1000
+          },
+          {
+            "x": 1100,
+            "y": 1100
+          },
+          {
+            "x": 1230,
+            "y": 1050
+          },
+          {
+            "x": 1340,
+            "y": 1040
+          },
+          {
+            "x": 900,
+            "y": 1010
+          }
+        ],
+        [
+          {
+            "x": 1050,
+            "y": 1300
+          },
+          {
+            "x": 1150,
+            "y": 1450
+          },
+          {
+            "x": 1240,
+            "y": 1350
+          },
+          {
+            "x": 1340,
+            "y": 1350
+          },
+          {
+            "x": 1150,
+            "y": 1590
+          }
+        ]
+      ]
+    },
+    "15": {
+      "verdict": "ok",
+      "note": "A fragment of the bottom right assembled group (pink flowers, yellow stalk, dark leaves; cut off by the photo's right and bottom edges): one patch over it is right. Points in four of its pieces.",
+      "assembled": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 1700,
+            "y": 1550
+          }
+        ],
+        [
+          {
+            "x": 1650,
+            "y": 1800
+          }
+        ],
+        [
+          {
+            "x": 1600,
+            "y": 2050
+          }
+        ],
+        [
+          {
+            "x": 1500,
+            "y": 2200
+          }
+        ]
+      ]
+    },
+    "16": {
+      "verdict": "ok",
+      "note": "Another fragment of the bottom right assembled group (see M15).",
+      "assembled": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 1700,
+            "y": 1550
+          }
+        ],
+        [
+          {
+            "x": 1650,
+            "y": 1800
+          }
+        ],
+        [
+          {
+            "x": 1600,
+            "y": 2050
+          }
+        ],
+        [
+          {
+            "x": 1500,
+            "y": 2200
+          }
+        ]
+      ]
+    },
+    "17": {
+      "verdict": "ok",
+      "note": "Another fragment of the bottom right assembled group (see M15).",
+      "assembled": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 1700,
+            "y": 1550
+          }
+        ],
+        [
+          {
+            "x": 1650,
+            "y": 1800
+          }
+        ],
+        [
+          {
+            "x": 1600,
+            "y": 2050
+          }
+        ],
+        [
+          {
+            "x": 1500,
+            "y": 2200
+          }
+        ]
+      ]
+    },
+    "18": {
+      "verdict": "ok",
+      "note": "Another fragment of the bottom right assembled group (see M15).",
+      "assembled": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 1700,
+            "y": 1550
+          }
+        ],
+        [
+          {
+            "x": 1650,
+            "y": 1800
+          }
+        ],
+        [
+          {
+            "x": 1600,
+            "y": 2050
+          }
+        ],
+        [
+          {
+            "x": 1500,
+            "y": 2200
+          }
+        ]
+      ]
+    },
+    "19": {
+      "verdict": "ok",
+      "note": "Another fragment of the bottom right assembled group (see M15).",
+      "assembled": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 1700,
+            "y": 1550
+          }
+        ],
+        [
+          {
+            "x": 1650,
+            "y": 1800
+          }
+        ],
+        [
+          {
+            "x": 1600,
+            "y": 2050
+          }
+        ],
+        [
+          {
+            "x": 1500,
+            "y": 2200
+          }
+        ]
+      ]
+    },
+    "20": {
+      "verdict": "ok",
+      "note": "Another fragment of the bottom right assembled group (see M15).",
+      "assembled": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 1700,
+            "y": 1550
+          }
+        ],
+        [
+          {
+            "x": 1650,
+            "y": 1800
+          }
+        ],
+        [
+          {
+            "x": 1600,
+            "y": 2050
+          }
+        ],
+        [
+          {
+            "x": 1500,
+            "y": 2200
+          }
+        ]
+      ]
+    },
+    "21": {
+      "verdict": "ok",
+      "note": "Another fragment of the bottom right assembled group (see M15).",
+      "assembled": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 1700,
+            "y": 1550
+          }
+        ],
+        [
+          {
+            "x": 1650,
+            "y": 1800
+          }
+        ],
+        [
+          {
+            "x": 1600,
+            "y": 2050
+          }
+        ],
+        [
+          {
+            "x": 1500,
+            "y": 2200
+          }
+        ]
+      ]
+    },
+    "22": {
+      "verdict": "ok",
+      "note": "Another fragment of the bottom right assembled group (see M15).",
+      "assembled": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 1700,
+            "y": 1550
+          }
+        ],
+        [
+          {
+            "x": 1650,
+            "y": 1800
+          }
+        ],
+        [
+          {
+            "x": 1600,
+            "y": 2050
+          }
+        ],
+        [
+          {
+            "x": 1500,
+            "y": 2200
+          }
+        ]
+      ]
+    },
+    "23": {
+      "verdict": "ok",
+      "note": "Another fragment of the bottom right assembled group (see M15).",
+      "assembled": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 1700,
+            "y": 1550
+          }
+        ],
+        [
+          {
+            "x": 1650,
+            "y": 1800
+          }
+        ],
+        [
+          {
+            "x": 1600,
+            "y": 2050
+          }
+        ],
+        [
+          {
+            "x": 1500,
+            "y": 2200
+          }
+        ]
+      ]
+    },
+    "24": {
+      "verdict": "ok",
+      "note": "Another fragment of the bottom right assembled group (see M15).",
+      "assembled": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 1700,
+            "y": 1550
+          }
+        ],
+        [
+          {
+            "x": 1650,
+            "y": 1800
+          }
+        ],
+        [
+          {
+            "x": 1600,
+            "y": 2050
+          }
+        ],
+        [
+          {
+            "x": 1500,
+            "y": 2200
+          }
+        ]
+      ]
+    },
+    "25": {
+      "verdict": "ok",
+      "note": "Another fragment of the bottom right assembled group (see M15).",
+      "assembled": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 1700,
+            "y": 1550
+          }
+        ],
+        [
+          {
+            "x": 1650,
+            "y": 1800
+          }
+        ],
+        [
+          {
+            "x": 1600,
+            "y": 2050
+          }
+        ],
+        [
+          {
+            "x": 1500,
+            "y": 2200
+          }
+        ]
+      ]
+    },
+    "26": {
+      "verdict": "ok",
+      "note": "Another fragment of the bottom right assembled group (see M15).",
+      "assembled": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 1700,
+            "y": 1550
+          }
+        ],
+        [
+          {
+            "x": 1650,
+            "y": 1800
+          }
+        ],
+        [
+          {
+            "x": 1600,
+            "y": 2050
+          }
+        ],
+        [
+          {
+            "x": 1500,
+            "y": 2200
+          }
+        ]
+      ]
+    },
+    "27": {
+      "verdict": "ok",
+      "note": "Another fragment of the bottom right assembled group (see M15).",
+      "assembled": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 1700,
+            "y": 1550
+          }
+        ],
+        [
+          {
+            "x": 1650,
+            "y": 1800
+          }
+        ],
+        [
+          {
+            "x": 1600,
+            "y": 2050
+          }
+        ],
+        [
+          {
+            "x": 1500,
+            "y": 2200
+          }
+        ]
+      ]
+    },
+    "28": {
+      "verdict": "ok",
+      "note": "Another fragment of the bottom right assembled group (see M15).",
+      "assembled": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 1700,
+            "y": 1550
+          }
+        ],
+        [
+          {
+            "x": 1650,
+            "y": 1800
+          }
+        ],
+        [
+          {
+            "x": 1600,
+            "y": 2050
+          }
+        ],
+        [
+          {
+            "x": 1500,
+            "y": 2200
+          }
+        ]
+      ]
+    },
+    "29": {
+      "verdict": "ok",
+      "note": "Another fragment of the bottom right assembled group (see M15).",
+      "assembled": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 1700,
+            "y": 1550
+          }
+        ],
+        [
+          {
+            "x": 1650,
+            "y": 1800
+          }
+        ],
+        [
+          {
+            "x": 1600,
+            "y": 2050
+          }
+        ],
+        [
+          {
+            "x": 1500,
+            "y": 2200
+          }
+        ]
+      ]
+    },
+    "30": {
+      "verdict": "ok",
+      "note": "Another fragment of the bottom right assembled group (see M15).",
+      "assembled": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 1700,
+            "y": 1550
+          }
+        ],
+        [
+          {
+            "x": 1650,
+            "y": 1800
+          }
+        ],
+        [
+          {
+            "x": 1600,
+            "y": 2050
+          }
+        ],
+        [
+          {
+            "x": 1500,
+            "y": 2200
+          }
+        ]
+      ]
+    },
+    "31": {
+      "verdict": "ok",
+      "note": "Another fragment of the bottom right assembled group (see M15).",
+      "assembled": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 1700,
+            "y": 1550
+          }
+        ],
+        [
+          {
+            "x": 1650,
+            "y": 1800
+          }
+        ],
+        [
+          {
+            "x": 1600,
+            "y": 2050
+          }
+        ],
+        [
+          {
+            "x": 1500,
+            "y": 2200
+          }
+        ]
+      ]
+    },
+    "32": {
+      "verdict": "ok",
+      "note": "Another fragment of the bottom right assembled group (see M15).",
+      "assembled": [
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 1700,
+            "y": 1550
+          }
+        ],
+        [
+          {
+            "x": 1650,
+            "y": 1800
+          }
+        ],
+        [
+          {
+            "x": 1600,
+            "y": 2050
+          }
+        ],
+        [
+          {
+            "x": 1500,
+            "y": 2200
+          }
+        ]
+      ]
+    },
+    "33": {
+      "verdict": "ok",
+      "note": "L's bottom knob (pink tip) only (see M8).",
+      "assembled": [
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 700,
+            "y": 1250
+          },
+          {
+            "x": 790,
+            "y": 1130
+          },
+          {
+            "x": 690,
+            "y": 1450
+          },
+          {
+            "x": 790,
+            "y": 1600
+          },
+          {
+            "x": 880,
+            "y": 1250
+          },
+          {
+            "x": 830,
+            "y": 1480
+          }
+        ],
+        [
+          {
+            "x": 1000,
+            "y": 950
+          },
+          {
+            "x": 1180,
+            "y": 1000
+          },
+          {
+            "x": 1100,
+            "y": 1100
+          },
+          {
+            "x": 1230,
+            "y": 1050
+          },
+          {
+            "x": 1340,
+            "y": 1040
+          },
+          {
+            "x": 900,
+            "y": 1010
+          }
+        ],
+        [
+          {
+            "x": 1050,
+            "y": 1300
+          },
+          {
+            "x": 1150,
+            "y": 1450
+          },
+          {
+            "x": 1240,
+            "y": 1350
+          },
+          {
+            "x": 1340,
+            "y": 1350
+          },
+          {
+            "x": 1150,
+            "y": 1590
+          }
+        ]
+      ]
+    },
+    "34": {
+      "verdict": "ok",
+      "note": "A highlight on L (see M8).",
+      "assembled": [
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 700,
+            "y": 1250
+          },
+          {
+            "x": 790,
+            "y": 1130
+          },
+          {
+            "x": 690,
+            "y": 1450
+          },
+          {
+            "x": 790,
+            "y": 1600
+          },
+          {
+            "x": 880,
+            "y": 1250
+          },
+          {
+            "x": 830,
+            "y": 1480
+          }
+        ],
+        [
+          {
+            "x": 1000,
+            "y": 950
+          },
+          {
+            "x": 1180,
+            "y": 1000
+          },
+          {
+            "x": 1100,
+            "y": 1100
+          },
+          {
+            "x": 1230,
+            "y": 1050
+          },
+          {
+            "x": 1340,
+            "y": 1040
+          },
+          {
+            "x": 900,
+            "y": 1010
+          }
+        ],
+        [
+          {
+            "x": 1050,
+            "y": 1300
+          },
+          {
+            "x": 1150,
+            "y": 1450
+          },
+          {
+            "x": 1240,
+            "y": 1350
+          },
+          {
+            "x": 1340,
+            "y": 1350
+          },
+          {
+            "x": 1150,
+            "y": 1590
+          }
+        ]
+      ]
+    },
+    "35": {
+      "verdict": "ok",
+      "note": "A highlight at MT's top edge (see M8).",
+      "assembled": [
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 700,
+            "y": 1250
+          },
+          {
+            "x": 790,
+            "y": 1130
+          },
+          {
+            "x": 690,
+            "y": 1450
+          },
+          {
+            "x": 790,
+            "y": 1600
+          },
+          {
+            "x": 880,
+            "y": 1250
+          },
+          {
+            "x": 830,
+            "y": 1480
+          }
+        ],
+        [
+          {
+            "x": 1000,
+            "y": 950
+          },
+          {
+            "x": 1180,
+            "y": 1000
+          },
+          {
+            "x": 1100,
+            "y": 1100
+          },
+          {
+            "x": 1230,
+            "y": 1050
+          },
+          {
+            "x": 1340,
+            "y": 1040
+          },
+          {
+            "x": 900,
+            "y": 1010
+          }
+        ],
+        [
+          {
+            "x": 1050,
+            "y": 1300
+          },
+          {
+            "x": 1150,
+            "y": 1450
+          },
+          {
+            "x": 1240,
+            "y": 1350
+          },
+          {
+            "x": 1340,
+            "y": 1350
+          },
+          {
+            "x": 1150,
+            "y": 1590
+          }
+        ]
+      ]
+    },
+    "36": {
+      "verdict": "unsure",
+      "note": "Lower end of the left group (dark pieces below y ≈ 860): light rims along their edges suggest some of them only touch the group; not judged."
+    },
+    "37": {
+      "verdict": "unsure",
+      "note": "As M36."
+    },
+    "38": {
+      "verdict": "unsure",
+      "note": "As M36."
+    },
+    "39": {
+      "verdict": "unsure",
+      "note": "As M36."
+    },
+    "40": {
+      "verdict": "unsure",
+      "note": "As M36."
+    },
+    "41": {
+      "verdict": "unsure",
+      "note": "As M36."
+    },
+    "42": {
+      "verdict": "ok",
+      "note": "The right knob of a dark piece of the left assembled group (pink 'EN' print with a column of dark pieces at its right, cut off by the photo's left edge); only fragments of the dark pieces were found.",
+      "assembled": [
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 100,
+            "y": 300
+          }
+        ],
+        [
+          {
+            "x": 420,
+            "y": 200
+          }
+        ],
+        [
+          {
+            "x": 300,
+            "y": 700
+          },
+          {
+            "x": 440,
+            "y": 790
+          }
+        ]
+      ]
+    },
+    "43": {
+      "verdict": "ok",
+      "note": "The left assembled group without its dark pieces (see M42).",
+      "assembled": [
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 100,
+            "y": 300
+          }
+        ],
+        [
+          {
+            "x": 420,
+            "y": 200
+          }
+        ],
+        [
+          {
+            "x": 300,
+            "y": 700
+          },
+          {
+            "x": 440,
+            "y": 790
+          }
+        ]
+      ]
+    },
+    "44": {
+      "verdict": "ok",
+      "note": "A highlight on a dark piece of the left group (see M42).",
+      "assembled": [
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 100,
+            "y": 300
+          }
+        ],
+        [
+          {
+            "x": 420,
+            "y": 200
+          }
+        ],
+        [
+          {
+            "x": 300,
+            "y": 700
+          },
+          {
+            "x": 440,
+            "y": 790
+          }
+        ]
+      ]
+    },
+    "45": {
+      "verdict": "ok",
+      "note": "A highlight on a dark piece of the left group (see M42).",
+      "assembled": [
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      "pieces": [
+        [
+          {
+            "x": 100,
+            "y": 300
+          }
+        ],
+        [
+          {
+            "x": 420,
+            "y": 200
+          }
+        ],
+        [
+          {
+            "x": 300,
+            "y": 700
+          },
+          {
+            "x": 440,
+            "y": 790
+          }
+        ]
+      ]
+    },
+    "46": {
+      "verdict": "ok",
+      "note": "Most of P2 (see M5).",
+      "pieces": [
+        [
+          {
+            "x": 300,
+            "y": 1545
+          },
+          {
+            "x": 220,
+            "y": 1700
+          },
+          {
+            "x": 420,
+            "y": 1650
+          },
+          {
+            "x": 450,
+            "y": 1830
+          },
+          {
+            "x": 300,
+            "y": 1920
+          }
+        ],
+        [
+          {
+            "x": 260,
+            "y": 2140
+          },
+          {
+            "x": 130,
+            "y": 2140
+          },
+          {
+            "x": 390,
+            "y": 2150
+          },
+          {
+            "x": 240,
+            "y": 2250
+          }
+        ]
+      ]
+    },
+    "47": {
+      "verdict": "ok",
+      "note": "P2's right knob (see M5).",
+      "pieces": [
+        [
+          {
+            "x": 300,
+            "y": 1545
+          },
+          {
+            "x": 220,
+            "y": 1700
+          },
+          {
+            "x": 420,
+            "y": 1650
+          },
+          {
+            "x": 450,
+            "y": 1830
+          },
+          {
+            "x": 300,
+            "y": 1920
+          }
+        ],
+        [
+          {
+            "x": 260,
+            "y": 2140
+          },
+          {
+            "x": 130,
+            "y": 2140
+          },
+          {
+            "x": 390,
+            "y": 2150
+          },
+          {
+            "x": 240,
+            "y": 2250
+          }
+        ]
+      ]
+    },
+    "48": {
+      "verdict": "ok",
+      "note": "A speck of P1 (see M5).",
+      "pieces": [
+        [
+          {
+            "x": 300,
+            "y": 1545
+          },
+          {
+            "x": 220,
+            "y": 1700
+          },
+          {
+            "x": 420,
+            "y": 1650
+          },
+          {
+            "x": 450,
+            "y": 1830
+          },
+          {
+            "x": 300,
+            "y": 1920
+          }
+        ],
+        [
+          {
+            "x": 260,
+            "y": 2140
+          },
+          {
+            "x": 130,
+            "y": 2140
+          },
+          {
+            "x": 390,
+            "y": 2150
+          },
+          {
+            "x": 240,
+            "y": 2250
+          }
+        ]
+      ]
+    },
+    "49": {
+      "verdict": "ok",
+      "note": "A highlight of P1 (see M5).",
+      "pieces": [
+        [
+          {
+            "x": 300,
+            "y": 1545
+          },
+          {
+            "x": 220,
+            "y": 1700
+          },
+          {
+            "x": 420,
+            "y": 1650
+          },
+          {
+            "x": 450,
+            "y": 1830
+          },
+          {
+            "x": 300,
+            "y": 1920
+          }
+        ],
+        [
+          {
+            "x": 260,
+            "y": 2140
+          },
+          {
+            "x": 130,
+            "y": 2140
+          },
+          {
+            "x": 390,
+            "y": 2150
+          },
+          {
+            "x": 240,
+            "y": 2250
+          }
+        ]
+      ]
+    }
+  },
+  "objects": [
+    {
+      "x": 100,
+      "y": 300,
+      "note": "left assembled group (pink 'EN' print, dark pieces at its right), cut off by the photo's left edge"
+    },
+    {
+      "x": 150,
+      "y": 1100,
+      "unsure": true,
+      "note": "dark pieces at the lower end of the left group: joined to it or only touching"
+    },
+    {
+      "x": 1500,
+      "y": 400,
+      "note": "top right assembled group (green leaves, pink lily), cut off by the photo's edges"
+    },
+    {
+      "x": 1050,
+      "y": 1300,
+      "note": "middle assembled group of three dark grey pieces (M1–M3)"
+    },
+    {
+      "x": 220,
+      "y": 1700,
+      "note": "loose piece P1, purple and green (M4)"
+    },
+    {
+      "x": 260,
+      "y": 2140,
+      "note": "loose grey piece P2, touching P1"
+    },
+    {
+      "x": 30,
+      "y": 1650,
+      "unsure": true,
+      "note": "pale piece cut off by the left edge"
+    },
+    {
+      "x": 30,
+      "y": 1830,
+      "unsure": true,
+      "note": "pale piece cut off by the left edge"
+    },
+    {
+      "x": 50,
+      "y": 2300,
+      "unsure": true,
+      "note": "piece cut off at the bottom left corner"
+    },
+    {
+      "x": 1650,
+      "y": 1800,
+      "note": "bottom right assembled group (pink flowers, yellow stalk), cut off by the photo's edges"
+    }
+  ]
+}

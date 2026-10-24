@@ -43,12 +43,13 @@ export const DEBUG_IMAGES = !!process.env.DEBUG_IMAGES;
 
 /**
  * Segmentation options for A/B runs of the benchmark and the feedback tools: GRAPH_CUT=1 / 0 turns
- * the graph-cut outline refinement on / off, GRAIN=1 / 0 the wood-grain table model (off by
- * default; unset: the pipeline's default).
+ * the graph-cut outline refinement on / off, GRAIN=1 / 0 the wood-grain table model, CAST=1 / 0 the
+ * trimming of deep cast shadows (all off by default; unset: the pipeline's default).
  */
-export const SEGMENT_OPTIONS: { graphCut?: boolean; grain?: boolean } = {
+export const SEGMENT_OPTIONS: { graphCut?: boolean; grain?: boolean; castShadow?: boolean } = {
   ...(process.env.GRAPH_CUT === undefined ? {} : { graphCut: process.env.GRAPH_CUT !== '0' }),
   ...(process.env.GRAIN === undefined ? {} : { grain: process.env.GRAIN !== '0' }),
+  ...(process.env.CAST === undefined ? {} : { castShadow: process.env.CAST !== '0' }),
 };
 
 /**

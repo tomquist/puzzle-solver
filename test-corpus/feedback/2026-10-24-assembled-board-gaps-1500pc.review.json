@@ -1,0 +1,522 @@
+{
+  "reviewed": "2026-10-24",
+  "marks": {
+    "1": {
+      "verdict": "unsure",
+      "note": "'Doesn't fit' #7+#3: needs the puzzle picture (stripped) and the user's placed marks; not judged."
+    },
+    "2": {
+      "verdict": "ok",
+      "note": "#7 is one loose yellow piece with a navy lower right part (print, with its own rim). Light falls from the lower right: every loose piece lies on the board (or on the assembled puzzle) a cardboard thickness up and casts a dark brown shadow along its upper and left edges and into its blanks there. The outline took in the shadow along its upper left edge (table point at (1443, 883)).",
+      "pieces": [
+        [
+          {
+            "x": 1470,
+            "y": 890
+          },
+          {
+            "x": 1438,
+            "y": 898
+          },
+          {
+            "x": 1500,
+            "y": 855
+          },
+          {
+            "x": 1505,
+            "y": 920
+          },
+          {
+            "x": 1465,
+            "y": 925
+          },
+          {
+            "x": 1490,
+            "y": 945
+          }
+        ]
+      ],
+      "table": [
+        {
+          "x": 1443,
+          "y": 883
+        }
+      ]
+    },
+    "3": {
+      "verdict": "ok",
+      "note": "Loose pieces lying close on the board right of the middle, from the top: A (pale grey-white, turned ~25°), C (yellow-green, touching A below it and E at its right), E (mottled olive/brown, its pale tan left knob pressed against C), B (green-grey, below-left of C), F (yellow) and G (dark green, F's lower-left corner touching G's upper right). #18 is the upper right of C plus E's tan knob.",
+      "pieces": [
+        [
+          {
+            "x": 1510,
+            "y": 1255
+          },
+          {
+            "x": 1480,
+            "y": 1290
+          },
+          {
+            "x": 1450,
+            "y": 1300
+          },
+          {
+            "x": 1500,
+            "y": 1320
+          }
+        ],
+        [
+          {
+            "x": 1590,
+            "y": 1290
+          },
+          {
+            "x": 1600,
+            "y": 1310
+          },
+          {
+            "x": 1560,
+            "y": 1320
+          },
+          {
+            "x": 1545,
+            "y": 1290
+          },
+          {
+            "x": 1570,
+            "y": 1255
+          }
+        ]
+      ]
+    },
+    "4": {
+      "verdict": "ok",
+      "note": "Loose pieces lying close on the board right of the middle, from the top: A (pale grey-white, turned ~25°), C (yellow-green, touching A below it and E at its right), E (mottled olive/brown, its pale tan left knob pressed against C), B (green-grey, below-left of C), F (yellow) and G (dark green, F's lower-left corner touching G's upper right). #17 (patch) is B plus the lower left of C.",
+      "pieces": [
+        [
+          {
+            "x": 1410,
+            "y": 1340
+          },
+          {
+            "x": 1450,
+            "y": 1360
+          },
+          {
+            "x": 1460,
+            "y": 1375
+          },
+          {
+            "x": 1430,
+            "y": 1335
+          }
+        ],
+        [
+          {
+            "x": 1510,
+            "y": 1255
+          },
+          {
+            "x": 1480,
+            "y": 1290
+          },
+          {
+            "x": 1450,
+            "y": 1300
+          },
+          {
+            "x": 1500,
+            "y": 1320
+          }
+        ]
+      ]
+    },
+    "5": {
+      "verdict": "ok",
+      "note": "Loose pieces lying close on the board right of the middle, from the top: A (pale grey-white, turned ~25°), C (yellow-green, touching A below it and E at its right), E (mottled olive/brown, its pale tan left knob pressed against C), B (green-grey, below-left of C), F (yellow) and G (dark green, F's lower-left corner touching G's upper right). #20 is F with the shadow along its top edge.",
+      "pieces": [
+        [
+          {
+            "x": 1530,
+            "y": 1400
+          },
+          {
+            "x": 1560,
+            "y": 1440
+          },
+          {
+            "x": 1580,
+            "y": 1420
+          },
+          {
+            "x": 1510,
+            "y": 1430
+          }
+        ],
+        [
+          {
+            "x": 1470,
+            "y": 1480
+          },
+          {
+            "x": 1500,
+            "y": 1470
+          },
+          {
+            "x": 1445,
+            "y": 1490
+          }
+        ]
+      ],
+      "table": [
+        {
+          "x": 1525,
+          "y": 1376
+        }
+      ]
+    },
+    "6": {
+      "verdict": "ok",
+      "note": "Loose pieces lying close on the board right of the middle, from the top: A (pale grey-white, turned ~25°), C (yellow-green, touching A below it and E at its right), E (mottled olive/brown, its pale tan left knob pressed against C), B (green-grey, below-left of C), F (yellow) and G (dark green, F's lower-left corner touching G's upper right). #21 is G with the shadow in its top blanks.",
+      "pieces": [
+        [
+          {
+            "x": 1470,
+            "y": 1480
+          },
+          {
+            "x": 1500,
+            "y": 1470
+          },
+          {
+            "x": 1445,
+            "y": 1490
+          }
+        ],
+        [
+          {
+            "x": 1530,
+            "y": 1400
+          },
+          {
+            "x": 1560,
+            "y": 1440
+          },
+          {
+            "x": 1580,
+            "y": 1420
+          },
+          {
+            "x": 1510,
+            "y": 1430
+          }
+        ]
+      ],
+      "table": [
+        {
+          "x": 1483,
+          "y": 1458
+        }
+      ]
+    },
+    "7": {
+      "verdict": "ok",
+      "note": "Loose pieces lying close on the board right of the middle, from the top: A (pale grey-white, turned ~25°), C (yellow-green, touching A below it and E at its right), E (mottled olive/brown, its pale tan left knob pressed against C), B (green-grey, below-left of C), F (yellow) and G (dark green, F's lower-left corner touching G's upper right). #19 is E without its tan left knob (given to #18).",
+      "pieces": [
+        [
+          {
+            "x": 1590,
+            "y": 1290
+          },
+          {
+            "x": 1600,
+            "y": 1310
+          },
+          {
+            "x": 1560,
+            "y": 1320
+          },
+          {
+            "x": 1545,
+            "y": 1290
+          },
+          {
+            "x": 1570,
+            "y": 1255
+          }
+        ],
+        [
+          {
+            "x": 1510,
+            "y": 1255
+          },
+          {
+            "x": 1480,
+            "y": 1290
+          },
+          {
+            "x": 1450,
+            "y": 1300
+          },
+          {
+            "x": 1500,
+            "y": 1320
+          }
+        ]
+      ]
+    },
+    "8": {
+      "verdict": "ok",
+      "note": "Loose pieces lying close on the board right of the middle, from the top: A (pale grey-white, turned ~25°), C (yellow-green, touching A below it and E at its right), E (mottled olive/brown, its pale tan left knob pressed against C), B (green-grey, below-left of C), F (yellow) and G (dark green, F's lower-left corner touching G's upper right). #16 is A with the shadow above its top edge.",
+      "pieces": [
+        [
+          {
+            "x": 1460,
+            "y": 1190
+          },
+          {
+            "x": 1455,
+            "y": 1225
+          },
+          {
+            "x": 1500,
+            "y": 1210
+          },
+          {
+            "x": 1455,
+            "y": 1245
+          }
+        ],
+        [
+          {
+            "x": 1510,
+            "y": 1255
+          },
+          {
+            "x": 1480,
+            "y": 1290
+          },
+          {
+            "x": 1450,
+            "y": 1300
+          },
+          {
+            "x": 1500,
+            "y": 1320
+          }
+        ]
+      ],
+      "table": [
+        {
+          "x": 1460,
+          "y": 1160
+        }
+      ]
+    },
+    "9": {
+      "verdict": "ok",
+      "parts": 2,
+      "note": "#5 holds two loose pieces lying side by side and touching (left: yellow-green with a darker band; right: a lamp with a light beam, whose print does not continue into the left piece: not an assembled pair), each with its shadow in the blanks along its top."
+    },
+    "10": {
+      "verdict": "ok",
+      "note": "#3 (patch, 191× a piece) is the upper part of the assembled puzzle (really one assembly with #22, joined at narrow necks) together with loose pieces lying against it or tied to it by their shadows (e.g. the four at x 110–385, y 785–1015, left of the awning) and a strip of the wooden table along the top edge. Number of regions not given: the loose pieces along its whole rim were not all counted."
+    },
+    "11": {
+      "verdict": "ok",
+      "note": "#22 (patch, 281×) is the lower part of the assembled puzzle with loose pieces lying against it, among them a lilac piece at (235, 1365) touching the assembled green group at the left edge with its lower left corner. Judged on that piece and two points of the green group (which must stay one patch).",
+      "pieces": [
+        [
+          {
+            "x": 235,
+            "y": 1365
+          },
+          {
+            "x": 255,
+            "y": 1340
+          },
+          {
+            "x": 215,
+            "y": 1405
+          },
+          {
+            "x": 198,
+            "y": 1335
+          }
+        ],
+        [
+          {
+            "x": 100,
+            "y": 1400
+          }
+        ],
+        [
+          {
+            "x": 60,
+            "y": 1450
+          }
+        ]
+      ],
+      "assembled": [
+        [
+          1,
+          2
+        ]
+      ]
+    },
+    "12": {
+      "verdict": "ok",
+      "note": "#15 is one loose navy/pink piece (turned ~30°); its outline took in its shadow in the notch right of it. Light falls from the lower right: every loose piece lies on the board (or on the assembled puzzle) a cardboard thickness up and casts a dark brown shadow along its upper and left edges and into its blanks there.",
+      "pieces": [
+        [
+          {
+            "x": 210,
+            "y": 1250
+          },
+          {
+            "x": 235,
+            "y": 1260
+          },
+          {
+            "x": 195,
+            "y": 1240
+          },
+          {
+            "x": 225,
+            "y": 1290
+          }
+        ]
+      ],
+      "table": [
+        {
+          "x": 245,
+          "y": 1245
+        }
+      ]
+    },
+    "13": {
+      "verdict": "ok",
+      "note": "#14 is one loose purple-red piece; its outline took in the shadow left of its top knob (table point at (64, 1222)). Light falls from the lower right: every loose piece lies on the board (or on the assembled puzzle) a cardboard thickness up and casts a dark brown shadow along its upper and left edges and into its blanks there.",
+      "pieces": [
+        [
+          {
+            "x": 90,
+            "y": 1245
+          },
+          {
+            "x": 60,
+            "y": 1250
+          },
+          {
+            "x": 120,
+            "y": 1280
+          },
+          {
+            "x": 130,
+            "y": 1240
+          }
+        ]
+      ],
+      "table": [
+        {
+          "x": 64,
+          "y": 1222
+        }
+      ]
+    },
+    "14": {
+      "verdict": "ok",
+      "note": "#9 is one loose teal/olive piece; its outline runs out along a beige scratch of the board to its left (table point at (930, 990)). Light falls from the lower right: every loose piece lies on the board (or on the assembled puzzle) a cardboard thickness up and casts a dark brown shadow along its upper and left edges and into its blanks there.",
+      "pieces": [
+        [
+          {
+            "x": 983,
+            "y": 977
+          },
+          {
+            "x": 1007,
+            "y": 987
+          },
+          {
+            "x": 977,
+            "y": 997
+          },
+          {
+            "x": 1023,
+            "y": 990
+          }
+        ]
+      ],
+      "table": [
+        {
+          "x": 930,
+          "y": 990
+        }
+      ]
+    },
+    "15": {
+      "verdict": "ok",
+      "note": "#6 is one loose yellow-olive piece; its outline took in the shadow filling the two blanks along its top. Light falls from the lower right: every loose piece lies on the board (or on the assembled puzzle) a cardboard thickness up and casts a dark brown shadow along its upper and left edges and into its blanks there.",
+      "pieces": [
+        [
+          {
+            "x": 1280,
+            "y": 850
+          },
+          {
+            "x": 1265,
+            "y": 865
+          },
+          {
+            "x": 1310,
+            "y": 830
+          },
+          {
+            "x": 1245,
+            "y": 830
+          }
+        ]
+      ],
+      "table": [
+        {
+          "x": 1262,
+          "y": 808
+        },
+        {
+          "x": 1323,
+          "y": 808
+        }
+      ]
+    },
+    "16": {
+      "verdict": "ok",
+      "note": "#1 is one loose purple piece (blue rim on its left side, part of the piece); its outline took in the shadow above its upper left. Light falls from the lower right: every loose piece lies on the board (or on the assembled puzzle) a cardboard thickness up and casts a dark brown shadow along its upper and left edges and into its blanks there.",
+      "pieces": [
+        [
+          {
+            "x": 120,
+            "y": 600
+          },
+          {
+            "x": 130,
+            "y": 565
+          },
+          {
+            "x": 105,
+            "y": 630
+          },
+          {
+            "x": 130,
+            "y": 620
+          }
+        ]
+      ],
+      "table": [
+        {
+          "x": 107,
+          "y": 547
+        }
+      ]
+    }
+  }
+}
