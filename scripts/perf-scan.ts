@@ -41,6 +41,11 @@ const flag = (name: string) => args.includes(`--${name}`);
 const MODE = args[0];
 const CACHE = resolve(opt('cache') ?? '.debug/perf-cache');
 const now = () => performance.now();
+/** CPU time of this process (ms): less affected than wall-clock time by other work on the machine. */
+const cpuMs = () => {
+  const u = process.cpuUsage();
+  return (u.user + u.system) / 1000;
+};
 
 interface Entry {
   name: string;
@@ -174,25 +179,25 @@ async function run() {
         let timings: Sample;
         let hashed: unknown;
         if (!e.reference) {
-          const t = now();
+          const t = now(), c = cpuMs();
           // (Photos no larger than the analysis size: segmented as they are.)
           const segTimings: Record<string, number> = {};
           const seg = segmentPieces(photo, { timings: segTimings });
-          timings = { ...segTimings, scan: now() - t, segment: now() - t };
+          timings = { ...segTimings, scan: now() - t, segment: now() - t, scanCpu: cpuMs() - c };
           hashed = { regions: seg.regions.map((r) => r.region), quality: seg.quality, background: seg.background };
         } else {
           const index = indexes.get(`${e.reference.file}:${e.grid.rows}x${e.grid.cols}:${e.cut}`)!;
-          const t = now();
+          const t = now(), c = cpuMs();
           const out = analyzeScan(index, photo, { deferGridEvidence: true, ...(marks ? { placedCells: marksFor(e.grid) } : {}) });
-          const scanMs = now() - t;
-          const tf = now();
+          const scanMs = now() - t, scanCpu = cpuMs() - c;
+          const tf = now(), cf = cpuMs();
           let evidence: unknown;
           if (out.gridFollowUp) {
             let r = out.gridFollowUp.next();
             while (!r.done) r = out.gridFollowUp.next();
             evidence = r.value;
           }
-          timings = { ...out.result.timings, scan: scanMs, gridFollowUp: now() - tf };
+          timings = { ...out.result.timings, scan: scanMs, scanCpu, gridFollowUp: now() - tf, gridFollowUpCpu: cpuMs() - cf };
           const { timings: _t, ...rest } = out.result;
           hashed = { ...rest, evidence };
         }
@@ -219,7 +224,7 @@ async function run() {
   console.log(JSON.stringify(meta));
   for (const [id, r] of Object.entries(report)) {
     const s = r.stages;
-    const main = ['scan', 'segment', 'match', 'fits', 'gridFollowUp'].filter((k) => s[k]).map((k) => `${k} ${s[k].best.toFixed(0)}/${s[k].median.toFixed(0)}`).join('  ');
+    const main = ['scan', 'scanCpu', 'segment', 'match', 'fits', 'gridFollowUp'].filter((k) => s[k]).map((k) => `${k} ${s[k].best.toFixed(0)}/${s[k].median.toFixed(0)}`).join('  ');
     console.log(`${id.padEnd(28)} ${r.hash}  ${main}`);
   }
   if (flag('hashes')) for (const [id, r] of Object.entries(report)) console.log(`HASH ${id} ${r.hash}`);

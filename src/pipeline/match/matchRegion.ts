@@ -21,7 +21,7 @@
  */
 import { findSimilarity, type Point } from '../../cv/geometry';
 import { cellKey, type CellRef, type MatchStatus, type Placement, type PlacedConflict, type RefLattice, type RegionMatch, type SideKind, type UncertainReason } from '../../model/types';
-import { buildTemplate, colourDistanceMap, DEFAULT_SCORE, makePhotoSource, scoreAt, scoreMap, type ColorCorrection, type Mapping, type PhotoSource, type ScoreParams, type Template } from './template';
+import { buildTemplate, colourDistanceMap, DEFAULT_SCORE, makePhotoSource, scoreAt, scoreMap, scorePair, type ColorCorrection, type Mapping, type PhotoSource, type ScoreParams, type Template } from './template';
 import { estimatePatchPitch } from '../pieces/patchPitch';
 import { fitPatchLattice, latticeCells, latticeCoords, latticePoint, type LatticeCell, type PatchLattice } from '../pieces/patchLattice';
 import { NOT_ONE_PIECE_CAP, onePieceArea } from './groups';
@@ -249,15 +249,27 @@ function makeHypotheses(index: ReferenceIndex, input: MatchInput, src: PhotoSour
 /** Exhaustive search of top-left positions in a window; returns the best. */
 function searchWindow(level: RefLevel, t: Template, X0: number, Y0: number, r: number, sp: ScoreParams): { X: number; Y: number; raw: number } | null {
   let best: { X: number; Y: number; raw: number } | null = null;
+  const byPos = scoreMemo(t, sp);
   for (let Y = Y0 - r; Y <= Y0 + r; Y++) {
     for (let X = X0 - r; X <= X0 + r; X++) {
       if (!fits(level, t, X, Y)) continue;
-      const v = scoreAtMemo(level, t, X, Y, sp);
+      const pos = Y * level.stride + X;
+      let v = byPos.get(pos);
+      if (v === undefined) {
+        // Two positions of the row at once where the next one is wanted too.
+        if (X < X0 + r && fits(level, t, X + 1, Y) && !byPos.has(pos + 1)) {
+          scorePair(level, t, X, Y, sp, pairScores);
+          byPos.set(pos + 1, pairScores[1]);
+          v = pairScores[0];
+        } else v = scoreAt(level, t, X, Y, sp);
+        byPos.set(pos, v);
+      }
       if (!best || v > best.raw) best = { X, Y, raw: v };
     }
   }
   return best;
 }
+const pairScores = new Float64Array(2);
 
 function topLeftFor(level: RefLevel, t: Template, ref: Point): { X: number; Y: number } {
   return {
@@ -305,6 +317,36 @@ function coarseSearch(index: ReferenceIndex, ci: number, hyp: Hypothesis, cache:
   }
 }
 
+/**
+ * The `k`-th smallest value (from 0) of `values` (no NaN), by quickselect on a copy: the value
+ * sorting would put at `k`, in linear time.
+ */
+export function kthSmallest(values: Float32Array, k: number): number {
+  const a = Float32Array.from(values);
+  let lo = 0, hi = a.length - 1;
+  while (hi > lo) {
+    // Median of three as the pivot; then Hoare partition: [lo, j] ≤ p ≤ [i, hi], (j, i) all p.
+    let x = a[lo], y = a[(lo + hi) >> 1], z = a[hi];
+    if (x > y) [x, y] = [y, x];
+    if (y > z) y = z;
+    const p = x > y ? x : y;
+    let i = lo, j = hi;
+    while (i <= j) {
+      while (a[i] < p) i++;
+      while (a[j] > p) j--;
+      if (i <= j) {
+        const tmp = a[i];
+        a[i++] = a[j];
+        a[j--] = tmp;
+      }
+    }
+    if (k <= j) hi = j;
+    else if (k >= i) lo = i;
+    else return a[k];
+  }
+  return a[k];
+}
+
 /** The local maxima of {@link coarseSearch}'s score map: (X, Y, raw) triples, row by row. */
 function coarseMaxima(level: RefLevel, t: Template, pl: RefLevel | null, t0: Template | null, sp: ScoreParams): number[] {
   const maxima: number[] = [];
@@ -317,8 +359,7 @@ function coarseMaxima(level: RefLevel, t: Template, pl: RefLevel | null, t0: Tem
     const nx0 = b0.x1 - b0.x0 + 1, ny0 = b0.y1 - b0.y0 + 1;
     const pre = new Float32Array(nx0 * ny0);
     scoreMap(pl, t0, b0.x0, b0.x1, b0.y0, b0.y1, sp, pre);
-    const sorted = Float32Array.from(pre).sort();
-    const thr = sorted[Math.max(0, Math.floor(sorted.length * (1 - PREFILTER_KEEP)) - 1)];
+    const thr = kthSmallest(pre, Math.max(0, Math.floor(pre.length * (1 - PREFILTER_KEEP)) - 1));
     const sel = new Uint8Array(nx * ny);
     const ax = level.scaleX / pl.scaleX, ay = level.scaleY / pl.scaleY;
     for (let j = 0; j < ny0; j++) {
@@ -455,12 +496,18 @@ function spKey(sp: ScoreParams): string {
 }
 const spKeys = new WeakMap<ScoreParams, string>();
 
-/** {@link scoreAt}, remembered on the template (per score parameters and position). */
-function scoreAtMemo(level: RefLevel, t: Template, X: number, Y: number, sp: ScoreParams): number {
+/** The scores remembered on template `t` for parameters `sp`, by position (Y · stride + X). */
+function scoreMemo(t: Template, sp: ScoreParams): Map<number, number> {
   const memo = (t.scores ??= new Map());
   const key = spKey(sp);
   let byPos = memo.get(key);
   if (!byPos) memo.set(key, (byPos = new Map()));
+  return byPos;
+}
+
+/** {@link scoreAt}, remembered on the template (per score parameters and position). */
+function scoreAtMemo(level: RefLevel, t: Template, X: number, Y: number, sp: ScoreParams): number {
+  const byPos = scoreMemo(t, sp);
   const pos = Y * level.stride + X;
   let v = byPos.get(pos);
   if (v === undefined) byPos.set(pos, (v = scoreAt(level, t, X, Y, sp)));

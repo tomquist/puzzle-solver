@@ -327,13 +327,21 @@ export function buildTemplate(src: PhotoSource, m: Mapping, level: RefLevel, min
   const ok = new Uint8Array(gw * gh);
   let n = 0, mu0 = 0, mu1 = 0, mu2 = 0;
   let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+  // The products with the column coordinate, once per column (the same values as per pixel).
+  const cxu = new Float64Array(gw), sxu = new Float64Array(gw);
+  for (let i = 0; i < gw; i++) {
+    const xu = (iu0 + i) / lx;
+    cxu[i] = c * xu;
+    sxu[i] = -s * xu;
+  }
+  const px0 = m.pivot.x, py0 = m.pivot.y;
   for (let j = 0; j < gh; j++) {
     const yv = (iv0 + j) / ly;
+    const syv = s * yv, cyv = c * yv;
     for (let i = 0; i < gw; i++) {
-      const xu = (iu0 + i) / lx;
       // photo = pivot + R(-phi) (x, y) / s
-      const px = m.pivot.x + (c * xu + s * yv) * inv;
-      const py = m.pivot.y + (-s * xu + c * yv) * inv;
+      const px = px0 + (cxu[i] + syv) * inv;
+      const py = py0 + (sxu[i] + cyv) * inv;
       const qx = (px - ox + 0.5) * fx - 0.5, qy = (py - oy + 0.5) * fy - 0.5;
       if (qx < 0 || qy < 0 || qx > iw - 1 || qy > ih - 1) continue;
       const x0 = Math.floor(qx), y0 = Math.floor(qy);
@@ -442,6 +450,12 @@ export function scoreAt(level: RefLevel, t: Template, X: number, Y: number, p: S
     s2 += r2;
     ss += SQ[pi];
   }
+  return scoreOfSums(t, num, s0, s1, s2, ss, p);
+}
+
+/** {@link scoreAt} from its sums: the correlation `num` and the reference's channel and squared sums under the template. */
+function scoreOfSums(t: Template, num: number, s0: number, s1: number, s2: number, ss: number, p: ScoreParams): number {
+  const n = t.n;
   const invN = 1 / n;
   const m0 = s0 * invN, m1 = s1 * invN, m2 = s2 * invN;
   const varR = ss - (s0 * m0 + s1 * m1 + s2 * m2);
@@ -450,6 +464,36 @@ export function scoreAt(level: RefLevel, t: Template, X: number, Y: number, p: S
   const d0 = t.mean[0] - m0, d1 = t.mean[1] - m1, d2 = t.mean[2] - m2;
   const dm = Math.sqrt(d0 * d0 + d1 * d1 + d2 * d2);
   return ncc - colourPenalty(dm, p);
+}
+
+/**
+ * {@link scoreAt} at (X, Y) and (X + 1, Y) into `out[0]`, `out[1]`, in one pass over the template
+ * (each position's sums in the template's pixel order: the same scores).
+ */
+export function scorePair(level: RefLevel, t: Template, X: number, Y: number, p: ScoreParams, out: Float64Array): void {
+  const D = level.data, SQ = level.sq, off = t.off, V = t.val, n = t.n;
+  const base = Y * level.stride + X;
+  let num = 0, s0 = 0, s1 = 0, s2 = 0, ss = 0;
+  let mum = 0, u0 = 0, u1 = 0, u2 = 0, us = 0;
+  for (let i = 0, j = 0; i < n; i++, j += 3) {
+    const pi = base + off[i];
+    const q = pi * 3;
+    const v0 = V[j], v1 = V[j + 1], v2 = V[j + 2];
+    const r0 = D[q], r1 = D[q + 1], r2 = D[q + 2];
+    num += v0 * r0 + v1 * r1 + v2 * r2;
+    s0 += r0;
+    s1 += r1;
+    s2 += r2;
+    ss += SQ[pi];
+    const w0 = D[q + 3], w1 = D[q + 4], w2 = D[q + 5];
+    mum += v0 * w0 + v1 * w1 + v2 * w2;
+    u0 += w0;
+    u1 += w1;
+    u2 += w2;
+    us += SQ[pi + 1];
+  }
+  out[0] = scoreOfSums(t, num, s0, s1, s2, ss, p);
+  out[1] = scoreOfSums(t, mum, u0, u1, u2, us, p);
 }
 
 /** Runs of consecutive valid template pixels: prefix offsets (relative to a position) and lengths, ×4 channels. */
