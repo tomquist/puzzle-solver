@@ -317,6 +317,15 @@ convincing piece. Without gaps or colour cores between the pieces, the edge spli
 k-means markers over the colour gradient; where that takes half a piece over to its neighbour
 (both printed as dark), floods that grow costlier with the distance from their marker give parts
 clearly closer to whole pieces, and those are taken.
+A narrow gap between pieces lying close shows the table in their shadow (lightness 0.6–0.9 of the
+table's, its chroma scaled alike: `tableShade`, one map per photo), which the shadow-tolerant score
+still calls foreground, so a knob tip pressed against a neighbour looks joined to it and the neck
+split's flood gives it away. Once the split of a cluster is decided, the pixels around its cuts
+are given out again from the parts' cores with that shade carved out (`reownCuts`): the knob is
+reached from its own piece around the gap. The decisions stay; only changes of a knob tip's size
+are made (slivers along a cut keep their label), only after the split, since a few pixels more or
+less would sway its later rounds, and only for pieces of at least 40 px (smaller, a gap is a pixel
+or two whose colour is the rims' and the JPEG's half-resolution chroma).
 A weak region that is smooth all through, without a crisp edge along its outline (a stain or a
 shading of the table), is dropped before the split.
 In a cluster of a few touching pieces (by the piece size measured from single pieces), weak

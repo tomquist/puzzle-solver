@@ -1275,3 +1275,68 @@ export function foregroundScore(photo: RGBAImage, model: BackgroundFit, grain?: 
   }
   return out;
 }
+
+/**
+ * The table in shade (Horprasert-style brightness and colour distortion): the pixels inside
+ * `within` whose lightness (L* + 16) is between `rhoMin` and `rhoMax` times the modelled table's
+ * (main surface plus local corrections) and whose chroma is the table's scaled by that same ratio
+ * within `tol` (a* and b* each). A narrow gap between two pieces lying close shows the table in
+ * their shadow like that; the shadow-tolerant score still calls it foreground (darker than the
+ * table), which ties the pieces together. One pass over the photo (Lab via lookup tables).
+ */
+export function tableShade(photo: RGBAImage, model: Pick<BackgroundModel, 'coefficients' | 'width' | 'height'> & { local?: LocalTableGrid }, within: Mask, rhoMin: number, rhoMax: number, tol: number): Mask {
+  const { width: w, height: h, data: d } = photo;
+  const out = createMask(w, h);
+  const m = within.data;
+  const [kL, ka, kb] = model.coefficients;
+  const lut = F_LUT, lin = LIN;
+  const us = new Float32Array(w);
+  for (let x = 0; x < w; x++) us[x] = norm(x, w);
+  const g = model.local;
+  const corr = g ? new Float32Array(w * 3) : null;
+  const colPos = g ? Float32Array.from({ length: w }, (_, x) => Math.max(0, Math.min(g.cols - 1, (x + 0.5) / g.cellW))) : null;
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    // (Rows without any pixel to test are skipped.)
+    let any = false;
+    for (let x = 0; x < w && !any; x++) any = m[row + x] !== 0;
+    if (!any) continue;
+    const v = norm(y, h);
+    const AL = kL[0] + kL[2] * v + kL[5] * v * v, BL = kL[1] + kL[4] * v, CL = kL[3];
+    const Aa = ka[0] + ka[2] * v + ka[5] * v * v, Ba = ka[1] + ka[4] * v, Ca = ka[3];
+    const Ab = kb[0] + kb[2] * v + kb[5] * v * v, Bb = kb[1] + kb[4] * v, Cb = kb[3];
+    if (g && corr && colPos) {
+      const nodes = localRow(g, y);
+      for (let x = 0; x < w; x++) {
+        const f = colPos[x], j0 = Math.min(Math.max(0, g.cols - 2), Math.floor(f)), j1 = Math.min(g.cols - 1, j0 + 1), t = f - j0;
+        for (let c = 0; c < 3; c++) corr[x * 3 + c] = nodes[j0 * 3 + c] * (1 - t) + nodes[j1 * 3 + c] * t;
+      }
+    }
+    for (let x = 0; x < w; x++) {
+      if (!m[row + x]) continue;
+      const p = (row + x) << 2;
+      const rl = lin[d[p]], gl = lin[d[p + 1]], bl = lin[d[p + 2]];
+      let t = (0.4339499 * rl + 0.3762098 * gl + 0.1898403 * bl) * F_N;
+      let i = t | 0;
+      const fx = lut[i] + (t - i) * (lut[i + 1] - lut[i]);
+      t = (0.2126729 * rl + 0.7151522 * gl + 0.072175 * bl) * F_N;
+      i = t | 0;
+      const fy = lut[i] + (t - i) * (lut[i + 1] - lut[i]);
+      t = (0.0177566 * rl + 0.109468 * gl + 0.8727755 * bl) * F_N;
+      i = t | 0;
+      const fz = lut[i] + (t - i) * (lut[i + 1] - lut[i]);
+      const L = 116 * fy - 16, A = 500 * (fx - fy), B = 200 * (fy - fz);
+      const u = us[x], uu = u * u;
+      let bL = AL + BL * u + CL * uu, ba = Aa + Ba * u + Ca * uu, bb = Ab + Bb * u + Cb * uu;
+      if (corr) {
+        bL += corr[x * 3];
+        ba += corr[x * 3 + 1];
+        bb += corr[x * 3 + 2];
+      }
+      if (!(bL + 16 > 1)) continue;
+      const rho = (L + 16) / (bL + 16);
+      if (rho > rhoMin && rho < rhoMax && Math.abs(A - rho * ba) < tol && Math.abs(B - rho * bb) < tol) out.data[row + x] = 1;
+    }
+  }
+  return out;
+}

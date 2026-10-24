@@ -13,7 +13,7 @@ import { resizeRGBA } from '../../cv/resize';
 import { DEBUG_IMAGES, loadTestAsset, savePng } from '../../testing/nodeImageIO';
 import { generateJigsaw, renderPiecesPhoto, type PieceTruth, type RGB } from '../../testing/synth';
 import type { SideKind } from '../../model/types';
-import { cutSupport, outerAngle, PAIR_KEY, segmentPieces } from './segment';
+import { cutSupport, outerAngle, outerTurn, PAIR_KEY, segmentPieces } from './segment';
 import { drawOverlay } from './testkit';
 
 const W = 1400, H = 1000;
@@ -414,5 +414,137 @@ describe('cuts follow seams', () => {
     for (let y = 0; y < h; y++) gap.data[y * w + 50] = 0;
     const apart = cutSupport(cluster, labels(50), gap, img, 100).get(PAIR_KEY + 2)!;
     expect(apart.seam / apart.n).toBeGreaterThan(0.9);
+  });
+});
+
+describe('loose pieces turned against each other', () => {
+  // Two loose pieces of one colour lying end to end, the lower one (on top where they overlap)
+  // turned against the upper one: the lower piece's top knob lies in the upper's bottom blank, the
+  // two meet along the dark rims (a crease), and the contact is too wide for a neck.
+  const upper: Drawn = { sides: ['tab', 'blank', 'blank', 'tab'] };
+  const lower: Drawn = { sides: ['tab', 'tab', 'blank', 'blank'] };
+  const singles: Drawn[] = [upper, lower, { sides: ['tab', 'flat', 'blank', 'tab'] }, { sides: ['blank', 'blank', 'tab', 'flat'] }, { sides: ['flat', 'tab', 'tab', 'blank'] }];
+  const body = 120;
+  /** Whether photo pixel (x, y) lies in drawn piece `d` centred at `c`, turned `deg`. */
+  const inAt = (d: Drawn, c: Point, deg: number, x: number, y: number) => {
+    const t = (deg * Math.PI) / 180, dx = (x - c.x) / body, dy = (y - c.y) / body;
+    // (Knobs reach 0.81 body sizes from the centre at most.)
+    return dx * dx + dy * dy <= 0.85 && inPiece(dx * Math.cos(t) + dy * Math.sin(t) + 0.5, -dx * Math.sin(t) + dy * Math.cos(t) + 0.5, d);
+  };
+  /**
+   * Centre of the lower piece (turned `deg2`) slid along the down axis of the upper one (centred at
+   * `c1`, turned `deg1`), `side` body sizes off its centre line, until the two overlap by `depth` px.
+   */
+  const contact = (c1: Point, deg1: number, deg2: number, side: number, depth: number): Point => {
+    const t1 = (deg1 * Math.PI) / 180;
+    const at = (s: number) => ({ x: c1.x - Math.sin(t1) * s + Math.cos(t1) * side * body, y: c1.y + Math.cos(t1) * s + Math.sin(t1) * side * body });
+    const overlap = (c2: Point) => {
+      let n = 0;
+      for (let y = Math.round(c2.y - body); y < c2.y + body; y++) for (let x = Math.round(c2.x - body); x < c2.x + body; x++) if (inAt(lower, c2, deg2, x, y) && inAt(upper, c1, deg1, x, y)) n++;
+      return n;
+    };
+    // Coarse steps until the pieces overlap that much, then back and in single pixels.
+    let s = 2.2 * body;
+    while (s > 0.3 * body && overlap(at(s)) < depth) s -= 8;
+    for (s += 8; s > 0.3 * body; s--) if (overlap(at(s)) >= depth) return at(s);
+    throw new Error('no contact');
+  };
+  const c1 = { x: 650, y: 380 };
+  /** The two pieces end to end (upper at `base`°, lower at `base + turn`°) among single pieces; the regions holding points of each. */
+  const endToEnd = (base: number, turn: number, side: number) => {
+    const { photo, points } = drawnScene([
+      { pieces: [{ ...upper, at: { x: -0.5, y: -0.5 } }], centre: c1, deg: base },
+      { pieces: [{ ...lower, at: { x: -0.5, y: -0.5 } }], centre: contact(c1, base, base + turn, side, 800), deg: base + turn },
+      ...singles.map((d, j) => ({ pieces: [{ ...d, at: { x: -0.5, y: -0.5 } }], centre: { x: 150 + 270 * j, y: j % 2 ? 160 : 860 }, deg: 25 * j })),
+    ], body);
+    const seg = segmentPieces(photo);
+    debug(`turned-${base}-${turn}`, photo, seg, []);
+    // (Points of the upper piece clear of the lower one lying over its bottom.)
+    const up = new Set(points(0, 0, [[0.3, 0.3], [0.7, 0.3], [0.5, 0.5], [0.25, 0.65], [0.75, 0.65]]).map((p) => regionAt(seg, p)));
+    const down = new Set(points(1, 0, [[0.3, 0.3], [0.7, 0.3], [0.5, 0.5], [0.3, 0.8], [0.7, 0.8]]).map((p) => regionAt(seg, p)));
+    return { up: [...up], down: [...down] };
+  };
+
+  for (const base of [0, 35]) {
+    it(`measures the turn between two pieces end to end, and edges that keep to their own direction (upper at ${base}°)`, () => {
+      const W2 = 500, H2 = 560, c = { x: 250, y: 170 };
+      const measure = (turn: number) => {
+        const c2 = contact(c, base, base + turn, 0.1, 800);
+        const a = createMask(W2, H2), b = createMask(W2, H2), all = createMask(W2, H2);
+        for (let y = 0; y < H2; y++) {
+          for (let x = 0; x < W2; x++) {
+            const i = y * W2 + x, inB = inAt(lower, c2, base + turn, x, y), inA = !inB && inAt(upper, c, base, x, y);
+            a.data[i] = inA ? 1 : 0;
+            b.data[i] = inB ? 1 : 0;
+            all.data[i] = inA || inB ? 1 : 0;
+          }
+        }
+        const part = (m: Mask) => ({ contour: traceOuterContour(m), area: m.data.reduce((s, v) => s + v, 0) });
+        return outerTurn(part(a), part(b), { mask: all, bbox: { x: 0, y: 0, width: W2, height: H2 } }, 0.15 * body)!;
+      };
+      for (const turn of [8, 15, 30]) {
+        const m = measure(turn);
+        // (Measured in whole degrees on a pixel outline: within 2°; ≥ 7° at a turn of 8° for every
+        // base angle in 5° steps.)
+        expect(Math.abs(m.deg - turn), `turn ${turn}`).toBeLessThanOrEqual(2);
+        expect(m.deg, `turn ${turn}`).toBeGreaterThanOrEqual(7);
+        expect(m.cross, `turn ${turn}`).toBeLessThan(0.33);
+      }
+      // 5° apart: the two directions are not told apart.
+      const m = measure(5);
+      expect(m.deg < 7 || m.cross > 0.33, 'turn 5').toBe(true);
+      // One angle (an assembled pair cut along its seam): no turn.
+      expect(measure(0).deg, 'turn 0').toBeLessThanOrEqual(1);
+    });
+  }
+
+  for (const [base, turn, side] of [[0, 8, 0.1], [30, 8, -0.2], [0, 15, 0.3], [30, 15, 0.1], [0, 30, -0.2]]) {
+    it(`keeps two loose pieces turned ${turn}° against each other apart (upper at ${base}°)`, () => {
+      // (8° and 15° gave the cluster outline no second orientation peak: those are counted 20° or
+      // more from the dominant one.)
+      const { up, down } = endToEnd(base, turn, side);
+      expect(up, 'upper piece in one region').toHaveLength(1);
+      expect(down, 'lower piece in one region').toHaveLength(1);
+      expect(up[0]).toBeDefined();
+      expect(down[0]).toBeDefined();
+      expect(up[0]).not.toBe(down[0]);
+    });
+  }
+
+  for (const base of [0, 30]) {
+    it(`cuts neither of two pieces turned 5° against each other (upper at ${base}°)`, () => {
+      // Below the turn told apart: together or apart, each piece lies whole in one region.
+      const { up, down } = endToEnd(base, 5, 0.1);
+      expect(up, 'upper piece in one region').toHaveLength(1);
+      expect(down, 'lower piece in one region').toHaveLength(1);
+    });
+  }
+
+  it('keeps assembled pairs, strips and blocks turned as a whole in one region', () => {
+    // Groups of pieces of one colour on one grid (dark seams between them), each turned as a whole.
+    const pair: (Drawn & { at: Point })[] = [{ sides: ['tab', 'blank', 'tab', 'blank'], at: { x: -0.5, y: -1 } }, { sides: ['blank', 'tab', 'flat', 'tab'], at: { x: -0.5, y: 0 } }];
+    const strip: (Drawn & { at: Point })[] = [
+      { sides: ['flat', 'tab', 'blank', 'tab'], at: { x: -1.5, y: -0.5 } },
+      { sides: ['tab', 'blank', 'tab', 'blank'], at: { x: -0.5, y: -0.5 } },
+      { sides: ['blank', 'flat', 'tab', 'tab'], at: { x: 0.5, y: -0.5 } },
+    ];
+    const blk: (Drawn & { at: Point })[] = [
+      { sides: ['flat', 'tab', 'blank', 'flat'], at: { x: -1, y: -1 } },
+      { sides: ['flat', 'flat', 'tab', 'blank'], at: { x: 0, y: -1 } },
+      { sides: ['tab', 'blank', 'flat', 'flat'], at: { x: -1, y: 0 } },
+      { sides: ['blank', 'flat', 'flat', 'tab'], at: { x: 0, y: 0 } },
+    ];
+    const groups = [{ pieces: pair, centre: { x: 330, y: 500 }, deg: 8 }, { pieces: strip, centre: { x: 750, y: 470 }, deg: 15 }, { pieces: blk, centre: { x: 1150, y: 520 }, deg: 30 }];
+    const { photo, points } = drawnScene([
+      ...groups,
+      ...singles.map((d, j) => ({ pieces: [{ ...d, at: { x: -0.5, y: -0.5 } }], centre: { x: 150 + 270 * j, y: j % 2 ? 130 : 890 }, deg: 25 * j })),
+    ], body);
+    const seg = segmentPieces(photo);
+    debug('turned-groups', photo, seg, []);
+    groups.forEach((g, k) => {
+      const ids = new Set(g.pieces.flatMap((_, p) => points(k, p, [[0.5, 0.5], [0.3, 0.3], [0.7, 0.7]])).map((p) => regionAt(seg, p)));
+      expect([...ids], `group ${k}`).toHaveLength(1);
+      expect([...ids][0], `group ${k}`).toBeDefined();
+    });
   });
 });
