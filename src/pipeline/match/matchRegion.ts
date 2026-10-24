@@ -751,7 +751,17 @@ export interface MatchDetail {
   placements?: CandidatePlacement[];
   /** Why the placement would be unsure (see {@link uncertainReasonOf}; set whatever the status, for later demotions). */
   reason?: UncertainReason;
+  /** The finest level the placement was refined on, when not the index's finest (a large patch: see {@link FINE_ENOUGH_PIXELS}). */
+  fineLevel?: number;
 }
+
+/**
+ * Template pixels from which a level places a region well enough that finer levels are skipped
+ * (≈ 120 cells at 16 px per cell: a large assembled patch). The finest level would hold four times
+ * as many and costs most of such a patch's matching (seconds on a phone), for a place already
+ * known to a sixteenth of a cell; the patch's cells come from its seams anyway.
+ */
+export const FINE_ENOUGH_PIXELS = 30000;
 
 /** Body size (photo px) below which a region counts as small: fewer pixels than the finest level's 32 px per cell, by a margin. */
 const SMALL_BODY = 24;
@@ -877,8 +887,15 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
   // 0.30, lost entirely with its own cell marked).
   let cands = suppress(coarse, 0.6 * cell, nKeep, placed, nKeep);
 
-  // 2. Position refinement through the finer levels.
+  // 2. Position refinement through the finer levels: down to the finest, or to the first whose
+  // template of the best place holds FINE_ENOUGH_PIXELS (a large patch: a finer level would only
+  // multiply the work).
+  let fineLevel = L - 1;
   for (let li = ci + 1; li < L; li++) {
+    if (li > ci + 1 && cands.length > 0 && (cache.get(index.levels[li - 1], li - 1, cands[0].map)?.n ?? 0) >= FINE_ENOUGH_PIXELS) {
+      fineLevel = li - 1;
+      break;
+    }
     const r = Math.ceil((index.levels[li].ppc / index.levels[li - 1].ppc) * (li === ci + 1 ? 1.5 : 1)) + 1;
     const next: Candidate[] = [];
     for (const c of cands) {
@@ -897,7 +914,7 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
   if (placed) for (const c of [...cands].sort((a, b) => b.photo - a.photo).slice(0, 2)) fine.add(c);
   for (let i = 0; i < cands.length; i++) {
     if (!fine.has(cands[i])) continue;
-    cands[i] = refineAngleScale(index, L - 1, cands[i], cache, sp, placed);
+    cands[i] = refineAngleScale(index, fineLevel, cands[i], cache, sp, placed);
     yield;
   }
 
@@ -968,7 +985,7 @@ export function* matchRegionDetailedSteps(index: ReferenceIndex, input: MatchInp
   if (conflict) match.placedConflict = conflict;
   const reason = uncertainReasonOf(features, input, roughBody);
   if (status === 'ambiguous') match.uncertainReason = reason;
-  return { match, best: { map: best.map, ref: best.ref }, src, features, params: sp, lattice, reason, placements };
+  return { match, best: { map: best.map, ref: best.ref }, src, features, params: sp, lattice, reason, placements, ...(fineLevel < L - 1 ? { fineLevel } : {}) };
 }
 
 /** The placed-cell prior of a run (undefined without placed cells or with no penalty). */
@@ -1147,9 +1164,10 @@ export function scorePlacement(index: ReferenceIndex, input: MatchInput, detail:
     if (angleDiff(norm360(hyp.map.phi * DEG), rotationDeg) > 45) continue;
     let c: Candidate | null = { hyp, map: hyp.map, ref: centre, raw: -Infinity, score: -Infinity, photo: -Infinity, level: li0 };
     c = refinePosition(index, li0, c, cache, Math.ceil(0.3 * index.levels[li0].ppc), sp, c.map, placed);
-    for (let li = li0 + 1; li < L && c; li++) c = refinePosition(index, li, c, cache, Math.ceil(index.levels[li].ppc / index.levels[li - 1].ppc) + 1, sp, c.map, placed);
+    const fine = Math.max(li0, detail.fineLevel ?? L - 1);
+    for (let li = li0 + 1; li <= fine && c; li++) c = refinePosition(index, li, c, cache, Math.ceil(index.levels[li].ppc / index.levels[li - 1].ppc) + 1, sp, c.map, placed);
     if (!c) continue;
-    c = refineAngleScale(index, L - 1, c, cache, sp, placed);
+    c = refineAngleScale(index, fine, c, cache, sp, placed);
     if (!best || c.score > best.score) best = c;
   }
   if (!best) return null;

@@ -202,6 +202,11 @@ async function run() {
           hashed = { ...rest, evidence };
         }
         const h = hashOf(hashed);
+        // `--dump <dir>`: the hashed result as JSON, to diff two versions' outputs.
+        if (opt('dump') && k === 0) {
+          mkdirSync(opt('dump')!, { recursive: true });
+          writeFileSync(resolve(opt('dump')!, `${id}.json`), JSON.stringify(hashed));
+        }
         if (hashes.has(id) && hashes.get(id) !== h) console.warn(`${id}: result differs between runs (${hashes.get(id)} vs ${h})`);
         hashes.set(id, h);
         (samples.get(id) ?? samples.set(id, []).get(id)!).push(timings);
