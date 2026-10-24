@@ -113,9 +113,15 @@ export function matchRegions(index: ReferenceIndex, inputs: MatchInput[], opts: 
  * `first`: the first pass ({@link firstMatchPass}) of the same index, inputs and options without
  * the placed marks, to reuse (it is not changed).
  */
-export function matchRegionsDetailed(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions = {}, first?: FirstPass): MatchDetail[] {
-  return runSteps(matchRegionsDetailedSteps(index, inputs, opts, first));
+export function matchRegionsDetailed(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions = {}, first?: FirstPass, onProgress?: MatchProgress): MatchDetail[] {
+  return runSteps(matchRegionsDetailedSteps(index, inputs, opts, first, onProgress));
 }
+
+/**
+ * Progress of {@link matchRegionsDetailed}: the share of the work done (0..1, never decreasing),
+ * after each region matched. The first pass counts for most when no second one follows.
+ */
+export type MatchProgress = (done: number) => void;
 
 /**
  * The first pass of {@link matchRegionsDetailed}: every region matched without the placed marks,
@@ -132,10 +138,13 @@ export function firstMatchPass(index: ReferenceIndex, inputs: MatchInput[], opts
   return runSteps(firstMatchPassSteps(index, inputs, opts));
 }
 
-function* firstMatchPassSteps(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions): Steps<FirstPass> {
+function* firstMatchPassSteps(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions, onRegion?: (done: number) => void): Steps<FirstPass> {
   const firstOpts = (opts.placedCells?.length ?? 0) > 0 ? { ...opts, placedCells: undefined } : opts;
   const details: MatchDetail[] = [];
-  for (const inp of inputs) details.push(yield* matchRegionDetailedSteps(index, inp, firstOpts));
+  for (const inp of inputs) {
+    details.push(yield* matchRegionDetailedSteps(index, inp, firstOpts));
+    onRegion?.(details.length);
+  }
   return { details, correction: estimateColorCorrection(index, details) };
 }
 
@@ -145,17 +154,22 @@ function copyFirstPass(first: FirstPass): FirstPass {
 }
 
 /** {@link matchRegionsDetailed} in steps (pipeline/steps.ts): one region's match each. */
-export function* matchRegionsDetailedSteps(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions = {}, reuse?: FirstPass): Steps<MatchDetail[]> {
+export function* matchRegionsDetailedSteps(index: ReferenceIndex, inputs: MatchInput[], opts: MatchOptions = {}, reuse?: FirstPass, onProgress?: MatchProgress): Steps<MatchDetail[]> {
   // The first pass ignores the placed marks: the colour correction comes from the photo alone, so
   // wrong marks cannot change it (with marks, other pieces are confident in the first pass, and a
   // different correction lost true places in the second); pieces the photo alone places surely keep
   // that place, flagged when it is a marked cell. The others are matched with the marks (and the
   // correction, when there is one).
   const marked = (opts.placedCells?.length ?? 0) > 0;
-  const { details: first, correction } = reuse ? copyFirstPass(reuse) : yield* firstMatchPassSteps(index, inputs, opts);
+  // (With marks a second pass follows for sure: the first counts for 60 %; otherwise for 90 %.)
+  const firstShare = marked ? 0.6 : 0.9;
+  const n = inputs.length;
+  const { details: first, correction } = reuse ? copyFirstPass(reuse) : yield* firstMatchPassSteps(index, inputs, opts, onProgress && ((k) => onProgress((firstShare * k) / n)));
   let out = first;
   if (correction || marked) {
     out = [];
+    const again = first.filter((d) => !(d.match.status === 'confident' && d.match.candidates[0].confidence >= 0.9)).length;
+    let done = 0;
     for (let i = 0; i < inputs.length; i++) {
       const d = first[i];
       if (d.match.status === 'confident' && d.match.candidates[0].confidence >= 0.9) {
@@ -164,9 +178,13 @@ export function* matchRegionsDetailedSteps(index: ReferenceIndex, inputs: MatchI
           if (conflict) d.match.placedConflict = conflict;
         }
         out.push(d);
-      } else out.push(yield* matchRegionDetailedSteps(index, inputs[i], opts, correction ? { correction, score: CORRECTED_SCORE } : {}));
+      } else {
+        out.push(yield* matchRegionDetailedSteps(index, inputs[i], opts, correction ? { correction, score: CORRECTED_SCORE } : {}));
+        onProgress?.(firstShare + ((1 - firstShare) * ++done) / again);
+      }
     }
   }
+  onProgress?.(1);
   // Outlines that include cast shadow / table: judged against the whole scan (hard shadows affect
   // every piece of a photo, so the scan's typical border tells what is normal).
   const borders = inputs.filter((inp) => inp.kind === 'piece' && inp.outline?.borderTable !== undefined).map((inp) => inp.outline!.borderTable!).sort((a, b) => a - b);

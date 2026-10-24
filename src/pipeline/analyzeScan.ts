@@ -244,15 +244,19 @@ export function analyzeSegmented(index: ReferenceIndex, scan: SegmentedScan, opt
   const { image, seg, inputs } = scan;
 
   const regions = seg.regions.map((s) => s.region);
-  report({
-    stage: 'match',
-    progress: 0.4,
-    message: inputs.length === 1 ? 'Locating 1 piece' : `Locating ${inputs.length} pieces`,
-  });
+  const matchMessage = inputs.length === 1 ? 'Locating 1 piece' : `Locating ${inputs.length} pieces`;
+  report({ stage: 'match', progress: 0.4, message: matchMessage });
   let t = now();
   const tuning = opts.tuning ?? {};
   const matchOptions = matchOptionsOf(opts);
-  const details = inputs.length > 0 ? matchRegionsDetailed(index, inputs, matchOptions, firstPass) : [];
+  // Progress after every region matched (in steps of at least 1 %): matching is most of a scan.
+  let shown = 0;
+  const matchProgress = (done: number) => {
+    if (done - shown < 0.01) return;
+    shown = done;
+    report({ stage: 'match', progress: 0.4 + 0.54 * done, message: matchMessage });
+  };
+  const details = inputs.length > 0 ? matchRegionsDetailed(index, inputs, matchOptions, firstPass, opts.onProgress && matchProgress) : [];
   timings.match = now() - t;
 
   const byId = new Map<number, RegionMatch>(details.map((d) => [d.match.regionId, d.match]));
